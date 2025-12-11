@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Interactive Directed Graph with Spectral Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="data:,">
+</head>
+<body>
+
+    <div id="container"></div>
+
+    <div id="controls-panel">
+        <!-- Resize Handle -->
+        <div id="sidebar-resize-handle"></div>
+        
+        <!-- Sidebar Tab Navigation -->
+        <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-tab="build" title="Build Graph">
+                <span class="tab-icon">🔨</span>
+                <span class="tab-label">Build</span>
+            </button>
+            <button class="sidebar-tab" data-tab="edit" title="Edit Edges">
+                <span class="tab-icon">✏️</span>
+                <span class="tab-label">Edit</span>
+            </button>
+            <button class="sidebar-tab" data-tab="simulate" title="Dynamics">
+                <span class="tab-icon">🌊</span>
+                <span class="tab-label">Simulate</span>
+            </button>
+            <button class="sidebar-tab" data-tab="analyze" title="Analysis">
+                <span class="tab-icon">📊</span>
+                <span class="tab-label">Analyze</span>
+            </button>
+            <button class="sidebar-tab" data-tab="bounds" title="Eigenvalue Bounds">
+                <span class="tab-icon">📐</span>
+                <span class="tab-label">Bounds</span>
+            </button>
+            <button class="sidebar-tab" data-tab="advanced" title="Advanced Build">
+                <span class="tab-icon">🔧</span>
+                <span class="tab-label">Advanced</span>
+            </button>
+        </div>
+
+        <!-- ==================== BUILD TAB ==================== -->
+        <div id="sidebar-build" class="sidebar-tab-content active">
+            
+            <div class="control-group">
+                <h4>Graph Layout</h4>
+                <div class="input-row">
+                    <label for="num-vertices">Vertices:</label>
+                    <input id="num-vertices" type="number" value="8" min="2" max="100">
+                </div>
+                <div class="input-row">
+                    <label for="layout-radius">Radius:</label>
+                    <input id="layout-radius" type="number" value="40" min="10" max="100">
+                </div>
+                <select id="layout-type">
+                    <option value="circle">Circle (2D)</option>
+                    <option value="sphere">Sphere (3D)</option>
+                    <option value="concentric-2">2 Concentric Circles</option>
+                    <option value="concentric-3">3 Concentric Circles</option>
+                    <option value="concentric-spheres-2">2 Concentric Spheres</option>
+                </select>
+                <div id="concentric-options" class="sub-options" style="display: none;">
+                    <div class="input-row">
+                        <label>Inner ratio:</label>
+                        <input id="inner-ratio" type="range" min="20" max="70" value="50">
+                        <span id="inner-ratio-label">50%</span>
+                    </div>
+                    <div id="middle-ratio-container" class="input-row" style="display: none;">
+                        <label>Middle ratio:</label>
+                        <input id="middle-ratio" type="range" min="40" max="80" value="70">
+                        <span id="middle-ratio-label">70%</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Split:</label>
+                        <select id="split-mode">
+                            <option value="half">Equal parts</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div id="custom-split-container" style="display: none;">
+                        <input id="custom-split" type="text" placeholder="e.g., 5,10,5">
+                    </div>
+                </div>
+                <button id="generate-btn">Generate Vertices</button>
+            </div>
+            
+            <div class="control-group">
+                <h4>Force-Directed Layout</h4>
+                <div class="button-row">
+                    <button id="force-layout-btn" class="success">▶ Start</button>
+                    <button id="stop-force-btn" class="danger" style="display: none;">⏹ Stop</button>
+                </div>
+                <div class="input-row">
+                    <label>Speed:</label>
+                    <input id="force-speed" type="range" min="1" max="10" value="5">
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="force-3d-checkbox">
+                    <span>3D forces</span>
+                </label>
+            </div>
+            
+            <div class="control-group">
+                <h4>Quick Templates</h4>
+                <select id="template-select">
+                    <option value="custom">Custom (manual edges)</option>
+                    <optgroup label="Basic Graphs (Table I)">
+                        <option value="path">Path Graph (Pₙ)</option>
+                        <option value="cycle">Cycle Graph (Cₙ)</option>
+                        <option value="star">Star Graph (Sₙ)</option>
+                        <option value="complete">Complete Graph (Kₙ)</option>
+                    </optgroup>
+                    <optgroup label="Trees with Depth (Appendix)">
+                        <option value="binary-tree">Binary Tree (depth d)</option>
+                        <option value="star-path">S'ₚ Tree (depth 2, N=2p+1)</option>
+                        <option value="double-star">S²ₚ Tree (depth 3, N=3p+1)</option>
+                        <option value="general-star-tree">Sᵈₚ Tree (any depth d)</option>
+                        <option value="k-ary-tree">k-ary Tree (depth d)</option>
+                        <option value="caterpillar">Caterpillar Graph</option>
+                        <option value="spider">Spider Graph</option>
+                        <option value="broom">Broom Graph</option>
+                    </optgroup>
+                    <optgroup label="Grid & Mesh (Table I)">
+                        <option value="grid">2D Grid (m×n)</option>
+                        <option value="general-ladder">General Ladder/Truss (m×n)</option>
+                        <option value="cuboid">3D Cuboid (m×n×k)</option>
+                        <option value="torus">Torus Grid</option>
+                        <option value="five-bar">Five-Bar Mechanism (Fig.3)</option>
+                        <option value="ladder">Simple Ladder (Lₙ)</option>
+                        <option value="circular-ladder">Circular Ladder</option>
+                        <option value="mobius-ladder">Möbius Ladder</option>
+                    </optgroup>
+                    <optgroup label="Bipartite Graphs">
+                        <option value="bipartite">Complete Bipartite (Kₘ,ₙ)</option>
+                        <option value="crown">Crown Graph</option>
+                    </optgroup>
+                    <optgroup label="Regular Graphs">
+                        <option value="wheel">Wheel Graph (Wₙ)</option>
+                        <option value="prism">Prism Graph</option>
+                        <option value="antiprism">Antiprism Graph</option>
+                        <option value="cocktail">Cocktail Party</option>
+                        <option value="circulant">Circulant C(n,{1,2})</option>
+                    </optgroup>
+                    <optgroup label="Hypercubes (Table I)">
+                        <option value="hypercube">Hypercube Qₐ (any dim)</option>
+                        <option value="hypercube2">Hypercube Q₂ (n=4)</option>
+                        <option value="hypercube3">Hypercube Q₃ (n=8)</option>
+                        <option value="hypercube4">Hypercube Q₄ (n=16)</option>
+                        <option value="hypercube5">Hypercube Q₅ (n=32)</option>
+                    </optgroup>
+                    <optgroup label="Famous Graphs">
+                        <option value="petersen">Petersen (n=10)</option>
+                        <option value="octahedron">Octahedron (n=6)</option>
+                        <option value="icosahedron">Icosahedron (n=12)</option>
+                        <option value="dodecahedron">Dodecahedron (n=20)</option>
+                        <option value="cuboctahedron">Cuboctahedron (n=12)</option>
+                    </optgroup>
+                </select>
+                
+                <!-- Configurable Parameters (shown based on template selection) -->
+                <div id="template-params" class="sub-options" style="display: none;">
+                    <div id="param-depth" class="input-row" style="display: none;">
+                        <label>Depth (d):</label>
+                        <input id="tree-depth" type="number" value="3" min="1" max="6">
+                    </div>
+                    <div id="param-branches" class="input-row" style="display: none;">
+                        <label>Branches (p):</label>
+                        <input id="tree-branches" type="number" value="3" min="2" max="10">
+                    </div>
+                    <div id="param-k-ary" class="input-row" style="display: none;">
+                        <label>Children (k):</label>
+                        <input id="tree-k" type="number" value="3" min="2" max="5">
+                    </div>
+                    <div id="param-grid" class="input-row" style="display: none;">
+                        <label>Rows (m):</label>
+                        <input id="grid-rows" type="number" value="3" min="2" max="10">
+                        <label>Cols (n):</label>
+                        <input id="grid-cols" type="number" value="4" min="2" max="10">
+                    </div>
+                    <div id="param-cuboid" class="input-row" style="display: none;">
+                        <label>m:</label>
+                        <input id="cuboid-m" type="number" value="2" min="2" max="5">
+                        <label>n:</label>
+                        <input id="cuboid-n" type="number" value="3" min="2" max="5">
+                        <label>k:</label>
+                        <input id="cuboid-k" type="number" value="2" min="2" max="5">
+                    </div>
+                    <div id="param-hypercube" class="input-row" style="display: none;">
+                        <label>Dimension:</label>
+                        <input id="hypercube-dim" type="number" value="3" min="2" max="6">
+                    </div>
+                </div>
+                
+                <label class="checkbox-label">
+                    <input type="checkbox" id="skew-symmetric-checkbox">
+                    <span>Skew-symmetric (unidirectional)</span>
+                </label>
+                <button id="apply-template-btn" class="purple">Apply Template</button>
+            </div>
+        </div>
+
+        <!-- ==================== EDIT TAB ==================== -->
+        <div id="sidebar-edit" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>Edit Mode</h4>
+                <div id="mode-indicator" class="mode-indicator mode-view">VIEW MODE</div>
+                
+                <div class="mode-buttons">
+                    <button id="view-mode-btn" class="mode-btn active" data-mode="view">👁 View</button>
+                    <button id="drag-mode-btn" class="mode-btn" data-mode="drag">✋ Drag</button>
+                </div>
+                
+                <h4 style="margin-top: 10px;">Edge Operations</h4>
+                <div class="mode-buttons">
+                    <button id="add-mode-btn" class="mode-btn" data-mode="add">➕ Add Edge</button>
+                    <button id="delete-mode-btn" class="mode-btn" data-mode="delete">🗑 Del Edge</button>
+                </div>
+                
+                <h4 style="margin-top: 10px;">Vertex Operations</h4>
+                <div class="mode-buttons">
+                    <button id="add-vertex-mode-btn" class="mode-btn" data-mode="add-vertex">⊕ Add Node</button>
+                    <button id="delete-vertex-mode-btn" class="mode-btn" data-mode="delete-vertex">⊖ Del Node</button>
+                </div>
+                
+                <div class="mode-hints">
+                    <p class="hint" id="hint-view"><b>View:</b> Drag to rotate, scroll to zoom</p>
+                    <p class="hint" id="hint-add" style="display:none;"><b>Add Edge:</b> Click source vertex, then target</p>
+                    <p class="hint" id="hint-delete" style="display:none;"><b>Delete Edge:</b> Click on edge arrow</p>
+                    <p class="hint" id="hint-drag" style="display:none;"><b>Drag:</b> Click and drag vertices</p>
+                    <p class="hint" id="hint-add-vertex" style="display:none;"><b>Add Node:</b> Click empty space to place</p>
+                    <p class="hint" id="hint-delete-vertex" style="display:none;"><b>Delete Node:</b> Click on vertex to remove</p>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>Arrange Layout</h4>
+                <div class="input-row">
+                    <label>Rows:</label>
+                    <input id="arrange-rows" type="number" value="3" min="1" max="20" style="width: 50px;">
+                    <label>Cols:</label>
+                    <input id="arrange-cols" type="number" value="3" min="1" max="20" style="width: 50px;">
+                </div>
+                <div class="input-row">
+                    <label>Spacing:</label>
+                    <input id="arrange-spacing" type="number" value="15" min="5" max="50" style="width: 60px;">
+                </div>
+                <div class="button-row">
+                    <button id="arrange-grid-btn" class="small">📐 Grid</button>
+                    <button id="arrange-circle-btn" class="small">◯ Circle</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>Auto Generate Edges</h4>
+                <div class="input-row">
+                    <label>Count:</label>
+                    <input id="auto-edges" type="number" value="10" min="0" max="1000">
+                    <button id="auto-generate-btn" class="success small">Add Random</button>
+                </div>
+                <button id="clear-edges-btn" class="danger">Clear All Edges</button>
+            </div>
+            
+            <!-- Hidden checkboxes for compatibility -->
+            <input type="checkbox" id="add-mode-checkbox" style="display:none;">
+            <input type="checkbox" id="delete-mode-checkbox" style="display:none;">
+            <input type="checkbox" id="drag-mode-checkbox" style="display:none;">
+        </div>
+
+        <!-- ==================== SIMULATE TAB ==================== -->
+        <div id="sidebar-simulate" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>🌊 Dynamics Animation</h4>
+                <p class="hint">Visualize ẋ = Ax (skew-symmetric)</p>
+                
+                <div class="button-row">
+                    <button id="start-dynamics-btn" class="success">▶ Start</button>
+                    <button id="stop-dynamics-btn" class="danger" style="display: none;">⏹ Stop</button>
+                    <button id="reset-dynamics-btn" class="small">↺ Reset</button>
+                </div>
+                
+                <div class="sub-options">
+                    <div class="input-row">
+                        <label>Integrator:</label>
+                        <select id="integrator-select">
+                            <option value="rodrigues">Rodrigues (exp)</option>
+                            <option value="cayley">Cayley</option>
+                            <option value="trapezoidal">Trapezoidal</option>
+                        </select>
+                    </div>
+                    <div class="input-row">
+                        <label>Time Step:</label>
+                        <select id="timestep-select">
+                            <option value="1e-6">10⁻⁶ (coarse)</option>
+                            <option value="1e-7" selected>10⁻⁷ (default)</option>
+                            <option value="1e-8">10⁻⁸ (fine)</option>
+                        </select>
+                    </div>
+                    <div class="input-row">
+                        <label>Speed:</label>
+                        <input id="dynamics-speed" type="range" min="1" max="20" value="10">
+                        <span id="dynamics-speed-label">1.0x</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Arrow Scale:</label>
+                        <input id="arrow-scale" type="range" min="5" max="80" value="30">
+                        <span id="arrow-scale-label">30</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Base Length:</label>
+                        <input id="arrow-min-length" type="range" min="0" max="20" value="8">
+                        <span id="arrow-min-label">8</span>
+                    </div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Time</span>
+                        <span id="dynamics-time" class="stat-value blue">0.00s</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Max |x|</span>
+                        <span id="dynamics-max-state" class="stat-value orange">0.00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Max Flow</span>
+                        <span id="dynamics-max-flow" class="stat-value pink">0.00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Energy</span>
+                        <span id="dynamics-energy" class="stat-value green">--</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>📈 Phase Diagram</h4>
+                <div class="input-row">
+                    <label>Plot:</label>
+                    <select id="phase-mode-select">
+                        <option value="displacement">xᵢ vs xⱼ</option>
+                        <option value="velocity">xᵢ vs ẋⱼ</option>
+                        <option value="node-power">xᵢ vs xᵢẋᵢ</option>
+                        <option value="power-power">Power vs Power</option>
+                        <option value="edge-power">Edge Power</option>
+                    </select>
+                </div>
+                <div id="phase-mode-explanation" class="hint-box">
+                    <span id="phase-mode-hint">Ellipse shape reveals phase relationship between nodes</span>
+                </div>
+                <div class="input-row">
+                    <label>Animation:</label>
+                    <select id="animation-mode-select">
+                        <option value="displacement">Displacement</option>
+                        <option value="power">Power</option>
+                    </select>
+                </div>
+                <div id="animation-mode-explanation" class="hint-box">
+                    <span id="animation-mode-hint">Color shows node state magnitude</span>
+                </div>
+                <div class="input-row">
+                    <label>Nodes:</label>
+                    <select id="phase-node-i" class="small-select"></select>
+                    <span>vs</span>
+                    <select id="phase-node-j" class="small-select"></select>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="phase-enabled-checkbox">
+                    <span>Show Phase Plot</span>
+                </label>
+                <button id="clear-phase-btn" class="small">Clear Trail</button>
+                <button id="open-enhanced-viz-btn" class="purple small" style="margin-left: 5px;">📊 Enhanced View</button>
+                <canvas id="phase-canvas" width="300" height="300" style="display: none;"></canvas>
+                <div id="phase-axis-labels" style="display: none;">
+                    X: <span id="phase-x-label">xᵢ</span> | Y: <span id="phase-y-label">xⱼ</span>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>🎯 Eigenvalue Analysis</h4>
+                <p class="hint">📊 See <strong>ANALYZE</strong> tab for full complex plane with α/β controls</p>
+                <!-- Hidden elements for compatibility -->
+                <input id="phase-alpha" type="hidden" value="10">
+                <input id="phase-beta" type="hidden" value="10">
+                <span id="phase-alpha-label" style="display:none;">1.0</span>
+                <span id="phase-beta-label" style="display:none;">1.0</span>
+                <canvas id="eigenvalue-canvas" width="1" height="1" style="display: none;"></canvas>
+                <div id="eigenvalue-info-display" style="display: none;"></div>
+                <input type="checkbox" id="eigenvalue-plot-checkbox" style="display:none;">
+            </div>
+        </div>
+
+        <!-- ==================== ANALYZE TAB ==================== -->
+        <div id="sidebar-analyze" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>Graph Info</h4>
+                <div id="graph-type-display">
+                    <div class="graph-type-box">
+                        <span id="stat-type">Unknown</span>
+                    </div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Vertices</span>
+                        <span id="stat-vertices" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Edges</span>
+                        <span id="stat-edges" class="stat-value">0</span>
+                    </div>
+                </div>
+                <div id="graph-properties"></div>
+            </div>
+            
+            <div class="control-group">
+                <h4>Symmetric Eigenvalues <button id="copy-sym-eig-btn" class="copy-btn" title="Copy to clipboard">📋</button></h4>
+                <div id="analytic-formula-display" class="formula-display">
+                    <span class="hint">Generate a graph to see eigenvalues</span>
+                </div>
+                <details class="collapsible">
+                    <summary>Numerical Values</summary>
+                    <div id="eigenvalues-display" class="eigenvalues-list"></div>
+                </details>
+            </div>
+            
+            <div class="control-group">
+                <h4>Skew-Symmetric Eigenvalues <button id="copy-skew-eig-btn" class="copy-btn" title="Copy to clipboard">📋</button></h4>
+                <div id="skew-analytic-formula-display" class="formula-display">
+                    <span class="hint">Eigenvalues are purely imaginary: ±iλ</span>
+                </div>
+                <details class="collapsible">
+                    <summary>Numerical Values</summary>
+                    <div id="skew-eigenvalues-display" class="eigenvalues-list"></div>
+                </details>
+            </div>
+            
+            <div class="control-group">
+                <h4>📊 Complex Plane (All Eigenvalues)</h4>
+                <p class="hint">System eigenvalues: λ = −α ± i·β·b where b is graph eigenvalue</p>
+                <div class="input-row">
+                    <label>α (damping):</label>
+                    <input id="analyze-alpha" type="range" min="0" max="50" value="10" step="1">
+                    <span id="analyze-alpha-label">1.0</span>
+                </div>
+                <div class="input-row">
+                    <label>β (coupling):</label>
+                    <input id="analyze-beta" type="range" min="1" max="50" value="10" step="1">
+                    <span id="analyze-beta-label">1.0</span>
+                </div>
+                <div id="complex-plane-container">
+                    <canvas id="analyze-complex-plane" width="300" height="240"></canvas>
+                    <div class="canvas-legend">
+                        <span class="legend-item"><span class="dot stable"></span> Stable</span>
+                        <span class="legend-item"><span class="dot bound"></span> Bounds</span>
+                        <span class="legend-item"><span class="dot eigenvalue"></span> λ values</span>
+                    </div>
+                    <div id="complex-plane-info" class="eigenvalue-info">
+                        <span id="analyze-ev-count">0 eigenvalues</span>
+                        <span id="analyze-stability" class="stability-badge stable">Stable</span>
+                    </div>
+                    <div id="eigenvalue-tooltip" class="eigenvalue-tooltip"></div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">Characteristic Polynomial</h4> <button id="copy-charpoly-btn" class="copy-btn" title="Copy to clipboard">📋</button></summary>
+                    <div id="char-polynomial-display" class="polynomial-display"></div>
+                </details>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">Adjacency Matrices</h4></summary>
+                    <h5>Directed (Skew-Symmetric) <button id="copy-skew-matrix-btn" class="copy-btn small" title="Copy to clipboard">📋</button></h5>
+                    <div id="matrix-display" class="matrix-scroll"></div>
+                    <h5>Undirected (Symmetric) <button id="copy-sym-matrix-btn" class="copy-btn small" title="Copy to clipboard">📋</button></h5>
+                    <div id="symmetric-matrix-display" class="matrix-scroll"></div>
+                </details>
+            </div>
+            
+            <!-- Hidden elements for compatibility -->
+            <div id="analytic-eigenvalues-display" style="display:none;"></div>
+            <div id="skew-analytic-eigenvalues-display" style="display:none;"></div>
+            <input id="show-complex-plane" type="hidden" value="true">
+        </div>
+
+        <!-- ==================== BOUNDS TAB (Zeid-Rosenberg) ==================== -->
+        <div id="sidebar-bounds" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>📐 Point Graph Topology</h4>
+                <div id="point-graph-type" class="graph-type-box">
+                    <span id="zr-topology">Detect from graph</span>
+                </div>
+                <button id="detect-topology-btn" class="info small">Detect Topology</button>
+            </div>
+            
+            <div class="control-group">
+                <h4>Physical Parameters</h4>
+                <p class="hint">These sync with ANALYZE tab's complex plane</p>
+                <div class="input-row">
+                    <label>α (damping):</label>
+                    <input id="zr-alpha-slider" type="range" min="0" max="50" value="10" step="1">
+                    <span id="zr-alpha-label">1.0</span>
+                </div>
+                <div class="input-row">
+                    <label>β (coupling):</label>
+                    <input id="zr-beta-slider" type="range" min="1" max="50" value="10" step="1">
+                    <span id="zr-beta-label">1.0</span>
+                </div>
+                <!-- Hidden number inputs for backward compatibility -->
+                <input id="zr-alpha" type="hidden" value="1.0">
+                <input id="zr-beta" type="hidden" value="1.0">
+                <p class="hint" style="margin-top:8px;">📊 See <strong>ANALYZE</strong> tab for complex plane visualization</p>
+            </div>
+            
+            <div class="control-group">
+                <h4>Eigenvalue Bounds (Table I)</h4>
+                <div id="zr-formula" class="formula-display">
+                    <span class="hint">Bounds update as α,β change</span>
+                </div>
+                <div id="zr-bounds-display" class="bounds-display"></div>
+            </div>
+            
+            <div class="control-group">
+                <h4>Stability Analysis</h4>
+                <div id="zr-stability" class="stability-display">
+                    <span class="hint">Based on Main Results 1 & 2</span>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">🔬 Compare with Numerical</h4></summary>
+                    <div id="zr-comparison" class="comparison-display">
+                        <span class="hint">Shows how tight the bounds are</span>
+                    </div>
+                    <button id="compare-bounds-btn" class="small">Compare</button>
+                </details>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">⊕ Direct Sum</h4></summary>
+                    <p class="hint">Combine two graph spectra: G = G₁ ⊕ G₂</p>
+                    <div class="input-row">
+                        <label>G₁:</label>
+                        <select id="directsum-g1">
+                            <option value="current">Current Graph</option>
+                            <option value="path3">Path P₃</option>
+                            <option value="path4">Path P₄</option>
+                            <option value="cycle4">Cycle C₄</option>
+                            <option value="star4">Star S₄</option>
+                        </select>
+                    </div>
+                    <div class="input-row">
+                        <label>G₂:</label>
+                        <select id="directsum-g2">
+                            <option value="path3">Path P₃</option>
+                            <option value="path4">Path P₄</option>
+                            <option value="cycle4">Cycle C₄</option>
+                            <option value="star4">Star S₄</option>
+                        </select>
+                    </div>
+                    <button id="compute-directsum-btn" class="small">Compute G₁ ⊕ G₂</button>
+                    <div id="directsum-result" class="bounds-display"></div>
+                </details>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">📖 Reference (Table I & Appendix)</h4></summary>
+                    <div class="reference-table">
+                        <table class="formula-table">
+                            <tr><th>Graph</th><th>b₁/β</th></tr>
+                            <tr><td>Path Pₙ</td><td>2cos(π/(N+1))</td></tr>
+                            <tr><td>Cycle Cₙ</td><td>2</td></tr>
+                            <tr><td>Star Sₙ</td><td>√(N-1)</td></tr>
+                            <tr><td>S'ₚ (N=2p+1)</td><td>√(p+1)</td></tr>
+                            <tr><td>S²ₚ (N=3p+1)</td><td>√((p/2+1)+√((p/2)²+1))</td></tr>
+                            <tr><td>Complete Kₙ</td><td>cot(π/2N)</td></tr>
+                            <tr><td>Grid m×n</td><td>2cos(π/(m+1))+2cos(π/(n+1))</td></tr>
+                            <tr><td>General Ladder m×n</td><td>2cos(π/(n+1))+√(m+1)</td></tr>
+                            <tr><td>Simple Ladder Lₙ</td><td>2cos(π/(n+1))+1</td></tr>
+                            <tr><td>Circular Ladder</td><td>3</td></tr>
+                            <tr><td>Hypercube Qₐ</td><td>d</td></tr>
+                            <tr><td>Wheel Wₙ</td><td>≈ √(N-1)+1</td></tr>
+                            <tr><td>General Tree</td><td>≤ √(N-1)</td></tr>
+                            <tr><td>General</td><td>≤ cot(π/2N)</td></tr>
+                        </table>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <!-- ==================== BUILD ADVANCED TAB ==================== -->
+        <div id="sidebar-advanced" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>🔗 Graph Products</h4>
+                <p class="hint">Combine graphs with known eigenspectra</p>
+                
+                <div class="product-builder">
+                    <div class="input-row">
+                        <label>Graph A:</label>
+                        <select id="product-graph-a">
+                            <option value="current">★ Current Graph</option>
+                            <option value="path">Path Pₙ</option>
+                            <option value="cycle">Cycle Cₙ</option>
+                            <option value="star">Star Sₙ</option>
+                            <option value="complete">Complete Kₙ</option>
+                        </select>
+                    </div>
+                    <div id="product-n-a-row" class="input-row" style="display:none;">
+                        <label>n(A):</label>
+                        <input id="product-n-a" type="number" value="4" min="2" max="20">
+                    </div>
+                    
+                    <div class="product-operator">
+                        <select id="product-type">
+                            <option value="cartesian">□ Cartesian (G□H)</option>
+                            <option value="tensor">⊗ Tensor (G⊗H)</option>
+                            <option value="strong">⊠ Strong (G⊠H)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="input-row">
+                        <label>Graph B:</label>
+                        <select id="product-graph-b">
+                            <option value="path" selected>Path Pₙ</option>
+                            <option value="cycle">Cycle Cₙ</option>
+                            <option value="star">Star Sₙ</option>
+                            <option value="complete">Complete Kₙ</option>
+                            <option value="current">★ Current Graph</option>
+                        </select>
+                    </div>
+                    <div id="product-n-b-row" class="input-row">
+                        <label>n(B):</label>
+                        <input id="product-n-b" type="number" value="3" min="2" max="20">
+                    </div>
+                    
+                    <div id="product-preview" class="preview-box">
+                        <span class="preview-title">Result:</span>
+                        <span id="product-result-name">Current □ P₃ (extrusion)</span>
+                        <span id="product-result-vertices">Vertices: depends on current graph</span>
+                        <span id="product-result-formula">λᵢⱼ = λᵢ(A) + μⱼ(B)</span>
+                    </div>
+                    
+                    <button id="build-product-btn" class="success">Build Product Graph</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>📐 Parameterized Families</h4>
+                <p class="hint">Build graphs with explicit eigenvalue formulas</p>
+                
+                <div class="input-row">
+                    <label>Family:</label>
+                    <select id="param-family">
+                        <option value="s-tree">Sᵈₚ Tree (depth d, branches p)</option>
+                        <option value="circulant">Circulant C(n, S)</option>
+                        <option value="gp">Generalized Petersen GP(n, k)</option>
+                        <option value="prism">Prism Graph Yₘ</option>
+                        <option value="antiprism">Antiprism Aₘ</option>
+                        <option value="mobius">Möbius Ladder M₂ₙ</option>
+                    </select>
+                </div>
+                
+                <!-- S-tree parameters -->
+                <div id="params-s-tree" class="family-params">
+                    <div class="input-row">
+                        <label>Depth d:</label>
+                        <input id="stree-d" type="range" min="2" max="5" value="2">
+                        <span id="stree-d-label">2</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Branches p:</label>
+                        <input id="stree-p" type="range" min="2" max="10" value="4">
+                        <span id="stree-p-label">4</span>
+                    </div>
+                    <div class="param-info">
+                        <span id="stree-vertices">N = d·p + 1 = 9</span>
+                        <span id="stree-formula">λ = ±√(p+1), ±1 (×p-1), 0</span>
+                    </div>
+                </div>
+                
+                <!-- Circulant parameters -->
+                <div id="params-circulant" class="family-params" style="display:none;">
+                    <div class="input-row">
+                        <label>n:</label>
+                        <input id="circulant-n" type="number" value="8" min="4" max="30">
+                    </div>
+                    <div class="input-row">
+                        <label>Step set S:</label>
+                        <input id="circulant-steps" type="text" value="1,2" placeholder="e.g., 1,2,3">
+                    </div>
+                    <div class="param-info">
+                        <span id="circulant-info">C(8, {1,2}): 8 vertices, 4-regular</span>
+                    </div>
+                </div>
+                
+                <!-- Generalized Petersen parameters -->
+                <div id="params-gp" class="family-params" style="display:none;">
+                    <div class="input-row">
+                        <label>n:</label>
+                        <input id="gp-n" type="number" value="5" min="3" max="20">
+                    </div>
+                    <div class="input-row">
+                        <label>k:</label>
+                        <input id="gp-k" type="number" value="2" min="1" max="10">
+                    </div>
+                    <div class="param-info">
+                        <span id="gp-info">GP(5,2) = Petersen: 10 vertices</span>
+                    </div>
+                </div>
+                
+                <!-- Prism/Antiprism/Möbius parameters -->
+                <div id="params-prism" class="family-params" style="display:none;">
+                    <div class="input-row">
+                        <label>m:</label>
+                        <input id="prism-m" type="number" value="5" min="3" max="20">
+                    </div>
+                    <div class="param-info">
+                        <span id="prism-info">Prism Y₅: 10 vertices</span>
+                    </div>
+                </div>
+                
+                <button id="build-family-btn" class="purple">Build Parameterized Graph</button>
+            </div>
+            
+            <div class="control-group">
+                <h4>🔍 Find Analytic Graphs</h4>
+                <p class="hint">Exhaustive search for small graphs with closed-form eigenvalues</p>
+                <div class="input-row">
+                    <label>Vertices:</label>
+                    <input id="finder-vertices" type="number" value="5" min="3" max="7">
+                    <span class="badge warning">n ≤ 7</span>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="finder-connected-only" checked>
+                    <span>Connected only</span>
+                    <span class="badge success">faster</span>
+                </label>
+                <button id="find-analytic-btn" class="info">Find All Analytic Graphs</button>
+                <div id="finder-progress" style="display: none;">
+                    <div id="finder-status">Searching...</div>
+                    <div class="progress-bar">
+                        <div id="finder-progress-bar"></div>
+                    </div>
+                </div>
+                <div id="finder-results" style="display: none;">
+                    <div id="finder-summary"></div>
+                    <select id="analytic-graph-select">
+                        <option value="">-- Select a graph --</option>
+                    </select>
+                    <div id="selected-graph-info" style="display: none;">
+                        <div id="graph-family"></div>
+                        <div id="graph-edges"></div>
+                        <div id="graph-eigenvalues"></div>
+                    </div>
+                    <button id="load-analytic-graph-btn" class="success">Load Selected</button>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">📖 Product Eigenvalue Formulas</h4></summary>
+                    <div class="reference-table">
+                        <table class="formula-table">
+                            <tr><th>Product</th><th>Eigenvalues</th></tr>
+                            <tr><td>G □ H (Cartesian)</td><td>λᵢ(G) + μⱼ(H)</td></tr>
+                            <tr><td>G ⊗ H (Tensor)</td><td>λᵢ(G) · μⱼ(H)</td></tr>
+                            <tr><td>G ⊠ H (Strong)</td><td>(1+λᵢ)(1+μⱼ) - 1</td></tr>
+                        </table>
+                        <p class="hint" style="margin-top:8px;">
+                            <b>Extrusion:</b> 2D mesh × Pₙ = 3D extruded mesh<br>
+                            Example: Cycle × Path = Cylinder surface
+                        </p>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keep modal for backward compatibility but hidden -->
+    <div id="matrix-modal" style="display:none;"></div>
+    <button id="show-matrix-btn" style="display:none;"></button>
+    <button id="close-modal" style="display:none;"></button>
+
+    <!-- Enhanced Visualization Popup -->
+    <div id="enhanced-viz-popup" class="enhanced-popup" style="display:none;">
+        <div class="popup-header">
+            <span class="popup-title">📊 Enhanced Visualization Dashboard</span>
+            <div class="popup-controls">
+                <button id="popup-minimize" class="popup-btn" title="Minimize">−</button>
+                <button id="popup-maximize" class="popup-btn" title="Maximize">□</button>
+                <button id="popup-close" class="popup-btn" title="Close">×</button>
+            </div>
+        </div>
+        <div class="popup-content">
+            <!-- Top Row: Phase Plots -->
+            <div class="viz-row">
+                <div class="viz-panel" id="panel-phase-current">
+                    <div class="panel-header">CURRENT PHASE PLOT</div>
+                    <canvas id="enhanced-phase-current" width="280" height="250"></canvas>
+                    <div class="panel-legend">
+                        <span class="legend-item"><span class="legend-line cyan"></span> Trajectory trail</span>
+                    </div>
+                </div>
+                <div class="viz-panel" id="panel-phase-enhanced">
+                    <div class="panel-header">ENHANCED PHASE PLOT</div>
+                    <canvas id="enhanced-phase-main" width="320" height="250"></canvas>
+                    <div class="panel-legend">
+                        <span class="legend-item"><span class="legend-line cyan"></span> Trajectory</span>
+                        <span class="legend-item"><span class="legend-dot green"></span> b₁ stability bound</span>
+                        <span class="legend-item"><span class="legend-line orange"></span> Frequency modes</span>
+                    </div>
+                    <div class="panel-note">
+                        <small>💡 <b>Shape meaning:</b> Line = in-phase, Circle = 90° out of phase. Mode lines show eigenvector phase relationships.</small>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Bottom Row: Spectrum, Energy, Time Series -->
+            <div class="viz-row">
+                <div class="viz-panel" id="panel-spectrum">
+                    <div class="panel-header">FREQUENCY SPECTRUM</div>
+                    <canvas id="enhanced-spectrum" width="280" height="150"></canvas>
+                </div>
+                <div class="viz-panel" id="panel-energy">
+                    <div class="panel-header">ENERGY CONSERVATION</div>
+                    <div class="energy-display">
+                        <div class="energy-label">Energy:</div>
+                        <div class="energy-bar-container">
+                            <div id="energy-bar" class="energy-bar"></div>
+                            <span id="energy-value" class="energy-value">1.0000</span>
+                        </div>
+                    </div>
+                    <div id="energy-history" class="energy-history"></div>
+                </div>
+                <div class="viz-panel" id="panel-timeseries">
+                    <div class="panel-header">TIME SERIES</div>
+                    <canvas id="enhanced-timeseries" width="280" height="160"></canvas>
+                </div>
+            </div>
+            
+            <!-- Controls Row -->
+            <div class="viz-controls-row">
+                <label><input type="checkbox" id="viz-show-bounds" checked> Show b₁ bound</label>
+                <label><input type="checkbox" id="viz-show-eigenvectors" checked> Show mode frequencies</label>
+                <label><input type="checkbox" id="viz-show-grid" checked> Show grid</label>
+                <div class="zoom-controls">
+                    <span>Zoom:</span>
+                    <input type="range" id="viz-zoom" min="50" max="300" value="100">
+                    <span id="viz-zoom-label">100%</span>
+                </div>
+            </div>
+        </div>
+        <div class="popup-resize-handle"></div>
+    </div>
+
+    <!-- Keyboard Shortcuts Hint -->
+    <div class="keyboard-hint">
+        <kbd>F</kbd> Fit to view &nbsp;|&nbsp; <kbd>Esc</kbd> Deselect
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>

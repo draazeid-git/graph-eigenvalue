@@ -1,0 +1,4774 @@
+/**
+ * Main Entry Point
+ * Ties together all modules: graph-core, dynamics-animation, matrix-analysis-ui
+ * (spectral-analysis is used internally by the other modules)
+ */
+
+import * as THREE from 'three';
+
+import {
+    state, initScene, animate, controls, camera,
+    createVertex, clearGraph, addEdge, clearAllEdges, generateRandomEdges,
+    updateAllEdges, updateVertexLabels, setVertexMaterial,
+    getCirclePositions, getSpherePositions,
+    getConcentricCirclePositions2, getConcentricCirclePositions3,
+    getConcentricSpherePositions2,
+    startForceLayout, stopForceLayout,
+    getIntersectedVertex, getIntersectedEdge,
+    VERTEX_RADIUS,
+    removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle
+} from './graph-core.js';
+
+import {
+    initDynamics, startDynamics, stopDynamics, resetDynamics,
+    invalidateCaches, isDynamicsRunning,
+    updatePhaseNodeSelectors, clearPhaseTrail, updatePhaseLabels, togglePhaseDiagram,
+    resetDynamicsVisuals, getDynamicsState, setDynamicsUpdateCallback
+} from './dynamics-animation.js';
+
+import {
+    initMatrixAnalysis, updateStats, showAnalysis, showModal, hideModal, initModalPosition,
+    initComplexPlane, drawComplexPlane
+} from './matrix-analysis-ui.js';
+
+import {
+    findAnalyticGraphs, loadGraphFromResult, cancelSearch
+} from './graph-finder.js';
+
+import {
+    detectPointGraphTopology,
+    computeSpectrum,
+    computeDirectSum,
+    computeNonUniformBounds,
+    checkStability,
+    compareWithNumerical,
+    generatePointGraph,
+    formatFormula,
+    formatBounds
+} from './zeid-rosenberg.js';
+
+import {
+    computeSkewSymmetricEigenvalues
+} from './spectral-analysis.js';
+
+// =====================================================
+// DOM ELEMENT REFERENCES
+// =====================================================
+
+// Container
+let container;
+
+// Graph generation controls
+let numVerticesInput, radiusInput, layoutTypeSelect;
+let concentricOptions, innerRatioInput, innerRatioLabel;
+let middleRatioContainer, middleRatioInput, middleRatioLabel;
+let splitModeSelect, customSplitContainer, customSplitInput;
+let generateBtn;
+
+// Force layout
+let forceLayoutBtn, stopForceBtn, forceSpeedInput, force3DCheckbox;
+
+// Templates
+let templateSelect, applyTemplateBtn, skewSymmetricCheckbox;
+let templateParams, paramDepth, paramBranches, paramKary, paramGrid, paramCuboid, paramHypercube;
+let treeDepthInput, treeBranchesInput, treeKInput;
+let gridRowsInput, gridColsInput;
+let cuboidMInput, cuboidNInput, cuboidKInput;
+let hypercubeDimInput;
+
+// Graph Finder
+let findAnalyticBtn, finderProgress, finderStatus, finderProgressBar;
+let finderResults, finderSummary, analyticGraphSelect;
+let selectedGraphInfo, graphFamilyDisplay, graphEdgesDisplay, graphEigenvaluesDisplay;
+let loadAnalyticGraphBtn, finderConnectedOnlyCheckbox, cancelSearchBtn, finderLayoutSelect;
+let discoveredGraphs = []; // Store found graphs
+
+// Edit mode
+let addModeCheckbox, deleteModeCheckbox, dragModeCheckbox, modeIndicator;
+let addVertexModeBtn, deleteVertexModeBtn;
+let arrangeRowsInput, arrangeColsInput, arrangeSpacingInput;
+let arrangeGridBtn, arrangeCircleBtn;
+let currentEditMode = 'view';  // 'view', 'add', 'delete', 'drag', 'add-vertex', 'delete-vertex'
+
+// Edge controls
+let autoEdgesInput, autoGenerateBtn, clearEdgesBtn;
+
+// Matrix modal
+let showMatrixBtn, matrixModal, matrixContent, modalHeader, closeModalBtn;
+
+// Statistics
+let statVertices, statEdges, statType;
+
+// Dynamics controls
+let startDynamicsBtn, stopDynamicsBtn, resetDynamicsBtn;
+let integratorSelect, timestepSelect, dynamicsSpeedInput, dynamicsSpeedLabel;
+let arrowScaleInput, arrowScaleLabel, arrowMinLengthInput, arrowMinLabel;
+
+// Dynamics display
+let dynamicsTimeDisplay, dynamicsMaxStateDisplay, dynamicsMaxFlowDisplay, dynamicsEnergyDisplay;
+
+// Phase diagram
+let phaseModeSelect, animationModeSelect, phaseNodeISelect, phaseNodeJSelect;
+let phaseEnabledCheckbox, clearPhaseBtn, phaseCanvas;
+let phaseHint, phaseAxisLabels, phaseXLabel, phaseYLabel, phaseModeHint;
+
+// Eigenvalue plot with alpha/beta sliders
+let phaseAlphaInput, phaseAlphaLabel, phaseBetaInput, phaseBetaLabel;
+let eigenvaluePlotCheckbox, eigenvalueCanvas, eigenvalueCtx;
+let evRealMax, evImagMax, stabilityIndicator;
+let phaseModeExplanation, animationModeExplanation, animationModeHint;
+
+// Enhanced Visualization Popup
+let enhancedVizPopup, openEnhancedVizBtn;
+let popupMinimizeBtn, popupMaximizeBtn, popupCloseBtn;
+let enhancedPhaseCurrentCanvas, enhancedPhaseMainCanvas;
+let enhancedSpectrumCanvas, enhancedTimeseriesCanvas;
+let energyBar, energyValue;
+let vizShowBounds, vizShowEigenvectors, vizShowGrid, vizZoom, vizZoomLabel;
+let enhancedVizActive = false;
+let timeSeriesHistory = [];
+let timeSeriesTimeStamps = [];
+let initialEnergy = null; // Track initial energy for conservation check
+const TIME_SERIES_LENGTH = 200;
+const TIME_SERIES_WINDOW = 10.0; // Show 10 seconds of data
+
+// Bounds tab (Zeid-Rosenberg)
+let zrTopologyDisplay, detectTopologyBtn;
+let zrAlphaInput, zrBetaInput, zrAlphaSlider, zrBetaSlider, zrAlphaLabel, zrBetaLabel;
+let zrEigenvalueCount, computeBoundsBtn;
+let zrFormulaDisplay, zrBoundsDisplay, zrStabilityDisplay;
+let zrComplexPlane, zrComparisonDisplay, compareBoundsBtn;
+let directsumG1Select, directsumG2Select, computeDirectsumBtn, directsumResult;
+let currentSpectrum = null;  // Store computed spectrum for reuse
+
+// =====================================================
+// INITIALIZATION
+// =====================================================
+
+export function init() {
+    // Get all DOM elements
+    grabDOMElements();
+    
+    // Initialize slider values explicitly (ensure defaults are respected)
+    initializeSliderDefaults();
+    
+    // Initialize Three.js scene
+    initScene(container);
+    
+    // Initialize dynamics module
+    initDynamics({
+        integratorSelect,
+        timestepSelect,
+        dynamicsSpeedInput,
+        dynamicsSpeedLabel,
+        arrowScaleInput,
+        arrowMinLengthInput,
+        dynamicsTimeDisplay,
+        dynamicsMaxStateDisplay,
+        dynamicsMaxFlowDisplay,
+        dynamicsEnergyDisplay,
+        startDynamicsBtn,
+        stopDynamicsBtn,
+        phaseModeSelect,
+        animationModeSelect,
+        phaseNodeISelect,
+        phaseNodeJSelect,
+        phaseEnabledCheckbox,
+        phaseCanvas,
+        phaseHint,
+        phaseAxisLabels,
+        phaseXLabel,
+        phaseYLabel,
+        phaseModeHint
+    });
+    
+    // Initialize matrix analysis module
+    initMatrixAnalysis({
+        matrixModal,
+        matrixContent,
+        modalHeader,
+        closeModalBtn,
+        statVertices,
+        statEdges,
+        statType
+    });
+    
+    // Initialize complex plane visualization
+    initComplexPlane();
+    
+    // Setup event listeners
+    setupEventListeners();
+    setupTabs();
+    setupBoundsEventListeners();
+    setupEnhancedVizPopup();
+    setupAdvancedBuildTab();
+    setupCopyButtons();
+    setupKeyboardShortcuts();
+    
+    // Generate initial graph
+    generateGraph();
+    updateMode();
+    initModalPosition();
+    
+    // Initialize mode explanations (new in v17)
+    updatePhaseModeExplanation();
+    updateAnimationModeExplanation();
+    
+    // Start render loop
+    animate();
+}
+
+// Ensure slider defaults are explicitly set (browsers sometimes ignore value attribute)
+function initializeSliderDefaults() {
+    // Bounds tab α/β sliders
+    if (zrAlphaSlider) {
+        zrAlphaSlider.value = 10;  // α = 1.0
+        if (zrAlphaLabel) zrAlphaLabel.textContent = '1.0';
+        if (zrAlphaInput) zrAlphaInput.value = 1.0;
+    }
+    if (zrBetaSlider) {
+        zrBetaSlider.value = 10;   // β = 1.0
+        if (zrBetaLabel) zrBetaLabel.textContent = '1.0';
+        if (zrBetaInput) zrBetaInput.value = 1.0;
+    }
+    
+    // Simulate tab α/β sliders
+    if (phaseAlphaInput) {
+        phaseAlphaInput.value = 10;  // α = 1.0
+        if (phaseAlphaLabel) phaseAlphaLabel.textContent = '1.0';
+    }
+    if (phaseBetaInput) {
+        phaseBetaInput.value = 10;   // β = 1.0
+        if (phaseBetaLabel) phaseBetaLabel.textContent = '1.0';
+    }
+}
+
+function grabDOMElements() {
+    container = document.getElementById('container');
+    
+    // Graph generation
+    numVerticesInput = document.getElementById('num-vertices');
+    radiusInput = document.getElementById('layout-radius');
+    layoutTypeSelect = document.getElementById('layout-type');
+    concentricOptions = document.getElementById('concentric-options');
+    innerRatioInput = document.getElementById('inner-ratio');
+    innerRatioLabel = document.getElementById('inner-ratio-label');
+    middleRatioContainer = document.getElementById('middle-ratio-container');
+    middleRatioInput = document.getElementById('middle-ratio');
+    middleRatioLabel = document.getElementById('middle-ratio-label');
+    splitModeSelect = document.getElementById('split-mode');
+    customSplitContainer = document.getElementById('custom-split-container');
+    customSplitInput = document.getElementById('custom-split');
+    generateBtn = document.getElementById('generate-btn');
+    
+    // Force layout
+    forceLayoutBtn = document.getElementById('force-layout-btn');
+    stopForceBtn = document.getElementById('stop-force-btn');
+    forceSpeedInput = document.getElementById('force-speed');
+    force3DCheckbox = document.getElementById('force-3d-checkbox');
+    
+    // Templates
+    templateSelect = document.getElementById('template-select');
+    applyTemplateBtn = document.getElementById('apply-template-btn');
+    skewSymmetricCheckbox = document.getElementById('skew-symmetric-checkbox');
+    
+    // Template parameters
+    templateParams = document.getElementById('template-params');
+    paramDepth = document.getElementById('param-depth');
+    paramBranches = document.getElementById('param-branches');
+    paramKary = document.getElementById('param-k-ary');
+    paramGrid = document.getElementById('param-grid');
+    paramCuboid = document.getElementById('param-cuboid');
+    paramHypercube = document.getElementById('param-hypercube');
+    treeDepthInput = document.getElementById('tree-depth');
+    treeBranchesInput = document.getElementById('tree-branches');
+    treeKInput = document.getElementById('tree-k');
+    gridRowsInput = document.getElementById('grid-rows');
+    gridColsInput = document.getElementById('grid-cols');
+    cuboidMInput = document.getElementById('cuboid-m');
+    cuboidNInput = document.getElementById('cuboid-n');
+    cuboidKInput = document.getElementById('cuboid-k');
+    hypercubeDimInput = document.getElementById('hypercube-dim');
+    
+    // Graph Finder
+    findAnalyticBtn = document.getElementById('find-analytic-btn');
+    finderProgress = document.getElementById('finder-progress');
+    finderStatus = document.getElementById('finder-status');
+    finderProgressBar = document.getElementById('finder-progress-bar');
+    finderResults = document.getElementById('finder-results');
+    finderSummary = document.getElementById('finder-summary');
+    analyticGraphSelect = document.getElementById('analytic-graph-select');
+    selectedGraphInfo = document.getElementById('selected-graph-info');
+    graphFamilyDisplay = document.getElementById('graph-family');
+    graphEdgesDisplay = document.getElementById('graph-edges');
+    graphEigenvaluesDisplay = document.getElementById('graph-eigenvalues');
+    loadAnalyticGraphBtn = document.getElementById('load-analytic-graph-btn');
+    finderConnectedOnlyCheckbox = document.getElementById('finder-connected-only');
+    cancelSearchBtn = document.getElementById('cancel-search-btn');
+    finderLayoutSelect = document.getElementById('finder-layout-select');
+    
+    // Edit mode
+    addModeCheckbox = document.getElementById('add-mode-checkbox');
+    deleteModeCheckbox = document.getElementById('delete-mode-checkbox');
+    dragModeCheckbox = document.getElementById('drag-mode-checkbox');
+    modeIndicator = document.getElementById('mode-indicator');
+    addVertexModeBtn = document.getElementById('add-vertex-mode-btn');
+    deleteVertexModeBtn = document.getElementById('delete-vertex-mode-btn');
+    arrangeRowsInput = document.getElementById('arrange-rows');
+    arrangeColsInput = document.getElementById('arrange-cols');
+    arrangeSpacingInput = document.getElementById('arrange-spacing');
+    arrangeGridBtn = document.getElementById('arrange-grid-btn');
+    arrangeCircleBtn = document.getElementById('arrange-circle-btn');
+    
+    // Edge controls
+    autoEdgesInput = document.getElementById('auto-edges');
+    autoGenerateBtn = document.getElementById('auto-generate-btn');
+    clearEdgesBtn = document.getElementById('clear-edges-btn');
+    
+    // Matrix modal
+    showMatrixBtn = document.getElementById('show-matrix-btn');
+    matrixModal = document.getElementById('matrix-modal');
+    matrixContent = document.getElementById('matrix-content');
+    modalHeader = document.getElementById('modal-header');
+    closeModalBtn = document.getElementById('close-modal');
+    
+    // Statistics
+    statVertices = document.getElementById('stat-vertices');
+    statEdges = document.getElementById('stat-edges');
+    statType = document.getElementById('stat-type');
+    
+    // Dynamics controls
+    startDynamicsBtn = document.getElementById('start-dynamics-btn');
+    stopDynamicsBtn = document.getElementById('stop-dynamics-btn');
+    resetDynamicsBtn = document.getElementById('reset-dynamics-btn');
+    integratorSelect = document.getElementById('integrator-select');
+    timestepSelect = document.getElementById('timestep-select');
+    dynamicsSpeedInput = document.getElementById('dynamics-speed');
+    dynamicsSpeedLabel = document.getElementById('dynamics-speed-label');
+    arrowScaleInput = document.getElementById('arrow-scale');
+    arrowScaleLabel = document.getElementById('arrow-scale-label');
+    arrowMinLengthInput = document.getElementById('arrow-min-length');
+    arrowMinLabel = document.getElementById('arrow-min-label');
+    
+    // Dynamics display
+    dynamicsTimeDisplay = document.getElementById('dynamics-time');
+    dynamicsMaxStateDisplay = document.getElementById('dynamics-max-state');
+    dynamicsMaxFlowDisplay = document.getElementById('dynamics-max-flow');
+    dynamicsEnergyDisplay = document.getElementById('dynamics-energy');
+    
+    // Phase diagram
+    phaseModeSelect = document.getElementById('phase-mode-select');
+    animationModeSelect = document.getElementById('animation-mode-select');
+    phaseNodeISelect = document.getElementById('phase-node-i');
+    phaseNodeJSelect = document.getElementById('phase-node-j');
+    phaseEnabledCheckbox = document.getElementById('phase-enabled-checkbox');
+    clearPhaseBtn = document.getElementById('clear-phase-btn');
+    phaseCanvas = document.getElementById('phase-canvas');
+    phaseHint = document.getElementById('phase-hint');
+    phaseAxisLabels = document.getElementById('phase-axis-labels');
+    phaseXLabel = document.getElementById('phase-x-label');
+    phaseYLabel = document.getElementById('phase-y-label');
+    phaseModeHint = document.getElementById('phase-mode-hint');
+    
+    // Eigenvalue plot with alpha/beta sliders (new in v17)
+    phaseAlphaInput = document.getElementById('phase-alpha');
+    phaseAlphaLabel = document.getElementById('phase-alpha-label');
+    phaseBetaInput = document.getElementById('phase-beta');
+    phaseBetaLabel = document.getElementById('phase-beta-label');
+    eigenvaluePlotCheckbox = document.getElementById('eigenvalue-plot-checkbox');
+    eigenvalueCanvas = document.getElementById('eigenvalue-canvas');
+    if (eigenvalueCanvas) {
+        eigenvalueCtx = eigenvalueCanvas.getContext('2d');
+    }
+    evRealMax = document.getElementById('ev-real-max');
+    evImagMax = document.getElementById('ev-imag-max');
+    stabilityIndicator = document.getElementById('stability-indicator');
+    phaseModeExplanation = document.getElementById('phase-mode-explanation');
+    animationModeExplanation = document.getElementById('animation-mode-explanation');
+    animationModeHint = document.getElementById('animation-mode-hint');
+    
+    // Bounds tab (Zeid-Rosenberg)
+    zrTopologyDisplay = document.getElementById('zr-topology');
+    detectTopologyBtn = document.getElementById('detect-topology-btn');
+    zrAlphaInput = document.getElementById('zr-alpha');
+    zrBetaInput = document.getElementById('zr-beta');
+    zrAlphaSlider = document.getElementById('zr-alpha-slider');
+    zrBetaSlider = document.getElementById('zr-beta-slider');
+    zrAlphaLabel = document.getElementById('zr-alpha-label');
+    zrBetaLabel = document.getElementById('zr-beta-label');
+    zrEigenvalueCount = document.getElementById('zr-eigenvalue-count');
+    computeBoundsBtn = document.getElementById('compute-bounds-btn');
+    zrFormulaDisplay = document.getElementById('zr-formula');
+    zrBoundsDisplay = document.getElementById('zr-bounds-display');
+    zrStabilityDisplay = document.getElementById('zr-stability');
+    zrComplexPlane = document.getElementById('zr-complex-plane');
+    zrComparisonDisplay = document.getElementById('zr-comparison');
+    compareBoundsBtn = document.getElementById('compare-bounds-btn');
+    directsumG1Select = document.getElementById('directsum-g1');
+    directsumG2Select = document.getElementById('directsum-g2');
+    computeDirectsumBtn = document.getElementById('compute-directsum-btn');
+    directsumResult = document.getElementById('directsum-result');
+    
+    // Enhanced Visualization Popup
+    enhancedVizPopup = document.getElementById('enhanced-viz-popup');
+    openEnhancedVizBtn = document.getElementById('open-enhanced-viz-btn');
+    popupMinimizeBtn = document.getElementById('popup-minimize');
+    popupMaximizeBtn = document.getElementById('popup-maximize');
+    popupCloseBtn = document.getElementById('popup-close');
+    enhancedPhaseCurrentCanvas = document.getElementById('enhanced-phase-current');
+    enhancedPhaseMainCanvas = document.getElementById('enhanced-phase-main');
+    enhancedSpectrumCanvas = document.getElementById('enhanced-spectrum');
+    enhancedTimeseriesCanvas = document.getElementById('enhanced-timeseries');
+    energyBar = document.getElementById('energy-bar');
+    energyValue = document.getElementById('energy-value');
+    vizShowBounds = document.getElementById('viz-show-bounds');
+    vizShowEigenvectors = document.getElementById('viz-show-eigenvectors');
+    vizShowGrid = document.getElementById('viz-show-grid');
+    vizZoom = document.getElementById('viz-zoom');
+    vizZoomLabel = document.getElementById('viz-zoom-label');
+}
+
+// =====================================================
+// EVENT LISTENERS
+// =====================================================
+
+function setupEventListeners() {
+    // Layout type changes
+    layoutTypeSelect.addEventListener('change', () => {
+        const layout = layoutTypeSelect.value;
+        concentricOptions.style.display = layout.startsWith('concentric') ? 'block' : 'none';
+        if (middleRatioContainer) {
+            middleRatioContainer.style.display = (layout === 'concentric-3') ? 'block' : 'none';
+        }
+    });
+    
+    // Ratio sliders
+    innerRatioInput.addEventListener('input', () => {
+        innerRatioLabel.textContent = innerRatioInput.value + '%';
+    });
+    
+    if (middleRatioInput) {
+        middleRatioInput.addEventListener('input', () => {
+            middleRatioLabel.textContent = middleRatioInput.value + '%';
+        });
+    }
+    
+    // Split mode
+    splitModeSelect.addEventListener('change', () => {
+        if (customSplitContainer) {
+            customSplitContainer.style.display = (splitModeSelect.value === 'custom') ? 'block' : 'none';
+        }
+    });
+    
+    // Generate button
+    generateBtn.addEventListener('click', () => {
+        stopForceLayout();
+        stopDynamics();
+        generateGraph();
+    });
+    
+    // Template selection - show/hide parameter controls
+    templateSelect.addEventListener('change', () => {
+        updateTemplateParams();
+    });
+    
+    // Apply template
+    applyTemplateBtn.addEventListener('click', () => {
+        stopForceLayout();
+        stopDynamics();
+        applyTemplate(templateSelect.value);
+    });
+    
+    // Graph Finder
+    findAnalyticBtn.addEventListener('click', () => {
+        stopForceLayout();
+        stopDynamics();
+        findAllAnalyticGraphs();
+    });
+    
+    if (cancelSearchBtn) {
+        cancelSearchBtn.addEventListener('click', () => {
+            cancelSearch();
+            cancelSearchBtn.disabled = true;
+            cancelSearchBtn.textContent = 'Cancelling...';
+        });
+    }
+    
+    analyticGraphSelect.addEventListener('change', () => {
+        showSelectedGraphInfo();
+    });
+    
+    loadAnalyticGraphBtn.addEventListener('click', () => {
+        loadSelectedAnalyticGraph();
+    });
+    
+    // Force layout
+    forceLayoutBtn.addEventListener('click', () => {
+        stopDynamics();
+        startForceLayout(forceSpeedInput, force3DCheckbox, updateStats);
+        forceLayoutBtn.style.display = 'none';
+        stopForceBtn.style.display = 'block';
+    });
+    
+    stopForceBtn.addEventListener('click', () => {
+        stopForceLayout();
+        forceLayoutBtn.style.display = 'block';
+        stopForceBtn.style.display = 'none';
+    });
+    
+    // Dynamics controls
+    startDynamicsBtn.addEventListener('click', startDynamics);
+    stopDynamicsBtn.addEventListener('click', stopDynamics);
+    resetDynamicsBtn.addEventListener('click', () => {
+        stopDynamics();
+        resetDynamicsVisuals();
+    });
+    
+    // Dynamics speed
+    dynamicsSpeedInput.addEventListener('input', () => {
+        const speed = parseInt(dynamicsSpeedInput.value) / 10;
+        dynamicsSpeedLabel.textContent = speed.toFixed(1) + 'x';
+        invalidateCaches();
+    });
+    
+    // Integrator change
+    integratorSelect.addEventListener('change', () => {
+        invalidateCaches();
+    });
+    
+    // Arrow controls
+    arrowScaleInput.addEventListener('input', () => {
+        arrowScaleLabel.textContent = arrowScaleInput.value;
+    });
+    
+    arrowMinLengthInput.addEventListener('input', () => {
+        arrowMinLabel.textContent = arrowMinLengthInput.value;
+    });
+    
+    // Phase diagram controls
+    if (phaseEnabledCheckbox) phaseEnabledCheckbox.addEventListener('change', togglePhaseDiagram);
+    if (clearPhaseBtn) clearPhaseBtn.addEventListener('click', clearPhaseTrail);
+    if (phaseNodeISelect) phaseNodeISelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); });
+    if (phaseNodeJSelect) phaseNodeJSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); });
+    if (phaseModeSelect) phaseModeSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); updatePhaseModeExplanation(); });
+    if (animationModeSelect) animationModeSelect.addEventListener('change', updateAnimationModeExplanation);
+    
+    // Eigenvalue plot with alpha/beta sliders (new in v17)
+    if (phaseAlphaInput) {
+        phaseAlphaInput.addEventListener('input', () => {
+            const alpha = parseInt(phaseAlphaInput.value) / 10;
+            if (phaseAlphaLabel) phaseAlphaLabel.textContent = alpha.toFixed(1);
+            updateEigenvaluePlot();
+        });
+    }
+    if (phaseBetaInput) {
+        phaseBetaInput.addEventListener('input', () => {
+            const beta = parseInt(phaseBetaInput.value) / 10;
+            if (phaseBetaLabel) phaseBetaLabel.textContent = beta.toFixed(1);
+            updateEigenvaluePlot();
+        });
+    }
+    if (eigenvaluePlotCheckbox) {
+        eigenvaluePlotCheckbox.addEventListener('change', () => {
+            toggleEigenvaluePlot();
+        });
+    }
+    
+    // Edit mode checkboxes
+    addModeCheckbox.addEventListener('change', () => {
+        if (addModeCheckbox.checked) {
+            deleteModeCheckbox.checked = false;
+            if (dragModeCheckbox) dragModeCheckbox.checked = false;
+        }
+        updateMode();
+    });
+    
+    deleteModeCheckbox.addEventListener('change', () => {
+        if (deleteModeCheckbox.checked) {
+            addModeCheckbox.checked = false;
+            if (dragModeCheckbox) dragModeCheckbox.checked = false;
+        }
+        updateMode();
+    });
+    
+    if (dragModeCheckbox) {
+        dragModeCheckbox.addEventListener('change', () => {
+            if (dragModeCheckbox.checked) {
+                addModeCheckbox.checked = false;
+                deleteModeCheckbox.checked = false;
+            }
+            updateMode();
+        });
+    }
+    
+    // Edge generation
+    autoGenerateBtn.addEventListener('click', () => {
+        generateRandomEdges(parseInt(autoEdgesInput.value));
+        updateStats();
+    });
+    
+    clearEdgesBtn.addEventListener('click', () => {
+        stopDynamics();
+        clearAllEdges();
+        updateStats();
+    });
+    
+    // Matrix modal
+    showMatrixBtn.addEventListener('click', () => {
+        showAnalysis();
+        initModalPosition();
+    });
+    
+    closeModalBtn.addEventListener('click', () => {
+        hideModal();
+    });
+    
+    // Mouse events for edge editing and vertex dragging
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', (e) => {
+        onMouseDown(e);
+        onMouseClick(e);
+    });
+    window.addEventListener('mouseup', onMouseUp);
+    
+    // Sidebar resize
+    setupSidebarResize();
+}
+
+function setupSidebarResize() {
+    const sidebar = document.getElementById('controls-panel');
+    const handle = document.getElementById('sidebar-resize-handle');
+    
+    if (!sidebar || !handle) return;
+    
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+    
+    handle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = sidebar.offsetWidth;
+        
+        handle.classList.add('dragging');
+        document.body.classList.add('resizing');
+        
+        e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        // Calculate new width (dragging left increases width since sidebar is on right)
+        const delta = startX - e.clientX;
+        let newWidth = startWidth + delta;
+        
+        // Clamp to min/max
+        newWidth = Math.max(220, Math.min(500, newWidth));
+        
+        sidebar.style.width = newWidth + 'px';
+        
+        // Store preference
+        localStorage.setItem('sidebarWidth', newWidth);
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            handle.classList.remove('dragging');
+            document.body.classList.remove('resizing');
+        }
+    });
+    
+    // Restore saved width
+    const savedWidth = localStorage.getItem('sidebarWidth');
+    if (savedWidth) {
+        const width = parseInt(savedWidth);
+        if (width >= 220 && width <= 500) {
+            sidebar.style.width = width + 'px';
+        }
+    }
+}
+
+function setupTabs() {
+    // Sidebar tabs
+    document.querySelectorAll('.sidebar-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.querySelectorAll('.sidebar-tab-content').forEach(c => c.classList.remove('active'));
+            const target = document.getElementById('sidebar-' + tab.dataset.tab);
+            if (target) target.classList.add('active');
+            
+            // Update analysis tab content when switching to it
+            if (tab.dataset.tab === 'analyze') {
+                updateAnalyzeTab();
+            }
+            
+            // Update bounds tab when switching to it
+            if (tab.dataset.tab === 'bounds') {
+                updateBoundsTab();
+            }
+        });
+    });
+    
+    // Mode buttons (new design)
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            currentEditMode = mode;  // Track current mode globally
+            
+            // Update button states
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Sync with hidden checkboxes for compatibility
+            if (addModeCheckbox) addModeCheckbox.checked = (mode === 'add');
+            if (deleteModeCheckbox) deleteModeCheckbox.checked = (mode === 'delete');
+            if (dragModeCheckbox) dragModeCheckbox.checked = (mode === 'drag');
+            
+            // Update mode indicator
+            updateMode();
+            
+            // Update hints
+            document.querySelectorAll('.mode-hints .hint').forEach(h => h.style.display = 'none');
+            const hintId = 'hint-' + mode;
+            const hint = document.getElementById(hintId);
+            if (hint) hint.style.display = 'block';
+        });
+    });
+    
+    // Arrange buttons
+    if (arrangeGridBtn) {
+        arrangeGridBtn.addEventListener('click', () => {
+            const rows = parseInt(arrangeRowsInput?.value) || 3;
+            const cols = parseInt(arrangeColsInput?.value) || 3;
+            const spacing = parseInt(arrangeSpacingInput?.value) || 15;
+            arrangeOnGrid(rows, cols, spacing);
+            updateStats();
+        });
+    }
+    
+    if (arrangeCircleBtn) {
+        arrangeCircleBtn.addEventListener('click', () => {
+            const spacing = parseInt(arrangeSpacingInput?.value) || 15;
+            const radius = spacing * state.vertexMeshes.length / (2 * Math.PI);
+            arrangeOnCircle(Math.max(radius, 20));
+            updateStats();
+        });
+    }
+    
+    // Modal tabs (for backward compatibility)
+    document.querySelectorAll('.modal-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.querySelectorAll('.modal-tab-content').forEach(c => c.classList.remove('active'));
+            const target = document.getElementById('tab-' + tab.dataset.tab);
+            if (target) target.classList.add('active');
+        });
+    });
+}
+
+// Update the Analyze tab with current graph info
+function updateAnalyzeTab() {
+    // This will be called when switching to the analyze tab
+    // The showAnalysis function already updates most displays
+    showAnalysis();
+}
+
+// =====================================================
+// BOUNDS TAB (Zeid-Rosenberg)
+// =====================================================
+
+function setupBoundsEventListeners() {
+    if (detectTopologyBtn) {
+        detectTopologyBtn.addEventListener('click', () => {
+            updateBoundsTab();
+        });
+    }
+    
+    if (computeBoundsBtn) {
+        computeBoundsBtn.addEventListener('click', () => {
+            computeAndDisplayBounds();
+        });
+    }
+    
+    if (compareBoundsBtn) {
+        compareBoundsBtn.addEventListener('click', () => {
+            compareWithNumericalEigenvalues();
+        });
+    }
+    
+    if (computeDirectsumBtn) {
+        computeDirectsumBtn.addEventListener('click', () => {
+            computeAndDisplayDirectSum();
+        });
+    }
+    
+    // UNIFIED SLIDER HANDLING - sync ANALYZE and BOUNDS tabs
+    const analyzeAlpha = document.getElementById('analyze-alpha');
+    const analyzeBeta = document.getElementById('analyze-beta');
+    const analyzeAlphaLabel = document.getElementById('analyze-alpha-label');
+    const analyzeBetaLabel = document.getElementById('analyze-beta-label');
+    
+    // Sync function to update all sliders and redraw
+    function syncAlpha(value) {
+        const alpha = parseInt(value) / 10;
+        // Update all labels
+        if (analyzeAlphaLabel) analyzeAlphaLabel.textContent = alpha.toFixed(1);
+        if (zrAlphaLabel) zrAlphaLabel.textContent = alpha.toFixed(1);
+        if (zrAlphaInput) zrAlphaInput.value = alpha;
+        // Sync slider positions
+        if (analyzeAlpha && analyzeAlpha.value !== value) analyzeAlpha.value = value;
+        if (zrAlphaSlider && zrAlphaSlider.value !== value) zrAlphaSlider.value = value;
+        // Redraw
+        updateComplexPlaneOnly();
+    }
+    
+    function syncBeta(value) {
+        const beta = parseInt(value) / 10;
+        // Update all labels
+        if (analyzeBetaLabel) analyzeBetaLabel.textContent = beta.toFixed(1);
+        if (zrBetaLabel) zrBetaLabel.textContent = beta.toFixed(1);
+        if (zrBetaInput) zrBetaInput.value = beta;
+        // Sync slider positions
+        if (analyzeBeta && analyzeBeta.value !== value) analyzeBeta.value = value;
+        if (zrBetaSlider && zrBetaSlider.value !== value) zrBetaSlider.value = value;
+        // Redraw
+        updateComplexPlaneOnly();
+    }
+    
+    // ANALYZE tab α slider
+    if (analyzeAlpha) {
+        analyzeAlpha.addEventListener('input', () => syncAlpha(analyzeAlpha.value));
+    }
+    
+    // ANALYZE tab β slider
+    if (analyzeBeta) {
+        analyzeBeta.addEventListener('input', () => syncBeta(analyzeBeta.value));
+    }
+    
+    // BOUNDS tab α slider
+    if (zrAlphaSlider) {
+        zrAlphaSlider.addEventListener('input', () => syncAlpha(zrAlphaSlider.value));
+    }
+    
+    // BOUNDS tab β slider
+    if (zrBetaSlider) {
+        zrBetaSlider.addEventListener('input', () => syncBeta(zrBetaSlider.value));
+    }
+    
+    // Also keep the hidden input change listeners for backward compatibility
+    if (zrAlphaInput) {
+        zrAlphaInput.addEventListener('change', () => {
+            invalidateTopologyCache();
+            if (currentSpectrum) computeAndDisplayBounds();
+        });
+    }
+    
+    if (zrBetaInput) {
+        zrBetaInput.addEventListener('change', () => {
+            invalidateTopologyCache();
+            if (currentSpectrum) computeAndDisplayBounds();
+        });
+    }
+    
+    // Initialize ANALYZE tab labels
+    if (analyzeAlphaLabel) analyzeAlphaLabel.textContent = '1.0';
+    if (analyzeBetaLabel) analyzeBetaLabel.textContent = '1.0';
+}
+
+// Module-level cache for topology (prevents re-detection on every slider move)
+let cachedTopology = null;
+let cachedBaseEigenvalues = null; // Cache the normalized eigenvalues (with α=1, β=1)
+
+function invalidateTopologyCache() {
+    cachedTopology = null;
+    cachedBaseEigenvalues = null;
+}
+
+// Ultra-fast update: redraw complex plane with new α/β values
+function updateComplexPlaneOnly() {
+    // Get current alpha and beta (prefer ANALYZE tab sliders)
+    const analyzeAlpha = document.getElementById('analyze-alpha');
+    const analyzeBeta = document.getElementById('analyze-beta');
+    
+    let alpha = 1.0, beta = 1.0;
+    if (analyzeAlpha) alpha = parseInt(analyzeAlpha.value) / 10;
+    else if (zrAlphaSlider) alpha = parseInt(zrAlphaSlider.value) / 10;
+    
+    if (analyzeBeta) beta = parseInt(analyzeBeta.value) / 10;
+    else if (zrBetaSlider) beta = parseInt(zrBetaSlider.value) / 10;
+    
+    // Update bounds display in BOUNDS tab
+    if (zrBoundsDisplay && cachedBaseEigenvalues && cachedBaseEigenvalues.length > 0) {
+        const maxImag = Math.max(...cachedBaseEigenvalues.map(e => Math.abs(e.im_normalized || e.imag || 0)));
+        const b1_over_beta = maxImag;
+        zrBoundsDisplay.innerHTML = `
+            <div class="bound-item">
+                <span class="bound-label">b₁/β:</span>
+                <span class="bound-value">${b1_over_beta.toFixed(4)}</span>
+            </div>
+            <div class="bound-item">
+                <span class="bound-label">Re(λ):</span>
+                <span class="bound-value">${(-alpha).toFixed(3)}</span>
+            </div>
+            <div class="bound-item">
+                <span class="bound-label">Im(λ):</span>
+                <span class="bound-value">[${(-b1_over_beta * beta).toFixed(3)}, ${(b1_over_beta * beta).toFixed(3)}]</span>
+            </div>
+        `;
+    }
+    
+    // Redraw complex plane (reads α/β from sliders internally)
+    drawComplexPlane();
+}
+
+function updateBoundsTab() {
+    // Invalidate cache when explicitly updating
+    invalidateTopologyCache();
+    const topology = detectPointGraphTopology();
+    cachedTopology = topology; // Cache for slider updates
+    
+    if (zrTopologyDisplay) {
+        zrTopologyDisplay.textContent = topology.description;
+        zrTopologyDisplay.className = topology.type !== 'empty' ? 'detected' : '';
+    }
+    
+    // Auto-compute if we have a valid graph
+    if (topology.N >= 2) {
+        computeAndDisplayBounds();
+    }
+}
+
+function computeAndDisplayBounds() {
+    const topology = detectPointGraphTopology();
+    
+    if (topology.N < 2) {
+        if (zrFormulaDisplay) {
+            zrFormulaDisplay.innerHTML = '<span class="hint">Need at least 2 vertices</span>';
+        }
+        return;
+    }
+    
+    // Get alpha and beta from sliders (or hidden inputs as fallback)
+    let alpha = 1.0, beta = 1.0;
+    if (zrAlphaSlider) {
+        alpha = parseInt(zrAlphaSlider.value) / 10;
+    } else if (zrAlphaInput) {
+        alpha = parseFloat(zrAlphaInput.value) || 1.0;
+    }
+    if (zrBetaSlider) {
+        beta = parseInt(zrBetaSlider.value) / 10;
+    } else if (zrBetaInput) {
+        beta = parseFloat(zrBetaInput.value) || 1.0;
+    }
+    
+    // For general/unknown topologies, use numerical computation
+    if (topology.type === 'general' || topology.type === 'tree') {
+        currentSpectrum = computeNumericalSpectrum(alpha, beta);
+        if (!currentSpectrum) {
+            if (zrFormulaDisplay) {
+                zrFormulaDisplay.innerHTML = '<span class="hint">Unable to compute eigenvalues</span>';
+            }
+            return;
+        }
+    } else {
+        // Use analytic formulas for known topologies
+        currentSpectrum = computeSpectrum(topology, alpha, beta);
+    }
+    
+    // Display formula
+    if (zrFormulaDisplay) {
+        const formula = formatFormula(topology, alpha, beta);
+        zrFormulaDisplay.innerHTML = `
+            <div class="formula-text">${formula}</div>
+            ${currentSpectrum.exactSpectrum ? 
+                '<span class="badge success">Exact spectrum</span>' : 
+                '<span class="badge warning">Numerical</span>'}
+        `;
+    }
+    
+    // Display bounds
+    if (zrBoundsDisplay) {
+        const bounds = formatBounds(currentSpectrum);
+        zrBoundsDisplay.innerHTML = `
+            <div class="bound-item">
+                <span class="bound-label">b₁/β:</span>
+                <span class="bound-value">${currentSpectrum.b1_over_beta.toFixed(4)}</span>
+            </div>
+            <div class="bound-item">
+                <span class="bound-label">Re(λ):</span>
+                <span class="bound-value">[${currentSpectrum.realBounds[0].toFixed(3)}, ${currentSpectrum.realBounds[1].toFixed(3)}]</span>
+            </div>
+            <div class="bound-item">
+                <span class="bound-label">Im(λ):</span>
+                <span class="bound-value">[${currentSpectrum.imagBounds[0].toFixed(3)}, ${currentSpectrum.imagBounds[1].toFixed(3)}]</span>
+            </div>
+        `;
+    }
+    
+    // Update eigenvalue count display
+    if (zrEigenvalueCount && currentSpectrum.eigenvalues) {
+        const count = currentSpectrum.eigenvalues.length;
+        zrEigenvalueCount.textContent = `Showing ${count} eigenvalue${count !== 1 ? 's' : ''} (α=${alpha.toFixed(1)}, β=${beta.toFixed(1)})`;
+    }
+    
+    // Display stability
+    if (zrStabilityDisplay) {
+        const stability = checkStability(topology, alpha, currentSpectrum);
+        let html = '';
+        
+        stability.conditions.forEach(cond => {
+            const icon = cond.satisfied ? '✓' : '✗';
+            const iconClass = cond.satisfied ? 'pass' : 'fail';
+            html += `
+                <div class="condition">
+                    <span class="condition-icon ${iconClass}">${icon}</span>
+                    <span>${cond.description}</span>
+                </div>
+            `;
+        });
+        
+        if (stability.isStable) {
+            html += `<div class="condition">
+                <span class="condition-icon pass">✓</span>
+                <span><b>Asymptotically Stable</b></span>
+            </div>`;
+        }
+        
+        zrStabilityDisplay.innerHTML = html;
+    }
+    
+    // Draw complex plane visualization
+    // Complex plane is now drawn in matrix-analysis-ui.js
+    // Call updateStats to trigger redraw
+    updateStats();
+}
+
+// Old drawComplexPlane removed - now using unified version from matrix-analysis-ui.js
+
+// =====================================================
+// EIGENVALUE PLOT WITH ALPHA/BETA SLIDERS (NEW IN V17)
+// =====================================================
+
+function toggleEigenvaluePlot() {
+    if (!eigenvalueCanvas) return;
+    const show = eigenvaluePlotCheckbox ? eigenvaluePlotCheckbox.checked : false;
+    eigenvalueCanvas.style.display = show ? 'block' : 'none';
+    const infoDisplay = document.getElementById('eigenvalue-info-display');
+    if (infoDisplay) infoDisplay.style.display = show ? 'block' : 'none';
+    if (show) {
+        updateEigenvaluePlot();
+    }
+}
+
+function updateEigenvaluePlot() {
+    if (!eigenvalueCanvas || !eigenvalueCtx) return;
+    if (!eigenvaluePlotCheckbox || !eigenvaluePlotCheckbox.checked) return;
+    
+    const topology = detectPointGraphTopology();
+    if (topology.N < 2) return;
+    
+    // Get alpha and beta from sliders
+    const alpha = phaseAlphaInput ? parseInt(phaseAlphaInput.value) / 10 : 1.0;
+    const beta = phaseBetaInput ? parseInt(phaseBetaInput.value) / 10 : 1.0;
+    
+    let spectrum;
+    
+    // For known topologies, use analytic formulas
+    // For general/unknown topologies, use numerical computation
+    if (topology.type === 'general' || topology.type === 'tree') {
+        // Compute numerical eigenvalues from actual adjacency matrix
+        spectrum = computeNumericalSpectrum(alpha, beta);
+    } else {
+        // Use analytic formulas for known topologies
+        spectrum = computeSpectrum(topology, alpha, beta);
+    }
+    
+    if (!spectrum || !spectrum.eigenvalues || spectrum.eigenvalues.length === 0) {
+        return;
+    }
+    
+    // Draw the eigenvalue plot
+    drawEigenvaluePlot(spectrum, alpha, beta);
+    
+    // Update info display
+    updateEigenvalueInfo(spectrum);
+}
+
+// Compute spectrum numerically from actual graph adjacency matrix
+function computeNumericalSpectrum(alpha, beta) {
+    // Get the skew-symmetric adjacency matrix from graph state
+    const matrix = state.adjacencyMatrix;
+    if (!matrix || matrix.length < 2) return null;
+    
+    const n = matrix.length;
+    
+    // Compute numerical eigenvalues of skew-symmetric matrix
+    const numericalEigs = computeSkewSymmetricEigenvalues(matrix);
+    
+    if (!numericalEigs || numericalEigs.length === 0) return null;
+    
+    // Convert to spectrum format with alpha/beta scaling
+    // numericalEigs have {real, imag} where real=0 for skew-symmetric
+    const eigenvalues = numericalEigs.map(e => ({
+        re: -alpha,           // Real part is -α (damping)
+        im: e.imag * beta,    // Imaginary part scaled by β
+        approx: false
+    }));
+    
+    // Find b1 (max |imag| before scaling)
+    const maxImag = Math.max(...numericalEigs.map(e => Math.abs(e.imag)));
+    const b1_over_beta = maxImag;
+    
+    return {
+        eigenvalues: eigenvalues.sort((a, b) => b.im - a.im),
+        b1_over_beta,
+        exactSpectrum: false,  // Numerical, not analytic
+        realBounds: [-alpha, -alpha],
+        imagBounds: [-b1_over_beta * beta, b1_over_beta * beta]
+    };
+}
+
+function drawEigenvaluePlot(spectrum, alpha, beta) {
+    const canvas = eigenvalueCanvas;
+    const ctx = eigenvalueCtx;
+    const W = canvas.width;
+    const H = canvas.height;
+    
+    // Clear canvas
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+    
+    // Use FIXED scale based on slider max values so eigenvalues visually move
+    // Max alpha is 5.0 (slider 0-50 / 10), max beta is 5.0
+    // b1_over_beta typically ranges from 1 to ~10 depending on graph
+    const maxBeta = 5.0;
+    const maxAlpha = 5.0;
+    const b1 = spectrum.b1_over_beta || 2;
+    
+    // Fixed scale: accommodate max possible spread
+    const fixedMaxImag = Math.max(b1 * maxBeta, 10) * 1.2;  // Max imaginary extent
+    const fixedMaxReal = Math.max(maxAlpha, 2) * 1.5;       // Max real extent
+    
+    // Scale factors (fixed, so eigenvalues move visually)
+    const scaleX = (W * 0.4) / fixedMaxReal;
+    const scaleY = (H * 0.42) / fixedMaxImag;
+    const cx = W * 0.55;  // Origin position (shifted right for stable region)
+    const cy = H / 2;
+    
+    // Draw stable region (left half-plane)
+    ctx.fillStyle = 'rgba(76, 175, 80, 0.15)';
+    ctx.fillRect(0, 0, cx, H);
+    
+    // Draw axes
+    ctx.strokeStyle = '#444466';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, cy);
+    ctx.lineTo(W, cy);
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, H);
+    ctx.stroke();
+    
+    // Draw stability boundary (Re = 0) - highlighted
+    ctx.strokeStyle = '#4CAF50';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, H);
+    ctx.stroke();
+    
+    // Draw alpha reference line (Re = -α) if α > 0
+    if (alpha > 0.01) {
+        const alphaX = cx - alpha * scaleX;
+        if (alphaX > 5) {
+            ctx.strokeStyle = '#9c27b0';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(alphaX, 0);
+            ctx.lineTo(alphaX, H);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // Label
+            ctx.fillStyle = '#9c27b0';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`-α = ${(-alpha).toFixed(1)}`, alphaX, 15);
+        }
+    }
+    
+    // Draw bounding rectangle showing current bounds
+    if (spectrum.realBounds && spectrum.imagBounds) {
+        const x1 = cx + spectrum.realBounds[0] * scaleX;
+        const x2 = cx + spectrum.realBounds[1] * scaleX;
+        const y1 = cy - spectrum.imagBounds[1] * scaleY;
+        const y2 = cy - spectrum.imagBounds[0] * scaleY;
+        
+        ctx.strokeStyle = '#ff9800';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.setLineDash([]);
+    }
+    
+    // Draw eigenvalues as points - batch for efficiency
+    const eigs = spectrum.eigenvalues || [];
+    
+    // Separate stable/unstable
+    const stablePoints = [];
+    const unstablePoints = [];
+    
+    for (let i = 0; i < eigs.length; i++) {
+        const eig = eigs[i];
+        const x = cx + eig.re * scaleX;
+        const y = cy - eig.im * scaleY;
+        
+        // Skip if outside canvas
+        if (x < -10 || x > W + 10 || y < -10 || y > H + 10) continue;
+        
+        if (eig.re < 0) {
+            stablePoints.push({x, y});
+        } else {
+            unstablePoints.push({x, y});
+        }
+    }
+    
+    // Draw stable eigenvalues (green)
+    if (stablePoints.length > 0) {
+        ctx.fillStyle = '#4CAF50';
+        ctx.beginPath();
+        for (let i = 0; i < stablePoints.length; i++) {
+            const p = stablePoints[i];
+            ctx.moveTo(p.x + 5, p.y);
+            ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+        }
+        ctx.fill();
+    }
+    
+    // Draw unstable/marginal eigenvalues (orange/red)
+    if (unstablePoints.length > 0) {
+        ctx.fillStyle = '#ff9800';
+        ctx.beginPath();
+        for (let i = 0; i < unstablePoints.length; i++) {
+            const p = unstablePoints[i];
+            ctx.moveTo(p.x + 5, p.y);
+            ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+        }
+        ctx.fill();
+    }
+    
+    // Labels
+    ctx.fillStyle = '#888';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('Im(λ)', W - 5, 15);
+    ctx.textAlign = 'left';
+    ctx.fillText('Re(λ)', W - 35, cy - 5);
+    
+    // Show current parameters
+    ctx.fillStyle = '#4a9eff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`α=${alpha.toFixed(1)}, β=${beta.toFixed(1)}`, 8, H - 8);
+    
+    // Show eigenvalue count
+    ctx.fillStyle = '#666';
+    ctx.fillText(`n=${eigs.length}`, 8, 15);
+}
+
+function updateEigenvalueInfo(spectrum) {
+    // Update numerical displays
+    if (evRealMax) {
+        const maxRe = Math.max(...spectrum.eigenvalues.map(e => e.re));
+        evRealMax.textContent = maxRe.toFixed(3);
+    }
+    
+    if (evImagMax) {
+        const maxIm = Math.max(...spectrum.eigenvalues.map(e => Math.abs(e.im)));
+        evImagMax.textContent = maxIm.toFixed(3);
+    }
+    
+    // Update stability indicator
+    if (stabilityIndicator) {
+        const maxRe = Math.max(...spectrum.eigenvalues.map(e => e.re));
+        
+        if (maxRe < -0.001) {
+            stabilityIndicator.className = 'stability-badge stable';
+            stabilityIndicator.textContent = 'Stable (Re < 0)';
+        } else if (maxRe < 0.001) {
+            stabilityIndicator.className = 'stability-badge marginally-stable';
+            stabilityIndicator.textContent = 'Marginally Stable';
+        } else {
+            stabilityIndicator.className = 'stability-badge unstable';
+            stabilityIndicator.textContent = 'Unstable (Re > 0)';
+        }
+    }
+}
+
+// =====================================================
+// MODE EXPLANATION FUNCTIONS (NEW IN V17)
+// =====================================================
+
+function updatePhaseModeExplanation() {
+    if (!phaseModeHint || !phaseModeSelect) return;
+    
+    const mode = phaseModeSelect.value;
+    const explanations = {
+        'displacement': 'Ellipse shape reveals phase relationship between nodes - circular = 90° phase difference, linear = in-phase',
+        'velocity': 'Shows position vs velocity of a node - reveals momentum and oscillation characteristics',
+        'node-power': 'Power = xᵢ·ẋᵢ shows instantaneous energy flow rate at node i',
+        'power-power': 'Compares energy flow patterns between two nodes - useful for energy transfer analysis',
+        'edge-power': 'Shows power flowing along the edge i→j, computed as xᵢẋⱼ - xⱼẋᵢ'
+    };
+    
+    phaseModeHint.textContent = explanations[mode] || 'Select a plot mode';
+}
+
+function updateAnimationModeExplanation() {
+    if (!animationModeHint || !animationModeSelect) return;
+    
+    const mode = animationModeSelect.value;
+    const explanations = {
+        'displacement': 'Color shows node state magnitude: cyan (+) / magenta (-). Arrows show product xᵢxⱼ between connected nodes.',
+        'power': 'Color shows node power xᵢ·ẋᵢ: yellow (gaining energy) / blue (losing energy). Arrow direction shows energy flow.'
+    };
+    
+    animationModeHint.textContent = explanations[mode] || 'Select an animation mode';
+}
+
+function compareWithNumericalEigenvalues() {
+    if (!currentSpectrum || !zrComparisonDisplay) return;
+    
+    const alpha = parseFloat(zrAlphaInput?.value || 1.0);
+    const beta = parseFloat(zrBetaInput?.value || 1.0);
+    
+    // Get numerical eigenvalues from the Analyze tab computation
+    // These are stored in the spectral-analysis module
+    const numericalEigs = getNumericalSkewEigenvalues();
+    
+    if (!numericalEigs || numericalEigs.length === 0) {
+        zrComparisonDisplay.innerHTML = '<span class="hint">No numerical eigenvalues available. Generate a graph first.</span>';
+        return;
+    }
+    
+    const comparison = compareWithNumerical(currentSpectrum, numericalEigs, alpha, beta);
+    
+    if (!comparison.valid) {
+        zrComparisonDisplay.innerHTML = `<span class="hint">${comparison.message}</span>`;
+        return;
+    }
+    
+    const tightnessPercent = parseFloat(comparison.tightness.upper) || 0;
+    
+    zrComparisonDisplay.innerHTML = `
+        <div class="bound-item">
+            <span class="bound-label">Predicted max |Im(λ)|:</span>
+            <span class="bound-value">${comparison.predicted.maxImag.toFixed(4)}</span>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">Actual max |Im(λ)|:</span>
+            <span class="bound-value">${comparison.actual.maxImag.toFixed(4)}</span>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">Bound tightness:</span>
+            <span class="bound-value ${comparison.boundsHold ? 'stable' : 'unstable'}">${comparison.tightness.upper}</span>
+        </div>
+        <div class="tightness-bar">
+            <div class="tightness-fill" style="width: ${Math.min(tightnessPercent, 100)}%"></div>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">Bounds hold:</span>
+            <span class="bound-value ${comparison.boundsHold ? 'stable' : 'unstable'}">${comparison.boundsHold ? '✓ Yes' : '✗ No'}</span>
+        </div>
+    `;
+}
+
+function getNumericalSkewEigenvalues() {
+    // Extract numerical eigenvalues from state
+    // These come from the matrix computation in spectral-analysis
+    const n = state.vertexMeshes.length;
+    if (n === 0) return [];
+    
+    // Compute eigenvalues of skew-symmetric matrix using Jacobi-like method
+    const A = state.adjacencyMatrix;
+    const eigenvalues = [];
+    
+    // For skew-symmetric matrices, eigenvalues are purely imaginary
+    // Use singular values of A (which equal |imaginary parts|)
+    // Simple approach: compute AtA eigenvalues, take sqrt
+    const AtA = [];
+    for (let i = 0; i < n; i++) {
+        AtA[i] = [];
+        for (let j = 0; j < n; j++) {
+            let sum = 0;
+            for (let k = 0; k < n; k++) {
+                sum += A[k][i] * A[k][j];
+            }
+            AtA[i][j] = sum;
+        }
+    }
+    
+    // Simple power iteration to get largest eigenvalue
+    let v = Array(n).fill(1);
+    for (let iter = 0; iter < 50; iter++) {
+        let newV = Array(n).fill(0);
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                newV[i] += AtA[i][j] * v[j];
+            }
+        }
+        const norm = Math.sqrt(newV.reduce((s, x) => s + x * x, 0));
+        if (norm > 1e-10) {
+            v = newV.map(x => x / norm);
+        }
+    }
+    
+    let lambda = 0;
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            lambda += v[i] * AtA[i][j] * v[j];
+        }
+    }
+    
+    const maxImag = Math.sqrt(Math.max(0, lambda));
+    eigenvalues.push({ imag: maxImag });
+    eigenvalues.push({ imag: -maxImag });
+    
+    return eigenvalues;
+}
+
+function computeAndDisplayDirectSum() {
+    if (!directsumG1Select || !directsumG2Select || !directsumResult) return;
+    
+    const alpha = parseFloat(zrAlphaInput?.value || 1.0);
+    const beta = parseFloat(zrBetaInput?.value || 1.0);
+    
+    // Get G1 spectrum
+    let spectrum1;
+    if (directsumG1Select.value === 'current') {
+        const topology = detectPointGraphTopology();
+        spectrum1 = computeSpectrum(topology, alpha, beta);
+    } else {
+        const g1Type = directsumG1Select.value.replace(/\d+/, '');
+        const g1N = parseInt(directsumG1Select.value.match(/\d+/)?.[0] || 4);
+        spectrum1 = computeSpectrum({ type: g1Type, N: g1N }, alpha, beta);
+    }
+    
+    // Get G2 spectrum
+    const g2Type = directsumG2Select.value.replace(/\d+/, '');
+    const g2N = parseInt(directsumG2Select.value.match(/\d+/)?.[0] || 4);
+    const spectrum2 = computeSpectrum({ type: g2Type, N: g2N }, alpha, beta);
+    
+    // Compute direct sum
+    const sumSpectrum = computeDirectSum(spectrum1, spectrum2);
+    
+    directsumResult.innerHTML = `
+        <div class="bound-item">
+            <span class="bound-label">G₁ b₁/β:</span>
+            <span class="bound-value">${spectrum1.b1_over_beta.toFixed(4)}</span>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">G₂ b₁/β:</span>
+            <span class="bound-value">${spectrum2.b1_over_beta.toFixed(4)}</span>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">G₁⊕G₂ b₁/β:</span>
+            <span class="bound-value">${sumSpectrum.b1_over_beta.toFixed(4)}</span>
+        </div>
+        <div class="bound-item">
+            <span class="bound-label">Combined Im(λ):</span>
+            <span class="bound-value">[${sumSpectrum.imagBounds[0].toFixed(3)}, ${sumSpectrum.imagBounds[1].toFixed(3)}]</span>
+        </div>
+    `;
+}
+
+// =====================================================
+// GRAPH GENERATION
+// =====================================================
+
+function generateGraph() {
+    clearGraph();
+    
+    const n = parseInt(numVerticesInput.value);
+    const radius = parseInt(radiusInput.value);
+    const layout = layoutTypeSelect.value;
+    
+    // Initialize adjacency matrices
+    state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    // Get positions based on layout type
+    let positions;
+    switch (layout) {
+        case 'sphere':
+            positions = getSpherePositions(n, radius);
+            break;
+        case 'concentric-2':
+            positions = getConcentricCirclePositions2(n, radius, parseInt(innerRatioInput.value), splitModeSelect.value, customSplitInput.value);
+            break;
+        case 'concentric-3':
+            positions = getConcentricCirclePositions3(n, radius, parseInt(innerRatioInput.value), parseInt(middleRatioInput.value), splitModeSelect.value, customSplitInput.value);
+            break;
+        case 'concentric-spheres-2':
+            positions = getConcentricSpherePositions2(n, radius, parseInt(innerRatioInput.value), splitModeSelect.value, customSplitInput.value);
+            break;
+        default:
+            positions = getCirclePositions(n, radius);
+    }
+    
+    // Create vertices
+    for (let i = 0; i < n; i++) {
+        createVertex(positions[i], i);
+    }
+    
+    // Update phase diagram selectors
+    updatePhaseNodeSelectors();
+    
+    // Reset dynamics caches
+    invalidateCaches();
+    
+    // Update statistics and analyze tab
+    updateStats();
+    updateAnalyzeTabIfVisible();
+}
+
+// Helper to update analyze tab if it's currently visible
+function updateAnalyzeTabIfVisible() {
+    const analyzeTab = document.getElementById('sidebar-analyze');
+    if (analyzeTab && analyzeTab.classList.contains('active')) {
+        showAnalysis();
+    }
+}
+
+// Show/hide template parameter controls based on selection
+function updateTemplateParams() {
+    const template = templateSelect.value;
+    
+    // Hide all param sections first
+    if (templateParams) templateParams.style.display = 'none';
+    if (paramDepth) paramDepth.style.display = 'none';
+    if (paramBranches) paramBranches.style.display = 'none';
+    if (paramKary) paramKary.style.display = 'none';
+    if (paramGrid) paramGrid.style.display = 'none';
+    if (paramCuboid) paramCuboid.style.display = 'none';
+    if (paramHypercube) paramHypercube.style.display = 'none';
+    
+    // Show relevant params based on template
+    let showParams = false;
+    
+    switch (template) {
+        case 'binary-tree':
+            if (paramDepth) paramDepth.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'star-path':
+        case 'double-star':
+            if (paramBranches) paramBranches.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'general-star-tree':
+            if (paramDepth) paramDepth.style.display = 'flex';
+            if (paramBranches) paramBranches.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'k-ary-tree':
+            if (paramDepth) paramDepth.style.display = 'flex';
+            if (paramKary) paramKary.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'grid':
+        case 'general-ladder':
+        case 'torus':
+        case 'five-bar':
+            if (paramGrid) paramGrid.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'cuboid':
+            if (paramCuboid) paramCuboid.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'hypercube':
+            if (paramHypercube) paramHypercube.style.display = 'flex';
+            showParams = true;
+            break;
+    }
+    
+    if (templateParams) templateParams.style.display = showParams ? 'block' : 'none';
+}
+
+function applyTemplate(template) {
+    if (template === 'custom') return;
+    
+    let n = parseInt(numVerticesInput.value);
+    const bidir = !skewSymmetricCheckbox.checked; // bidirectional if NOT skew-symmetric
+    
+    // Helper to add edges (bidirectional or unidirectional based on mode)
+    const addBi = (i, j) => {
+        addEdge(i, j);
+        if (bidir) addEdge(j, i);
+    };
+    
+    // Helper for complete graphs in bidirectional mode (adds all pairs)
+    const addComplete = (vertices) => {
+        if (bidir) {
+            for (const i of vertices) {
+                for (const j of vertices) {
+                    if (i !== j) addEdge(i, j);
+                }
+            }
+        } else {
+            for (let idx1 = 0; idx1 < vertices.length; idx1++) {
+                for (let idx2 = idx1 + 1; idx2 < vertices.length; idx2++) {
+                    addEdge(vertices[idx1], vertices[idx2]);
+                }
+            }
+        }
+    };
+    
+    switch (template) {
+        case 'cycle':
+            generateGraph();
+            for (let i = 0; i < n; i++) {
+                addBi(i, (i + 1) % n);
+            }
+            break;
+            
+        case 'complete':
+            generateGraph();
+            if (bidir) {
+                for (let i = 0; i < n; i++) {
+                    for (let j = 0; j < n; j++) {
+                        if (i !== j) addEdge(i, j);
+                    }
+                }
+            } else {
+                // Tournament: each pair has exactly one directed edge
+                for (let i = 0; i < n; i++) {
+                    for (let j = i + 1; j < n; j++) {
+                        addEdge(i, j);
+                    }
+                }
+            }
+            break;
+            
+        case 'path':
+            generateGraph();
+            for (let i = 0; i < n - 1; i++) {
+                addBi(i, i + 1);
+            }
+            break;
+            
+        case 'star':
+            generateGraph();
+            for (let i = 1; i < n; i++) {
+                addBi(0, i);
+            }
+            break;
+            
+        case 'wheel':
+            generateGraph();
+            // Center is vertex 0, rim is 1 to n-1
+            for (let i = 1; i < n; i++) {
+                addBi(0, i); // Spokes
+                const next = i === n - 1 ? 1 : i + 1;
+                addBi(i, next); // Rim
+            }
+            break;
+            
+        case 'bipartite':
+            generateGraph();
+            // K_{⌊n/2⌋, ⌈n/2⌉}
+            {
+                const half = Math.floor(n / 2);
+                for (let i = 0; i < half; i++) {
+                    for (let j = half; j < n; j++) {
+                        addBi(i, j);
+                    }
+                }
+            }
+            break;
+            
+        case 'crown':
+            // Crown graph: complete bipartite minus perfect matching
+            if (n < 6 || n % 2 !== 0) {
+                alert('Crown graph requires even n >= 6');
+                return;
+            }
+            generateGraph();
+            {
+                const k = n / 2;
+                for (let i = 0; i < k; i++) {
+                    for (let j = k; j < n; j++) {
+                        if (j - k !== i) { // Skip the matching edge
+                            addBi(i, j);
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'ladder':
+            // Ladder: two paths connected by rungs
+            if (n < 4 || n % 2 !== 0) {
+                alert('Ladder requires even n >= 4');
+                return;
+            }
+            generateGraph();
+            {
+                const rungs = n / 2;
+                for (let i = 0; i < rungs - 1; i++) {
+                    addBi(i, i + 1); // Top rail
+                    addBi(i + rungs, i + rungs + 1); // Bottom rail
+                }
+                for (let i = 0; i < rungs; i++) {
+                    addBi(i, i + rungs); // Rungs
+                }
+            }
+            break;
+            
+        case 'prism':
+            // Prism: two cycles connected by matching
+            if (n < 6 || n % 2 !== 0) {
+                alert('Prism requires even n >= 6');
+                return;
+            }
+            {
+                const sides = n / 2;
+                
+                // Set up 2-ring layout
+                layoutTypeSelect.value = 'concentric-2';
+                concentricOptions.style.display = 'block';
+                if (middleRatioContainer) middleRatioContainer.style.display = 'none';
+                innerRatioInput.value = 55;
+                innerRatioLabel.textContent = '55%';
+                splitModeSelect.value = 'custom';
+                if (customSplitContainer) customSplitContainer.style.display = 'block';
+                customSplitInput.value = `${sides},${sides}`;
+                
+                generateGraph();
+                
+                for (let i = 0; i < sides; i++) {
+                    addBi(i, (i + 1) % sides); // Outer cycle
+                    addBi(i + sides, ((i + 1) % sides) + sides); // Inner cycle
+                    addBi(i, i + sides); // Spokes
+                }
+            }
+            break;
+            
+        case 'cocktail':
+            // Cocktail party: complete graph minus perfect matching
+            if (n < 4 || n % 2 !== 0) {
+                alert('Cocktail party requires even n >= 4');
+                return;
+            }
+            generateGraph();
+            if (bidir) {
+                for (let i = 0; i < n; i++) {
+                    for (let j = 0; j < n; j++) {
+                        const pair1 = Math.floor(i / 2);
+                        const pair2 = Math.floor(j / 2);
+                        if (i !== j && pair1 !== pair2) {
+                            addEdge(i, j);
+                        }
+                    }
+                }
+            } else {
+                for (let i = 0; i < n; i++) {
+                    for (let j = i + 1; j < n; j++) {
+                        const pair1 = Math.floor(i / 2);
+                        const pair2 = Math.floor(j / 2);
+                        if (pair1 !== pair2) {
+                            addEdge(i, j);
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'circulant':
+            // Circulant C(n, {1, 2})
+            generateGraph();
+            for (let i = 0; i < n; i++) {
+                addBi(i, (i + 1) % n);
+                addBi(i, (i + 2) % n);
+            }
+            break;
+            
+        case 'petersen':
+            if (n !== 10) {
+                alert('Petersen graph requires exactly 10 vertices. Adjusting...');
+                numVerticesInput.value = 10;
+                n = 10;
+            }
+            // Set up 2-ring layout: 5 outer, 5 inner
+            layoutTypeSelect.value = 'concentric-2';
+            concentricOptions.style.display = 'block';
+            if (middleRatioContainer) middleRatioContainer.style.display = 'none';
+            innerRatioInput.value = 45;
+            innerRatioLabel.textContent = '45%';
+            splitModeSelect.value = 'custom';
+            if (customSplitContainer) customSplitContainer.style.display = 'block';
+            customSplitInput.value = '5,5';
+            
+            generateGraph();
+            
+            // Outer pentagon: 0-1-2-3-4-0
+            for (let i = 0; i < 5; i++) {
+                addBi(i, (i + 1) % 5);
+            }
+            // Inner pentagram: 5-7-9-6-8-5 (skip-2 pattern)
+            const inner = [5, 7, 9, 6, 8];
+            for (let i = 0; i < 5; i++) {
+                addBi(inner[i], inner[(i + 1) % 5]);
+            }
+            // Spokes: 0-5, 1-6, 2-7, 3-8, 4-9
+            for (let i = 0; i < 5; i++) {
+                addBi(i, i + 5);
+            }
+            break;
+            
+        case 'hypercube3':
+            if (n !== 8) {
+                alert('Q₃ requires 8 vertices. Adjusting...');
+                numVerticesInput.value = 8;
+                n = 8;
+            }
+            generateGraph();
+            // Q3: vertices are binary 000 to 111, edges differ by 1 bit
+            for (let i = 0; i < 8; i++) {
+                for (let b = 0; b < 3; b++) {
+                    const j = i ^ (1 << b);
+                    if (i < j) {
+                        addBi(i, j);
+                    }
+                }
+            }
+            break;
+            
+        case 'hypercube4':
+            if (n !== 16) {
+                alert('Q₄ requires 16 vertices. Adjusting...');
+                numVerticesInput.value = 16;
+                n = 16;
+            }
+            generateGraph();
+            for (let i = 0; i < 16; i++) {
+                for (let b = 0; b < 4; b++) {
+                    const j = i ^ (1 << b);
+                    if (i < j) {
+                        addBi(i, j);
+                    }
+                }
+            }
+            break;
+            
+        case 'octahedron':
+            if (n !== 6) {
+                alert('Octahedron requires 6 vertices. Adjusting...');
+                numVerticesInput.value = 6;
+                n = 6;
+            }
+            generateGraph();
+            // K_{2,2,2}: complete tripartite with parts {0,1}, {2,3}, {4,5}
+            {
+                const octParts = [[0, 1], [2, 3], [4, 5]];
+                for (let p1 = 0; p1 < 3; p1++) {
+                    for (let p2 = p1 + 1; p2 < 3; p2++) {
+                        for (const v1 of octParts[p1]) {
+                            for (const v2 of octParts[p2]) {
+                                addBi(v1, v2);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'icosahedron':
+            if (n !== 12) {
+                alert('Icosahedron requires 12 vertices. Adjusting...');
+                numVerticesInput.value = 12;
+                n = 12;
+            }
+            generateGraph();
+            // Icosahedron edges (5-regular)
+            {
+                const icoEdges = [
+                    [0,1],[0,2],[0,3],[0,4],[0,5],
+                    [1,2],[2,3],[3,4],[4,5],[5,1],
+                    [1,6],[2,6],[2,7],[3,7],[3,8],[4,8],[4,9],[5,9],[5,10],[1,10],
+                    [6,7],[7,8],[8,9],[9,10],[10,6],
+                    [6,11],[7,11],[8,11],[9,11],[10,11]
+                ];
+                for (const [a, b] of icoEdges) {
+                    addBi(a, b);
+                }
+            }
+            break;
+            
+        case 'dodecahedron':
+            if (n !== 20) {
+                alert('Dodecahedron requires 20 vertices. Adjusting...');
+                numVerticesInput.value = 20;
+                n = 20;
+            }
+            // Set up 3-ring layout: 5 outer, 10 middle, 5 inner
+            layoutTypeSelect.value = 'concentric-3';
+            concentricOptions.style.display = 'block';
+            if (middleRatioContainer) middleRatioContainer.style.display = 'block';
+            innerRatioInput.value = 35;
+            innerRatioLabel.textContent = '35%';
+            middleRatioInput.value = 70;
+            middleRatioLabel.textContent = '70%';
+            splitModeSelect.value = 'custom';
+            if (customSplitContainer) customSplitContainer.style.display = 'block';
+            customSplitInput.value = '5,10,5';
+            
+            generateGraph();
+            
+            // Dodecahedron edges (3-regular)
+            {
+                const dodEdges = [
+                    // Outer pentagon
+                    [0,1],[1,2],[2,3],[3,4],[4,0],
+                    // Outer to middle connections
+                    [0,5],[0,9],
+                    [1,5],[1,6],
+                    [2,6],[2,7],
+                    [3,7],[3,8],
+                    [4,8],[4,9],
+                    // Middle ring connections (zig-zag)
+                    [5,10],[6,11],[7,12],[8,13],[9,14],
+                    [10,11],[11,12],[12,13],[13,14],[14,10],
+                    // Middle to inner connections
+                    [10,15],[11,16],[12,17],[13,18],[14,19],
+                    // Inner pentagon
+                    [15,16],[16,17],[17,18],[18,19],[19,15]
+                ];
+                for (const [a, b] of dodEdges) {
+                    addBi(a, b);
+                }
+            }
+            break;
+            
+        case 'mobiuskantor':
+            if (n !== 16) {
+                alert('Möbius-Kantor requires 16 vertices. Adjusting...');
+                numVerticesInput.value = 16;
+                n = 16;
+            }
+            // Set up 2-ring layout: 8 outer, 8 inner
+            layoutTypeSelect.value = 'concentric-2';
+            concentricOptions.style.display = 'block';
+            if (middleRatioContainer) middleRatioContainer.style.display = 'none';
+            innerRatioInput.value = 50;
+            innerRatioLabel.textContent = '50%';
+            splitModeSelect.value = 'custom';
+            if (customSplitContainer) customSplitContainer.style.display = 'block';
+            customSplitInput.value = '8,8';
+            
+            generateGraph();
+            
+            // Möbius-Kantor: generalized Petersen graph GP(8,3)
+            for (let i = 0; i < 8; i++) {
+                addBi(i, (i + 1) % 8); // Outer octagon
+                addBi(i + 8, ((i + 3) % 8) + 8); // Inner star (skip-3)
+                addBi(i, i + 8); // Spokes
+            }
+            break;
+            
+        case 'friendship':
+            // Friendship graph F_k: k triangles sharing a common vertex
+            if (n < 3 || (n - 1) % 2 !== 0) {
+                alert('Friendship graph requires n = 2k+1 vertices (odd n >= 3)');
+                return;
+            }
+            generateGraph();
+            {
+                const fk = (n - 1) / 2;
+                for (let t = 0; t < fk; t++) {
+                    const v1 = 1 + 2 * t;
+                    const v2 = 2 + 2 * t;
+                    addBi(0, v1);
+                    addBi(0, v2);
+                    addBi(v1, v2);
+                }
+            }
+            break;
+            
+        case 'multipartite':
+            // Complete multipartite with roughly equal parts
+            generateGraph();
+            {
+                const numParts = Math.min(3, Math.floor(n / 2));
+                const partSize = Math.floor(n / numParts);
+                const parts = [];
+                let idx = 0;
+                for (let p = 0; p < numParts; p++) {
+                    const size = p < n % numParts ? partSize + 1 : partSize;
+                    const part = [];
+                    for (let i = 0; i < size; i++) {
+                        part.push(idx++);
+                    }
+                    parts.push(part);
+                }
+                for (let p1 = 0; p1 < parts.length; p1++) {
+                    for (let p2 = p1 + 1; p2 < parts.length; p2++) {
+                        for (const v1 of parts[p1]) {
+                            for (const v2 of parts[p2]) {
+                                addBi(v1, v2);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'paley':
+            // Paley graph (Conference graph): requires n to be prime power ≡ 1 (mod 4)
+            {
+                const validPaley = [5, 9, 13, 17, 25, 29, 37, 41, 49, 53, 61, 73, 81, 89, 97];
+                if (!validPaley.includes(n)) {
+                    const nearest = validPaley.reduce((prev, curr) =>
+                        Math.abs(curr - n) < Math.abs(prev - n) ? curr : prev);
+                    alert(`Paley graph requires n ≡ 1 (mod 4) and prime power.\nValid sizes: 5, 9, 13, 17, 25, 29, 37, 41, 49, 53, 61, 73, 81, 89, 97\nUsing n=${nearest}`);
+                    numVerticesInput.value = nearest;
+                    n = nearest;
+                }
+                
+                generateGraph();
+                
+                // Find quadratic residues mod n
+                const quadraticResidues = new Set();
+                for (let x = 1; x < n; x++) {
+                    quadraticResidues.add((x * x) % n);
+                }
+                
+                // Connect i to j if (j - i) is a quadratic residue mod n
+                for (let i = 0; i < n; i++) {
+                    for (let j = i + 1; j < n; j++) {
+                        const diff = (j - i + n) % n;
+                        if (quadraticResidues.has(diff)) {
+                            addBi(i, j);
+                        }
+                    }
+                }
+            }
+            break;
+            
+        // ==================== NEW GRAPH TYPES FROM PAPER ====================
+        
+        case 'binary-tree':
+            // Binary tree with configurable depth
+            {
+                const depth = treeDepthInput ? parseInt(treeDepthInput.value) || 3 : 3;
+                const totalNodes = Math.pow(2, depth + 1) - 1;
+                numVerticesInput.value = totalNodes;
+                n = totalNodes;
+                
+                generateGraph();
+                
+                for (let i = 0; i < Math.floor((n - 1) / 2); i++) {
+                    const left = 2 * i + 1;
+                    const right = 2 * i + 2;
+                    if (left < n) addBi(i, left);
+                    if (right < n) addBi(i, right);
+                }
+            }
+            break;
+            
+        case 'k-ary-tree':
+            // k-ary tree with configurable depth and branching factor
+            {
+                const depth = treeDepthInput ? parseInt(treeDepthInput.value) || 3 : 3;
+                const k = treeKInput ? parseInt(treeKInput.value) || 3 : 3;
+                
+                // Calculate total nodes: sum of k^i for i=0 to depth
+                let totalNodes = 0;
+                for (let i = 0; i <= depth; i++) {
+                    totalNodes += Math.pow(k, i);
+                }
+                
+                numVerticesInput.value = totalNodes;
+                n = totalNodes;
+                
+                generateGraph();
+                
+                // Connect each internal node to k children
+                let nodeIdx = 0;
+                let childIdx = 1;
+                while (childIdx < n) {
+                    for (let c = 0; c < k && childIdx < n; c++) {
+                        addBi(nodeIdx, childIdx);
+                        childIdx++;
+                    }
+                    nodeIdx++;
+                }
+            }
+            break;
+            
+        case 'star-path':
+            // S'_p tree: Central vertex with p paths of length 2 each
+            // N = 2p + 1
+            {
+                const p = treeBranchesInput ? parseInt(treeBranchesInput.value) || 3 : 3;
+                n = 2 * p + 1;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Vertex 0 is center, vertices 1..p are intermediate, p+1..2p are leaves
+                for (let i = 0; i < p; i++) {
+                    addBi(0, i + 1);  // center to intermediate
+                    addBi(i + 1, p + 1 + i);  // intermediate to leaf
+                }
+            }
+            break;
+            
+        case 'double-star':
+            // S²_p tree: Central vertex with p paths of length 3 each
+            // N = 3p + 1
+            {
+                const p = treeBranchesInput ? parseInt(treeBranchesInput.value) || 3 : 3;
+                n = 3 * p + 1;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Vertex 0 is center
+                // Vertices 1..p are first level
+                // Vertices p+1..2p are second level  
+                // Vertices 2p+1..3p are leaves
+                for (let i = 0; i < p; i++) {
+                    addBi(0, i + 1);  // center to level 1
+                    addBi(i + 1, p + 1 + i);  // level 1 to level 2
+                    addBi(p + 1 + i, 2 * p + 1 + i);  // level 2 to leaf
+                }
+            }
+            break;
+            
+        case 'general-star-tree':
+            // Sᵈ_p tree: Central vertex with p branches, each of depth d
+            // N = d*p + 1
+            // Structure: center -> level 1 (p vertices) -> level 2 (p vertices) -> ... -> level d (p leaves)
+            {
+                const d = treeDepthInput ? parseInt(treeDepthInput.value) || 2 : 2;  // depth (number of edges per branch)
+                const p = treeBranchesInput ? parseInt(treeBranchesInput.value) || 4 : 4;  // number of branches
+                n = d * p + 1;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Vertex 0 is center
+                // Each branch has d vertices after center
+                // Level k has p vertices: indices (k-1)*p + 1 to k*p
+                for (let branch = 0; branch < p; branch++) {
+                    // Connect center to first level
+                    addBi(0, branch + 1);
+                    
+                    // Connect each level to next level
+                    for (let level = 1; level < d; level++) {
+                        const currentIdx = (level - 1) * p + branch + 1;
+                        const nextIdx = level * p + branch + 1;
+                        addBi(currentIdx, nextIdx);
+                    }
+                }
+            }
+            break;
+            
+        case 'caterpillar':
+            // Caterpillar: path with additional leaves at each internal vertex
+            if (n < 4) {
+                alert('Caterpillar requires n >= 4');
+                return;
+            }
+            generateGraph();
+            {
+                // Spine length is about n/2
+                const spineLen = Math.max(2, Math.floor(n / 2));
+                // Build spine (path)
+                for (let i = 0; i < spineLen - 1; i++) {
+                    addBi(i, i + 1);
+                }
+                // Add leaves to internal spine vertices
+                let leafIdx = spineLen;
+                for (let i = 1; i < spineLen - 1 && leafIdx < n; i++) {
+                    addBi(i, leafIdx++);
+                    if (leafIdx < n) addBi(i, leafIdx++);
+                }
+                // Add remaining leaves to endpoints if needed
+                while (leafIdx < n) {
+                    addBi(0, leafIdx++);
+                    if (leafIdx < n) addBi(spineLen - 1, leafIdx++);
+                }
+            }
+            break;
+            
+        case 'spider':
+            // Spider: central vertex with k legs of various lengths
+            generateGraph();
+            {
+                let legIdx = 1;
+                let numLegs = Math.min(4, Math.floor(Math.sqrt(n)));
+                let legLengths = [];
+                
+                // Distribute vertices among legs
+                const remaining = n - 1;
+                for (let i = 0; i < numLegs; i++) {
+                    legLengths.push(Math.floor(remaining / numLegs));
+                }
+                for (let i = 0; i < remaining % numLegs; i++) {
+                    legLengths[i]++;
+                }
+                
+                // Build legs
+                for (let leg = 0; leg < numLegs; leg++) {
+                    if (legLengths[leg] > 0) {
+                        addBi(0, legIdx);  // Connect to center
+                        for (let j = 0; j < legLengths[leg] - 1; j++) {
+                            addBi(legIdx, legIdx + 1);
+                            legIdx++;
+                        }
+                        legIdx++;
+                    }
+                }
+            }
+            break;
+            
+        case 'broom':
+            // Broom: star with one extended path (handle)
+            if (n < 3) {
+                alert('Broom requires n >= 3');
+                return;
+            }
+            generateGraph();
+            {
+                const handleLen = Math.max(1, Math.floor(n / 3));  // 1/3 of vertices for handle
+                // Build handle (path from 0)
+                for (let i = 0; i < handleLen - 1; i++) {
+                    addBi(i, i + 1);
+                }
+                // Bristles: connect remaining vertices to last handle vertex
+                for (let i = handleLen; i < n; i++) {
+                    addBi(handleLen - 1, i);
+                }
+            }
+            break;
+            
+        case 'grid':
+            // Grid graph m × k with configurable dimensions
+            {
+                const m = gridRowsInput ? parseInt(gridRowsInput.value) || 3 : 3;
+                const k = gridColsInput ? parseInt(gridColsInput.value) || 4 : 4;
+                n = m * k;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Connect grid edges
+                for (let row = 0; row < m; row++) {
+                    for (let col = 0; col < k; col++) {
+                        const idx = row * k + col;
+                        // Right neighbor
+                        if (col < k - 1) addBi(idx, idx + 1);
+                        // Down neighbor
+                        if (row < m - 1) addBi(idx, idx + k);
+                    }
+                }
+            }
+            break;
+            
+        case 'cuboid':
+            // 3D Cuboid graph m × n × k (Cartesian product P_m × P_n × P_k)
+            {
+                const m = cuboidMInput ? parseInt(cuboidMInput.value) || 2 : 2;
+                const nDim = cuboidNInput ? parseInt(cuboidNInput.value) || 3 : 3;
+                const k = cuboidKInput ? parseInt(cuboidKInput.value) || 2 : 2;
+                n = m * nDim * k;
+                numVerticesInput.value = n;
+                
+                // Clear existing graph
+                clearGraph();
+                
+                // Initialize adjacency matrices
+                state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                
+                // Calculate spacing based on graph size
+                const radius = parseInt(radiusInput.value);
+                const maxDim = Math.max(m, nDim, k);
+                const spacing = (radius * 1.8) / Math.max(maxDim - 1, 1);
+                
+                // Center offset to center the cuboid
+                const offsetX = (m - 1) * spacing / 2;
+                const offsetY = (nDim - 1) * spacing / 2;
+                const offsetZ = (k - 1) * spacing / 2;
+                
+                // Index function: (x, y, z) -> linear index
+                const idx = (x, y, z) => x + y * m + z * m * nDim;
+                
+                // Create vertices in 3D grid positions
+                for (let z = 0; z < k; z++) {
+                    for (let y = 0; y < nDim; y++) {
+                        for (let x = 0; x < m; x++) {
+                            const pos = new THREE.Vector3(
+                                x * spacing - offsetX,
+                                y * spacing - offsetY,
+                                z * spacing - offsetZ
+                            );
+                            createVertex(pos, idx(x, y, z));
+                        }
+                    }
+                }
+                
+                // Connect along all three axes
+                for (let z = 0; z < k; z++) {
+                    for (let y = 0; y < nDim; y++) {
+                        for (let x = 0; x < m; x++) {
+                            const current = idx(x, y, z);
+                            // X-axis neighbor
+                            if (x < m - 1) addBi(current, idx(x + 1, y, z));
+                            // Y-axis neighbor
+                            if (y < nDim - 1) addBi(current, idx(x, y + 1, z));
+                            // Z-axis neighbor
+                            if (z < k - 1) addBi(current, idx(x, y, z + 1));
+                        }
+                    }
+                }
+                
+                // Update phase diagram selectors and stats
+                updatePhaseNodeSelectors();
+                invalidateCaches();
+                updateStats();
+            }
+            break;
+            
+        case 'torus':
+            // Torus: grid with wraparound (both directions)
+            {
+                const m = gridRowsInput ? parseInt(gridRowsInput.value) || 4 : 4;
+                const k = gridColsInput ? parseInt(gridColsInput.value) || 4 : 4;
+                n = m * k;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Connect grid edges with wraparound
+                for (let row = 0; row < m; row++) {
+                    for (let col = 0; col < k; col++) {
+                        const idx = row * k + col;
+                        // Right neighbor (with wraparound)
+                        const rightIdx = row * k + ((col + 1) % k);
+                        addBi(idx, rightIdx);
+                        // Down neighbor (with wraparound)
+                        const downIdx = ((row + 1) % m) * k + col;
+                        addBi(idx, downIdx);
+                    }
+                }
+            }
+            break;
+            
+        case 'general-ladder':
+            // General Ladder/Truss from paper (Fig. in Table I)
+            // Parallelogram-shaped truss with m rows and n columns
+            // Eigenvalues: i(2cos(kπ/(n+1)) ± √(m+1)), i2cos(kπ/(n+1)) repeated (m+2) times
+            {
+                const m = gridRowsInput ? parseInt(gridRowsInput.value) || 2 : 2;  // rows (height)
+                const cols = gridColsInput ? parseInt(gridColsInput.value) || 4 : 4;  // columns (width)
+                
+                // Total vertices: (m+1) rows of (cols) vertices each
+                n = (m + 1) * cols;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Index helper: (row, col) -> linear index
+                const idx = (row, col) => row * cols + col;
+                
+                // Build the truss structure
+                for (let row = 0; row <= m; row++) {
+                    for (let col = 0; col < cols; col++) {
+                        const current = idx(row, col);
+                        
+                        // Horizontal edge (along the row)
+                        if (col < cols - 1) {
+                            addBi(current, idx(row, col + 1));
+                        }
+                        
+                        // Vertical edge (to next row)
+                        if (row < m) {
+                            addBi(current, idx(row + 1, col));
+                        }
+                        
+                        // Diagonal edge (creates the truss pattern)
+                        // Alternating diagonals based on row parity
+                        if (row < m && col < cols - 1) {
+                            if (row % 2 === 0) {
+                                // Even rows: diagonal goes down-right
+                                addBi(current, idx(row + 1, col + 1));
+                            } else {
+                                // Odd rows: diagonal goes down-left  
+                                addBi(idx(row, col + 1), idx(row + 1, col));
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'five-bar':
+            // Five-bar mechanism from Fig. 3 in paper
+            // Configurable: rows × cols of diamond cells
+            {
+                const rows = gridRowsInput ? parseInt(gridRowsInput.value) || 2 : 2;
+                const cols = gridColsInput ? parseInt(gridColsInput.value) || 3 : 3;
+                
+                // Each cell has 4 vertices, shared along edges
+                // Structure: top row + middle row + bottom row, with diagonals
+                const topRow = cols + 1;       // Top vertices
+                const midRow = cols;           // Middle vertices  
+                const botRow = cols + 1;       // Bottom vertices
+                n = topRow + midRow * rows + botRow;
+                numVerticesInput.value = n;
+                
+                generateGraph();
+                
+                // Layout indices:
+                // Top: 0 to cols
+                // Middle rows: cols+1 to cols+1+cols*rows-1
+                // Bottom: cols+1+cols*rows to end
+                
+                const topStart = 0;
+                const midStart = cols + 1;
+                const botStart = midStart + cols * rows;
+                
+                // Connect top row horizontally
+                for (let i = 0; i < cols; i++) {
+                    addBi(topStart + i, topStart + i + 1);
+                }
+                
+                // Connect bottom row horizontally
+                for (let i = 0; i < cols; i++) {
+                    addBi(botStart + i, botStart + i + 1);
+                }
+                
+                // Connect middle rows horizontally and to top/bottom
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        const midIdx = midStart + r * cols + c;
+                        
+                        if (r === 0) {
+                            // First middle row connects to top
+                            addBi(topStart + c, midIdx);      // top-left diagonal
+                            addBi(topStart + c + 1, midIdx);  // top-right diagonal
+                        }
+                        
+                        if (r === rows - 1) {
+                            // Last middle row connects to bottom
+                            addBi(midIdx, botStart + c);      // bottom-left diagonal
+                            addBi(midIdx, botStart + c + 1);  // bottom-right diagonal
+                        }
+                        
+                        // Connect to next middle row
+                        if (r < rows - 1) {
+                            const nextMidIdx = midStart + (r + 1) * cols + c;
+                            addBi(midIdx, nextMidIdx);
+                            if (c > 0) {
+                                addBi(midIdx, midStart + (r + 1) * cols + c - 1);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case 'hypercube':
+            // Configurable hypercube with any dimension
+            {
+                const dim = hypercubeDimInput ? parseInt(hypercubeDimInput.value) || 3 : 3;
+                n = Math.pow(2, dim);
+                numVerticesInput.value = n;
+                
+                if (n > 64) {
+                    alert(`Q${dim} has ${n} vertices. Max recommended is Q6 (64 vertices).`);
+                    return;
+                }
+                
+                generateGraph();
+                
+                for (let i = 0; i < n; i++) {
+                    for (let b = 0; b < dim; b++) {
+                        const j = i ^ (1 << b);
+                        if (i < j) addBi(i, j);
+                    }
+                }
+            }
+            break;
+            
+        case 'circular-ladder':
+            // Circular ladder (prism): two cycles connected by rungs
+            if (n < 6 || n % 2 !== 0) {
+                alert('Circular ladder requires even n >= 6');
+                return;
+            }
+            {
+                const rungs = n / 2;
+                
+                // Set up 2-ring layout
+                layoutTypeSelect.value = 'concentric-2';
+                concentricOptions.style.display = 'block';
+                if (middleRatioContainer) middleRatioContainer.style.display = 'none';
+                innerRatioInput.value = 55;
+                innerRatioLabel.textContent = '55%';
+                splitModeSelect.value = 'custom';
+                if (customSplitContainer) customSplitContainer.style.display = 'block';
+                customSplitInput.value = `${rungs},${rungs}`;
+                
+                generateGraph();
+                
+                // Outer cycle
+                for (let i = 0; i < rungs; i++) {
+                    addBi(i, (i + 1) % rungs);
+                }
+                // Inner cycle
+                for (let i = 0; i < rungs; i++) {
+                    addBi(rungs + i, rungs + ((i + 1) % rungs));
+                }
+                // Rungs
+                for (let i = 0; i < rungs; i++) {
+                    addBi(i, rungs + i);
+                }
+            }
+            break;
+            
+        case 'mobius-ladder':
+            // Möbius ladder: like circular ladder but with a twist
+            if (n < 6 || n % 2 !== 0) {
+                alert('Möbius ladder requires even n >= 6');
+                return;
+            }
+            generateGraph();
+            {
+                const rungs = n / 2;
+                // Two rails with Möbius twist
+                for (let i = 0; i < rungs; i++) {
+                    addBi(i, (i + 1) % rungs);  // Top rail (cycle)
+                    addBi(rungs + i, rungs + ((i + 1) % rungs));  // Bottom rail (cycle)
+                }
+                // Rungs with twist at one point
+                for (let i = 0; i < rungs - 1; i++) {
+                    addBi(i, rungs + i);
+                }
+                // Twist: last vertex connects opposite
+                addBi(rungs - 1, rungs);  // instead of rungs-1 to 2*rungs-1
+            }
+            break;
+            
+        case 'antiprism':
+            // Antiprism: two cycles connected in alternating pattern
+            if (n < 6 || n % 2 !== 0) {
+                alert('Antiprism requires even n >= 6');
+                return;
+            }
+            {
+                const sides = n / 2;
+                
+                layoutTypeSelect.value = 'concentric-2';
+                concentricOptions.style.display = 'block';
+                if (middleRatioContainer) middleRatioContainer.style.display = 'none';
+                innerRatioInput.value = 50;
+                innerRatioLabel.textContent = '50%';
+                splitModeSelect.value = 'custom';
+                if (customSplitContainer) customSplitContainer.style.display = 'block';
+                customSplitInput.value = `${sides},${sides}`;
+                
+                generateGraph();
+                
+                // Top polygon
+                for (let i = 0; i < sides; i++) {
+                    addBi(i, (i + 1) % sides);
+                }
+                // Bottom polygon
+                for (let i = 0; i < sides; i++) {
+                    addBi(sides + i, sides + ((i + 1) % sides));
+                }
+                // Alternating connections (each top vertex connects to two bottom)
+                for (let i = 0; i < sides; i++) {
+                    addBi(i, sides + i);
+                    addBi(i, sides + ((i + 1) % sides));
+                }
+            }
+            break;
+            
+        case 'hypercube2':
+            // Q2: 4 vertices (square)
+            if (n !== 4) {
+                alert('Q₂ requires 4 vertices. Adjusting...');
+                numVerticesInput.value = 4;
+                n = 4;
+            }
+            generateGraph();
+            for (let i = 0; i < 4; i++) {
+                for (let b = 0; b < 2; b++) {
+                    const j = i ^ (1 << b);
+                    if (i < j) addBi(i, j);
+                }
+            }
+            break;
+            
+        case 'hypercube5':
+            // Q5: 32 vertices
+            if (n !== 32) {
+                alert('Q₅ requires 32 vertices. Adjusting...');
+                numVerticesInput.value = 32;
+                n = 32;
+            }
+            generateGraph();
+            for (let i = 0; i < 32; i++) {
+                for (let b = 0; b < 5; b++) {
+                    const j = i ^ (1 << b);
+                    if (i < j) addBi(i, j);
+                }
+            }
+            break;
+            
+        case 'cuboctahedron':
+            // Cuboctahedron: 12 vertices, 4-regular
+            if (n !== 12) {
+                alert('Cuboctahedron requires 12 vertices. Adjusting...');
+                numVerticesInput.value = 12;
+                n = 12;
+            }
+            generateGraph();
+            {
+                const cuboEdges = [
+                    [0,1],[0,2],[0,3],[0,4],
+                    [1,2],[1,5],[1,6],
+                    [2,3],[2,7],
+                    [3,4],[3,8],
+                    [4,5],[4,9],
+                    [5,6],[5,9],
+                    [6,7],[6,10],
+                    [7,8],[7,10],
+                    [8,9],[8,11],
+                    [9,11],
+                    [10,11]
+                ];
+                for (const [a, b] of cuboEdges) {
+                    addBi(a, b);
+                }
+            }
+            break;
+            
+        default:
+            generateGraph();
+    }
+    
+    updateStats();
+}
+
+// =====================================================
+// EDIT MODE
+// =====================================================
+
+// Dragging state
+let isDraggingVertex = false;
+let draggedVertex = null;
+let dragPlane = null;
+
+function updateMode() {
+    const addMode = addModeCheckbox && addModeCheckbox.checked;
+    const deleteMode = deleteModeCheckbox && deleteModeCheckbox.checked;
+    const dragMode = dragModeCheckbox && dragModeCheckbox.checked;
+    const addVertexMode = currentEditMode === 'add-vertex';
+    const deleteVertexMode = currentEditMode === 'delete-vertex';
+    
+    if (addMode) {
+        modeIndicator.textContent = 'ADD EDGES MODE';
+        modeIndicator.className = 'mode-indicator mode-add';
+        container.className = 'edit-mode';
+        controls.enabled = false;
+    } else if (deleteMode) {
+        modeIndicator.textContent = 'DELETE EDGES MODE';
+        modeIndicator.className = 'mode-indicator mode-delete';
+        container.className = 'delete-mode';
+        controls.enabled = false;
+    } else if (dragMode) {
+        modeIndicator.textContent = 'DRAG VERTICES MODE (click and drag nodes)';
+        modeIndicator.className = 'mode-indicator mode-drag';
+        container.className = 'drag-mode';
+        controls.enabled = false;
+    } else if (addVertexMode) {
+        modeIndicator.textContent = 'ADD VERTEX MODE (click empty space)';
+        modeIndicator.className = 'mode-indicator mode-add';
+        container.className = 'edit-mode';
+        controls.enabled = false;
+    } else if (deleteVertexMode) {
+        modeIndicator.textContent = 'DELETE VERTEX MODE (click vertex to remove)';
+        modeIndicator.className = 'mode-indicator mode-delete';
+        container.className = 'delete-mode';
+        controls.enabled = false;
+    } else {
+        modeIndicator.textContent = 'VIEW MODE (drag to rotate)';
+        modeIndicator.className = 'mode-indicator mode-view';
+        container.className = '';
+        controls.enabled = true;
+    }
+}
+
+function onMouseMove(event) {
+    const addMode = addModeCheckbox && addModeCheckbox.checked;
+    const deleteMode = deleteModeCheckbox && deleteModeCheckbox.checked;
+    const dragMode = dragModeCheckbox && dragModeCheckbox.checked;
+    const addVertexMode = currentEditMode === 'add-vertex';
+    const deleteVertexMode = currentEditMode === 'delete-vertex';
+    
+    // Handle vertex dragging
+    if (dragMode && isDraggingVertex && draggedVertex) {
+        event.preventDefault();
+        
+        // Get mouse position in normalized device coordinates
+        const rect = container.getBoundingClientRect();
+        const mouseX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const mouseY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        
+        // Create a ray from camera through mouse position
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera({ x: mouseX, y: mouseY }, camera);
+        
+        // Intersect with drag plane (plane perpendicular to camera through vertex)
+        if (dragPlane) {
+            const intersection = new THREE.Vector3();
+            raycaster.ray.intersectPlane(dragPlane, intersection);
+            if (intersection) {
+                draggedVertex.position.copy(intersection);
+                updateAllEdges();
+                updateVertexLabels();
+            }
+        }
+        return;
+    }
+    
+    if (!addMode && !deleteMode && !dragMode && !addVertexMode && !deleteVertexMode) return;
+    
+    const vertex = getIntersectedVertex(event);
+    
+    // Reset previous hover
+    if (state.hoveredVertex && state.hoveredVertex !== state.selectedVertex) {
+        setVertexMaterial(state.hoveredVertex, 'default');
+    }
+    
+    // Set new hover and cursor
+    if (vertex && vertex !== state.selectedVertex) {
+        setVertexMaterial(vertex, 'hover');
+        state.hoveredVertex = vertex;
+        if (dragMode) {
+            container.style.cursor = 'grab';
+        } else if (deleteVertexMode) {
+            container.style.cursor = 'not-allowed';
+        } else {
+            container.style.cursor = 'pointer';
+        }
+    } else {
+        state.hoveredVertex = null;
+        if (dragMode) {
+            container.style.cursor = 'default';
+        } else if (addVertexMode) {
+            container.style.cursor = 'cell';
+        } else {
+            container.style.cursor = 'crosshair';
+        }
+    }
+}
+
+function onMouseDown(event) {
+    const dragMode = dragModeCheckbox && dragModeCheckbox.checked;
+    if (!dragMode) return;
+    
+    const vertex = getIntersectedVertex(event);
+    if (vertex) {
+        isDraggingVertex = true;
+        draggedVertex = vertex;
+        setVertexMaterial(vertex, 'selected');
+        container.style.cursor = 'grabbing';
+        
+        // Create a plane perpendicular to camera, passing through the vertex
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        dragPlane = new THREE.Plane();
+        dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, vertex.position);
+    }
+}
+
+function onMouseUp(event) {
+    if (isDraggingVertex && draggedVertex) {
+        setVertexMaterial(draggedVertex, 'default');
+        isDraggingVertex = false;
+        draggedVertex = null;
+        dragPlane = null;
+        container.style.cursor = 'default';
+        invalidateCaches(); // Reset dynamics caches after moving vertices
+    }
+}
+
+function onMouseClick(event) {
+    const addMode = addModeCheckbox && addModeCheckbox.checked;
+    const deleteMode = deleteModeCheckbox && deleteModeCheckbox.checked;
+    const addVertexMode = currentEditMode === 'add-vertex';
+    const deleteVertexMode = currentEditMode === 'delete-vertex';
+    
+    if (!addMode && !deleteMode && !addVertexMode && !deleteVertexMode) return;
+    
+    if (addMode) {
+        const vertex = getIntersectedVertex(event);
+        if (vertex) {
+            if (state.selectedVertex === null) {
+                // First vertex selected
+                state.selectedVertex = vertex;
+                setVertexMaterial(vertex, 'selected');
+            } else if (vertex !== state.selectedVertex) {
+                // Second vertex - create edge
+                addEdge(state.selectedVertex.userData.index, vertex.userData.index);
+                setVertexMaterial(state.selectedVertex, 'default');
+                state.selectedVertex = null;
+                updateStats();
+            }
+        } else if (state.selectedVertex) {
+            // Clicked empty space - deselect
+            setVertexMaterial(state.selectedVertex, 'default');
+            state.selectedVertex = null;
+        }
+    } else if (deleteMode) {
+        const edge = getIntersectedEdge(event);
+        if (edge) {
+            // Remove edge
+            state.graphGroup.remove(edge.arrow);
+            state.edgeObjects.splice(state.edgeObjects.indexOf(edge), 1);
+            state.adjacencyMatrix[edge.from][edge.to] = 0;
+            state.adjacencyMatrix[edge.to][edge.from] = 0;
+            
+            // Update symmetric matrix only if no reverse edge exists
+            if (!state.edgeObjects.some(e => e.from === edge.to && e.to === edge.from)) {
+                state.symmetricAdjMatrix[edge.from][edge.to] = 0;
+                state.symmetricAdjMatrix[edge.to][edge.from] = 0;
+            }
+            
+            updateStats();
+        }
+    } else if (addVertexMode) {
+        // Add vertex: click empty space to place a new vertex
+        const vertex = getIntersectedVertex(event);
+        if (!vertex) {
+            // Get click position in 3D space on the Y=0 plane
+            const rect = container.getBoundingClientRect();
+            const mouse = new THREE.Vector2(
+                ((event.clientX - rect.left) / rect.width) * 2 - 1,
+                -((event.clientY - rect.top) / rect.height) * 2 + 1
+            );
+            
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Intersect with Y=0 plane
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+            const intersectPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, intersectPoint);
+            
+            if (intersectPoint) {
+                addNewVertex(intersectPoint.x, 0, intersectPoint.z);
+                if (numVerticesInput) numVerticesInput.value = state.vertexMeshes.length;
+                updateStats();
+                invalidateCaches();
+            }
+        }
+    } else if (deleteVertexMode) {
+        // Delete vertex: click on a vertex to remove it
+        const vertex = getIntersectedVertex(event);
+        if (vertex) {
+            const index = vertex.userData.index;
+            removeVertex(index);
+            if (numVerticesInput) numVerticesInput.value = state.vertexMeshes.length;
+            updateStats();
+            invalidateCaches();
+        }
+    }
+}
+
+// =====================================================
+// GRAPH FINDER FUNCTIONS
+// =====================================================
+
+async function findAllAnalyticGraphs() {
+    const n = parseInt(numVerticesInput.value) || 5;
+    const connectedOnly = finderConnectedOnlyCheckbox ? finderConnectedOnlyCheckbox.checked : true;
+    
+    if (n > 7) {
+        const msg = n >= 8 
+            ? `Finding graphs for n=${n} will check ${Math.pow(2, n*(n-1)/2).toLocaleString()} graphs.\nThis may take a very long time and use significant memory.\n\nConsider using n≤7 or enabling "Connected only".\n\nContinue anyway?`
+            : `Finding graphs for n=${n} may take several minutes. Continue?`;
+        if (!confirm(msg)) {
+            return;
+        }
+    }
+    
+    // Show progress UI and cancel button
+    finderProgress.style.display = 'block';
+    finderResults.style.display = 'none';
+    finderProgressBar.style.width = '0%';
+    findAnalyticBtn.disabled = true;
+    findAnalyticBtn.textContent = 'Searching...';
+    
+    if (cancelSearchBtn) {
+        cancelSearchBtn.style.display = 'inline-block';
+        cancelSearchBtn.disabled = false;
+        cancelSearchBtn.textContent = 'Cancel';
+    }
+    
+    try {
+        const results = await findAnalyticGraphs(n, { connectedOnly }, (progress) => {
+            finderStatus.textContent = progress.message;
+            if (progress.progress !== undefined) {
+                finderProgressBar.style.width = (progress.progress * 100) + '%';
+            }
+        });
+        
+        // Store results
+        discoveredGraphs = results.graphs;
+        
+        // Update UI
+        finderProgress.style.display = 'none';
+        finderResults.style.display = 'block';
+        
+        let summaryText;
+        if (results.cancelled) {
+            summaryText = `Cancelled. Found ${results.analyticCount} analytic graphs before stopping.`;
+        } else {
+            const filterNote = connectedOnly ? ' connected' : '';
+            summaryText = `Found ${results.analyticCount} of ${results.totalUnique}${filterNote} graphs with closed-form eigenvalues (${results.elapsed.toFixed(1)}s)`;
+        }
+        finderSummary.textContent = summaryText;
+        
+        // Populate dropdown
+        analyticGraphSelect.innerHTML = '<option value="">-- Select a graph --</option>';
+        results.graphs.forEach((g, i) => {
+            const edgeStr = g.edgeCount === 0 ? 'no edges' : `${g.edgeCount} edge${g.edgeCount > 1 ? 's' : ''}`;
+            const name = g.family || `Graph with ${edgeStr}`;
+            const option = document.createElement('option');
+            option.value = i;
+            option.textContent = `[${i + 1}] ${name}`;
+            analyticGraphSelect.appendChild(option);
+        });
+        
+        selectedGraphInfo.style.display = 'none';
+        
+    } catch (error) {
+        console.error('Graph finder error:', error);
+        finderStatus.textContent = 'Error: ' + error.message;
+    } finally {
+        findAnalyticBtn.disabled = false;
+        findAnalyticBtn.textContent = 'Find All Analytic Graphs';
+        if (cancelSearchBtn) {
+            cancelSearchBtn.style.display = 'none';
+        }
+    }
+}
+
+function showSelectedGraphInfo() {
+    const idx = analyticGraphSelect.value;
+    
+    if (idx === '' || discoveredGraphs.length === 0) {
+        selectedGraphInfo.style.display = 'none';
+        return;
+    }
+    
+    const graph = discoveredGraphs[parseInt(idx)];
+    
+    // Display family/name
+    graphFamilyDisplay.textContent = graph.family || `Graph on ${graph.n} vertices`;
+    
+    // Display edges
+    if (graph.edges.length === 0) {
+        graphEdgesDisplay.textContent = 'Edges: ∅ (no edges)';
+    } else {
+        const edgeStr = graph.edges.map(([i, j]) => `${i}-${j}`).join(', ');
+        graphEdgesDisplay.textContent = `Edges: ${edgeStr}`;
+    }
+    
+    // Display eigenvalues
+    const eigStr = graph.symmetricEigenvalues.map(e => {
+        const mult = e.multiplicity > 1 ? ` (×${e.multiplicity})` : '';
+        return e.form + mult;
+    }).join(', ');
+    graphEigenvaluesDisplay.textContent = `λ: ${eigStr}`;
+    
+    selectedGraphInfo.style.display = 'block';
+}
+
+function loadSelectedAnalyticGraph() {
+    const idx = analyticGraphSelect.value;
+    
+    if (idx === '' || discoveredGraphs.length === 0) {
+        alert('Please select a graph first');
+        return;
+    }
+    
+    const graph = discoveredGraphs[parseInt(idx)];
+    
+    // Get layout options from UI
+    const layoutType = finderLayoutSelect ? finderLayoutSelect.value : layoutTypeSelect.value;
+    const radius = parseInt(radiusInput.value) || 40;
+    const innerRatio = parseInt(innerRatioInput?.value) || 50;
+    const middleRatio = parseInt(middleRatioInput?.value) || 70;
+    const customSplit = customSplitInput?.value || null;
+    
+    // Load the graph into visualization with selected layout
+    loadGraphFromResult(graph, {
+        type: layoutType,
+        radius: radius,
+        innerRatio: innerRatio,
+        middleRatio: middleRatio,
+        customSplit: customSplit
+    });
+    
+    // Update UI
+    numVerticesInput.value = graph.n;
+    templateSelect.value = 'custom';
+    updateStats();
+    updatePhaseNodeSelectors();
+    invalidateCaches();  // Reset dynamics caches for new graph
+    
+    // Optionally show analysis
+    setTimeout(() => showAnalysis(), 100);
+}
+
+// =====================================================
+// ENHANCED VISUALIZATION POPUP
+// =====================================================
+
+function setupEnhancedVizPopup() {
+    if (!enhancedVizPopup) return;
+    
+    // Set up dynamics callback for real-time updates
+    setDynamicsUpdateCallback(updateEnhancedVisualizations);
+    
+    // Open popup button
+    if (openEnhancedVizBtn) {
+        openEnhancedVizBtn.addEventListener('click', () => {
+            enhancedVizPopup.style.display = 'block';
+            enhancedVizActive = true;
+            timeSeriesHistory = [];
+            timeSeriesTimeStamps = [];
+            initialEnergy = null; // Reset energy tracking
+            
+            // Ensure spectrum is computed for frequency display
+            ensureSpectrumComputed();
+            
+            updateEnhancedVisualizations();
+        });
+    }
+    
+    // Close button
+    if (popupCloseBtn) {
+        popupCloseBtn.addEventListener('click', () => {
+            enhancedVizPopup.style.display = 'none';
+            enhancedVizActive = false;
+            timeSeriesHistory = [];
+            timeSeriesTimeStamps = [];
+            initialEnergy = null;
+        });
+    }
+    
+    // Minimize button
+    if (popupMinimizeBtn) {
+        popupMinimizeBtn.addEventListener('click', () => {
+            enhancedVizPopup.classList.toggle('minimized');
+            popupMinimizeBtn.textContent = enhancedVizPopup.classList.contains('minimized') ? '+' : '−';
+        });
+    }
+    
+    // Maximize button
+    if (popupMaximizeBtn) {
+        popupMaximizeBtn.addEventListener('click', () => {
+            enhancedVizPopup.classList.toggle('maximized');
+            popupMaximizeBtn.textContent = enhancedVizPopup.classList.contains('maximized') ? '❐' : '□';
+        });
+    }
+    
+    // Zoom slider
+    if (vizZoom) {
+        vizZoom.addEventListener('input', () => {
+            if (vizZoomLabel) vizZoomLabel.textContent = vizZoom.value + '%';
+            updateEnhancedVisualizations();
+        });
+    }
+    
+    // Checkbox controls
+    [vizShowBounds, vizShowEigenvectors, vizShowGrid].forEach(checkbox => {
+        if (checkbox) {
+            checkbox.addEventListener('change', updateEnhancedVisualizations);
+        }
+    });
+    
+    // Make popup draggable
+    makePopupDraggable();
+}
+
+function makePopupDraggable() {
+    if (!enhancedVizPopup) return;
+    
+    const header = enhancedVizPopup.querySelector('.popup-header');
+    if (!header) return;
+    
+    let isDragging = false;
+    let offsetX = 0, offsetY = 0;
+    
+    header.addEventListener('mousedown', (e) => {
+        if (e.target.classList.contains('popup-btn')) return;
+        isDragging = true;
+        offsetX = e.clientX - enhancedVizPopup.offsetLeft;
+        offsetY = e.clientY - enhancedVizPopup.offsetTop;
+        enhancedVizPopup.style.transform = 'none';
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        enhancedVizPopup.style.left = (e.clientX - offsetX) + 'px';
+        enhancedVizPopup.style.top = (e.clientY - offsetY) + 'px';
+    });
+    
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+}
+
+// Ensure spectrum is computed for visualization
+function ensureSpectrumComputed() {
+    if (!currentSpectrum || !currentSpectrum.eigenvalues || currentSpectrum.eigenvalues.length === 0) {
+        // Compute numerical spectrum from the graph
+        const topology = detectPointGraphTopology();
+        if (topology && topology.N >= 2) {
+            if (topology.type === 'general' || topology.type === 'tree') {
+                currentSpectrum = computeNumericalSpectrum(1.0, 1.0);
+            } else {
+                currentSpectrum = computeSpectrum(topology, 1.0, 1.0);
+            }
+        }
+    }
+}
+
+// Update all enhanced visualizations (called from dynamics loop)
+export function updateEnhancedVisualizations() {
+    if (!enhancedVizActive || !enhancedVizPopup || enhancedVizPopup.style.display === 'none') return;
+    
+    try {
+        // Ensure spectrum data is available
+        ensureSpectrumComputed();
+        
+        drawEnhancedPhaseCurrent();
+        drawEnhancedPhaseMain();
+        drawFrequencySpectrum();
+        drawTimeSeries();
+        updateEnergyDisplay();
+    } catch (e) {
+        console.warn('Enhanced visualization error:', e);
+    }
+}
+
+function drawEnhancedPhaseCurrent() {
+    if (!enhancedPhaseCurrentCanvas) return;
+    
+    const canvas = enhancedPhaseCurrentCanvas;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    const cx = W / 2;
+    const cy = H / 2;
+    
+    // Clear
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+    
+    // Get dynamics state
+    const dynamicsState = getDynamicsState();
+    if (!dynamicsState || dynamicsState.nodeStates.length < 2) {
+        ctx.fillStyle = '#666';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Start dynamics to see phase plot', cx, cy);
+        return;
+    }
+    
+    // Get selected nodes and plot mode
+    const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
+    const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
+    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'state-state';
+    
+    // Determine axis labels based on plot mode
+    let xAxisLabel, yAxisLabel;
+    switch(plotMode) {
+        case 'state-velocity':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `ẋ${nodeI}`;
+            break;
+        case 'power-power':
+            xAxisLabel = `P${nodeI}`;
+            yAxisLabel = `P${nodeJ}`;
+            break;
+        case 'state-state':
+        default:
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `x${nodeJ}`;
+            break;
+    }
+    
+    const zoom = vizZoom ? parseInt(vizZoom.value) / 100 : 1.0;
+    const scale = 50 * zoom;
+    
+    // Draw grid if enabled
+    if (vizShowGrid && vizShowGrid.checked) {
+        ctx.strokeStyle = '#1a1a3a';
+        ctx.lineWidth = 0.5;
+        for (let x = 0; x <= W; x += 40) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+            ctx.stroke();
+        }
+        for (let y = 0; y <= H; y += 40) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+        }
+    }
+    
+    // Draw axes
+    ctx.strokeStyle = '#333355';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, cy);
+    ctx.lineTo(W, cy);
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, H);
+    ctx.stroke();
+    
+    // Draw phase trail
+    const trail = dynamicsState.phaseTrail || [];
+    if (trail.length > 1) {
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < trail.length; i++) {
+            const x = cx + trail[i].x * scale;
+            const y = cy - trail[i].y * scale;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        
+        // Current point
+        const last = trail[trail.length - 1];
+        const px = cx + last.x * scale;
+        const py = cy - last.y * scale;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(px, py, 4, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+    
+    // Axis labels with actual node numbers
+    ctx.fillStyle = '#4a9eff';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(xAxisLabel, W - 5, cy - 5);
+    ctx.textAlign = 'left';
+    ctx.fillText(yAxisLabel, cx + 5, 12);
+}
+
+function drawEnhancedPhaseMain() {
+    if (!enhancedPhaseMainCanvas) return;
+    
+    const canvas = enhancedPhaseMainCanvas;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    const cx = W / 2;
+    const cy = H / 2;
+    
+    // Clear
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+    
+    const dynamicsState = getDynamicsState();
+    const zoom = vizZoom ? parseInt(vizZoom.value) / 100 : 1.0;
+    const scale = 50 * zoom;
+    
+    // Get selected nodes and plot mode
+    const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
+    const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
+    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'state-state';
+    
+    // Determine axis labels based on plot mode
+    let xAxisLabel, yAxisLabel, plotTitle;
+    switch(plotMode) {
+        case 'state-velocity':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `ẋ${nodeI}`;
+            plotTitle = `Node ${nodeI}: displacement vs velocity`;
+            break;
+        case 'power-power':
+            xAxisLabel = `P${nodeI}`;
+            yAxisLabel = `P${nodeJ}`;
+            plotTitle = `Power: node ${nodeI} vs node ${nodeJ}`;
+            break;
+        case 'state-state':
+        default:
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `x${nodeJ}`;
+            plotTitle = `Displacement: node ${nodeI} vs node ${nodeJ}`;
+            break;
+    }
+    
+    // Get b1 from spectrum
+    let b1 = 2.0; // default
+    if (currentSpectrum && currentSpectrum.b1_over_beta) {
+        b1 = currentSpectrum.b1_over_beta;
+    }
+    
+    // Draw stable region (green tint inside b1 circle)
+    if (vizShowBounds && vizShowBounds.checked) {
+        const b1Radius = b1 * scale;
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, b1Radius);
+        gradient.addColorStop(0, 'rgba(76, 175, 80, 0.15)');
+        gradient.addColorStop(1, 'rgba(76, 175, 80, 0.02)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, b1Radius, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // b1 boundary circle (dashed green)
+        ctx.strokeStyle = '#4CAF50';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, b1Radius, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Label
+        ctx.fillStyle = '#4CAF50';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`b₁ = ${b1.toFixed(2)}`, cx + b1Radius + 5, cy);
+    }
+    
+    // Draw grid
+    if (vizShowGrid && vizShowGrid.checked) {
+        ctx.strokeStyle = '#1a1a3a';
+        ctx.lineWidth = 0.5;
+        for (let x = 0; x <= W; x += 40) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, H);
+            ctx.stroke();
+        }
+        for (let y = 0; y <= H; y += 40) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(W, y);
+            ctx.stroke();
+        }
+    }
+    
+    // Draw axes
+    ctx.strokeStyle = '#444466';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, cy);
+    ctx.lineTo(W, cy);
+    ctx.moveTo(cx, 0);
+    ctx.lineTo(cx, H);
+    ctx.stroke();
+    
+    // Draw mode lines if enabled - show phase relationships for selected node pair
+    if (vizShowEigenvectors && vizShowEigenvectors.checked && currentSpectrum && currentSpectrum.eigenvalues) {
+        // Guard against undefined state
+        if (!state || !state.vertexMeshes || state.vertexMeshes.length < 2) {
+            // Skip mode lines if no graph data
+        } else {
+            ctx.lineWidth = 1.5;
+            const uniqueFreqs = [...new Set(currentSpectrum.eigenvalues
+                .map(e => Math.abs(e.im).toFixed(4))
+                .filter(f => parseFloat(f) > 0.01)
+            )].map(parseFloat).sort((a, b) => b - a).slice(0, 4);
+            
+            const modeColors = ['#ff9800', '#e91e63', '#9c27b0', '#00bcd4'];
+            const n = state.vertexMeshes.length;
+            
+            uniqueFreqs.forEach((freq, modeIdx) => {
+                const color = modeColors[modeIdx % modeColors.length];
+                ctx.strokeStyle = color;
+                
+                // For a cycle, eigenvector components are exp(i*2πk*node/n)
+                // The phase relationship between nodeI and nodeJ in mode k
+                // determines the angle of the mode line
+                const k = modeIdx + 1; // mode number (skip k=0 which has zero frequency)
+                const phaseI = (2 * Math.PI * k * nodeI) / n;
+                const phaseJ = (2 * Math.PI * k * nodeJ) / n;
+                const phaseDiff = phaseJ - phaseI;
+                
+                // The mode line angle represents how nodeJ relates to nodeI in this mode
+                const angle = phaseDiff;
+                const len = Math.min(W, H) * 0.35;
+                
+                // Draw line in both directions
+                ctx.beginPath();
+                ctx.moveTo(cx - Math.cos(angle) * len, cy + Math.sin(angle) * len);
+                ctx.lineTo(cx + Math.cos(angle) * len, cy - Math.sin(angle) * len);
+                ctx.stroke();
+                
+                // Label
+                ctx.fillStyle = color;
+                ctx.font = '9px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(`ω${modeIdx+1}=${freq.toFixed(2)}`, W - 65, 15 + modeIdx * 12);
+            });
+        }
+    }
+    
+    // Draw phase trail
+    if (dynamicsState && dynamicsState.phaseTrail && dynamicsState.phaseTrail.length > 1) {
+        const trail = dynamicsState.phaseTrail;
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i < trail.length; i++) {
+            const x = cx + trail[i].x * scale;
+            const y = cy - trail[i].y * scale;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        
+        // Current point with glow
+        const last = trail[trail.length - 1];
+        const px = cx + last.x * scale;
+        const py = cy - last.y * scale;
+        
+        // Glow
+        const glow = ctx.createRadialGradient(px, py, 0, px, py, 10);
+        glow.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+        glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(px, py, 10, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(px, py, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Show coordinates with actual node labels
+        ctx.fillStyle = '#aaa';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`(${xAxisLabel}=${last.x.toFixed(2)}, ${yAxisLabel}=${last.y.toFixed(2)})`, 10, H - 10);
+    }
+    
+    // Axis labels with actual node numbers
+    ctx.fillStyle = '#4a9eff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(xAxisLabel, W - 8, cy - 8);
+    ctx.textAlign = 'left';
+    ctx.fillText(yAxisLabel, cx + 8, 15);
+    
+    // Plot title at top
+    ctx.fillStyle = '#666';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(plotTitle, 10, 12);
+}
+
+function drawFrequencySpectrum() {
+    if (!enhancedSpectrumCanvas) return;
+    
+    const canvas = enhancedSpectrumCanvas;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    
+    // Clear
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+    
+    // Ensure spectrum is computed
+    ensureSpectrumComputed();
+    
+    // Get unique eigenvalue frequencies with multiplicities
+    let freqData = [];
+    if (currentSpectrum && currentSpectrum.eigenvalues) {
+        // Count frequencies
+        const freqMap = new Map();
+        currentSpectrum.eigenvalues.forEach(e => {
+            const f = Math.abs(e.im);
+            if (f > 0.01) {
+                const key = f.toFixed(4);
+                freqMap.set(key, (freqMap.get(key) || 0) + 1);
+            }
+        });
+        
+        // Convert to array sorted by frequency (descending)
+        freqData = Array.from(freqMap.entries())
+            .map(([f, mult]) => ({ freq: parseFloat(f), mult }))
+            .sort((a, b) => b.freq - a.freq);
+    }
+    
+    if (freqData.length === 0) {
+        ctx.fillStyle = '#666';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Build a graph to see spectrum', W/2, H/2);
+        return;
+    }
+    
+    // Drawing area
+    const margin = { left: 10, right: 10, top: 25, bottom: 20 };
+    const plotW = W - margin.left - margin.right;
+    const plotH = H - margin.top - margin.bottom;
+    
+    const maxFreq = Math.max(...freqData.map(d => d.freq), 1);
+    const totalModes = freqData.length;
+    
+    // Title with count
+    ctx.fillStyle = '#888';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Frequencies: ${totalModes} unique modes`, margin.left, 12);
+    
+    // Different display strategies based on number of modes
+    if (totalModes <= 12) {
+        // Show individual bars with labels
+        const barWidth = Math.min(18, (plotW / totalModes) - 3);
+        const totalBarsWidth = totalModes * (barWidth + 3);
+        const startX = margin.left + (plotW - totalBarsWidth) / 2;
+        
+        freqData.forEach((data, i) => {
+            const x = startX + i * (barWidth + 3);
+            const barHeight = (data.freq / maxFreq) * plotH * 0.75;
+            const y = margin.top + plotH - barHeight;
+            
+            // Bar gradient
+            const gradient = ctx.createLinearGradient(x, y, x, margin.top + plotH);
+            gradient.addColorStop(0, '#4a9eff');
+            gradient.addColorStop(1, '#1a5a9f');
+            ctx.fillStyle = gradient;
+            
+            // Rounded top
+            const r = Math.min(3, barWidth / 2);
+            ctx.beginPath();
+            ctx.moveTo(x, margin.top + plotH);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.lineTo(x + barWidth - r, y);
+            ctx.quadraticCurveTo(x + barWidth, y, x + barWidth, y + r);
+            ctx.lineTo(x + barWidth, margin.top + plotH);
+            ctx.fill();
+            
+            // Frequency value on top
+            ctx.fillStyle = '#ccc';
+            ctx.font = '7px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(data.freq.toFixed(2), x + barWidth/2, y - 2);
+            
+            // Mode label at bottom (show multiplicity if > 1)
+            ctx.fillStyle = '#666';
+            ctx.font = '7px sans-serif';
+            const label = data.mult > 1 ? `ω${i+1}×${data.mult}` : `ω${i+1}`;
+            ctx.fillText(label, x + barWidth/2, H - 3);
+        });
+    } else {
+        // Many modes: show as spectrum line plot
+        ctx.strokeStyle = '#4a9eff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        
+        freqData.forEach((data, i) => {
+            const x = margin.left + (i / (totalModes - 1)) * plotW;
+            const y = margin.top + plotH - (data.freq / maxFreq) * plotH * 0.85;
+            
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+        
+        // Fill under curve
+        ctx.lineTo(margin.left + plotW, margin.top + plotH);
+        ctx.lineTo(margin.left, margin.top + plotH);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(74, 158, 255, 0.2)';
+        ctx.fill();
+        
+        // Draw points for significant frequencies
+        ctx.fillStyle = '#4a9eff';
+        const step = Math.max(1, Math.floor(totalModes / 8));
+        for (let i = 0; i < totalModes; i += step) {
+            const data = freqData[i];
+            const x = margin.left + (i / (totalModes - 1)) * plotW;
+            const y = margin.top + plotH - (data.freq / maxFreq) * plotH * 0.85;
+            
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Label
+            ctx.fillStyle = '#aaa';
+            ctx.font = '7px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(data.freq.toFixed(2), x, y - 5);
+            ctx.fillStyle = '#4a9eff';
+        }
+        
+        // Max and min labels
+        ctx.fillStyle = '#4CAF50';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`max: ${freqData[0].freq.toFixed(2)}`, margin.left, margin.top + 10);
+        ctx.fillStyle = '#ff9800';
+        ctx.textAlign = 'right';
+        ctx.fillText(`min: ${freqData[totalModes-1].freq.toFixed(2)}`, W - margin.right, margin.top + 10);
+    }
+    
+    // Draw horizontal axis line
+    ctx.strokeStyle = '#333355';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin.left, margin.top + plotH);
+    ctx.lineTo(W - margin.right, margin.top + plotH);
+    ctx.stroke();
+}
+
+function drawTimeSeries() {
+    if (!enhancedTimeseriesCanvas) return;
+    
+    const canvas = enhancedTimeseriesCanvas;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    
+    // Clear
+    ctx.fillStyle = '#0a0a1a';
+    ctx.fillRect(0, 0, W, H);
+    
+    const dynamicsState = getDynamicsState();
+    if (!dynamicsState || dynamicsState.nodeStates.length < 2) {
+        ctx.fillStyle = '#666';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Start dynamics to see time series', W/2, H/2);
+        return;
+    }
+    
+    // Get selected nodes from phase diagram selectors
+    const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
+    const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
+    const selectedNodes = [nodeI, nodeJ];
+    
+    // Store current state with timestamp (store ALL node states)
+    const currentTime = dynamicsState.simulationTime;
+    const allStates = [...dynamicsState.nodeStates];
+    
+    timeSeriesHistory.push({
+        time: currentTime,
+        states: allStates
+    });
+    
+    // Remove old data outside time window
+    const minTime = currentTime - TIME_SERIES_WINDOW;
+    while (timeSeriesHistory.length > 0 && timeSeriesHistory[0].time < minTime) {
+        timeSeriesHistory.shift();
+    }
+    
+    // Also limit total samples
+    if (timeSeriesHistory.length > TIME_SERIES_LENGTH) {
+        timeSeriesHistory.shift();
+    }
+    
+    if (timeSeriesHistory.length < 2) return;
+    
+    // Drawing area
+    const margin = { left: 35, right: 45, top: 15, bottom: 25 };
+    const plotW = W - margin.left - margin.right;
+    const plotH = H - margin.top - margin.bottom;
+    
+    // Time range
+    const startTime = timeSeriesHistory[0].time;
+    const endTime = timeSeriesHistory[timeSeriesHistory.length - 1].time;
+    const timeRange = Math.max(endTime - startTime, 0.1);
+    
+    // Draw time axis
+    ctx.strokeStyle = '#333355';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin.left, H - margin.bottom);
+    ctx.lineTo(W - margin.right, H - margin.bottom);
+    ctx.stroke();
+    
+    // Time labels
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    
+    const numTicks = 5;
+    for (let i = 0; i <= numTicks; i++) {
+        const t = startTime + (i / numTicks) * timeRange;
+        const x = margin.left + (i / numTicks) * plotW;
+        
+        // Tick mark
+        ctx.beginPath();
+        ctx.moveTo(x, H - margin.bottom);
+        ctx.lineTo(x, H - margin.bottom + 3);
+        ctx.stroke();
+        
+        // Label
+        ctx.fillText(t.toFixed(1), x, H - 5);
+    }
+    
+    // Time label
+    ctx.fillStyle = '#666';
+    ctx.textAlign = 'right';
+    ctx.fillText('t (s)', W - margin.right + 5, H - margin.bottom + 3);
+    
+    // Draw time series for SELECTED nodes
+    const colors = ['#00ffff', '#ff9800'];
+    const sectionHeight = plotH / 2;
+    
+    selectedNodes.forEach((nodeIdx, i) => {
+        const baseY = margin.top + i * sectionHeight + sectionHeight / 2;
+        
+        // Find max amplitude for this node
+        let maxVal = 0.1;
+        timeSeriesHistory.forEach(entry => {
+            if (entry.states[nodeIdx] !== undefined) {
+                maxVal = Math.max(maxVal, Math.abs(entry.states[nodeIdx]));
+            }
+        });
+        
+        const scaleY = (sectionHeight * 0.4) / maxVal;
+        
+        // Draw center line (zero line)
+        ctx.strokeStyle = '#222244';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(margin.left, baseY);
+        ctx.lineTo(W - margin.right, baseY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        
+        // Draw time series curve
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        let started = false;
+        
+        for (let j = 0; j < timeSeriesHistory.length; j++) {
+            const entry = timeSeriesHistory[j];
+            const x = margin.left + ((entry.time - startTime) / timeRange) * plotW;
+            const y = baseY - (entry.states[nodeIdx] || 0) * scaleY;
+            
+            if (!started) {
+                ctx.moveTo(x, y);
+                started = true;
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        
+        // Node label on left
+        ctx.fillStyle = colors[i];
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`x${nodeIdx}`, 5, baseY - sectionHeight * 0.3);
+        
+        // Current value on right
+        const currentVal = allStates[nodeIdx] || 0;
+        ctx.textAlign = 'right';
+        ctx.font = '9px monospace';
+        ctx.fillText(currentVal.toFixed(3), W - 5, baseY + 3);
+    });
+    
+    // Title showing selected nodes
+    ctx.fillStyle = '#888';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Nodes ${nodeI} & ${nodeJ} vs time`, margin.left, 10);
+}
+
+function updateEnergyDisplay() {
+    const dynamicsState = getDynamicsState();
+    if (!dynamicsState || !energyBar || !energyValue) return;
+    
+    const energy = dynamicsState.energy || 1.0;
+    
+    // Track initial energy on first measurement
+    if (initialEnergy === null && energy > 0) {
+        initialEnergy = energy;
+    }
+    
+    const refEnergy = initialEnergy || energy;
+    const normalizedEnergy = Math.min(energy / refEnergy, 1.2); // Show up to 120% of initial
+    
+    energyBar.style.width = (normalizedEnergy * 100 / 1.2) + '%';
+    energyValue.textContent = energy.toFixed(4);
+    
+    // Color based on relative conservation (compare to initial energy)
+    const relativeError = Math.abs(energy - refEnergy) / refEnergy;
+    
+    if (relativeError < 0.001) {
+        // Excellent conservation (< 0.1% error)
+        energyBar.style.background = 'linear-gradient(90deg, #4CAF50, #8BC34A)';
+    } else if (relativeError < 0.01) {
+        // Good conservation (< 1% error)
+        energyBar.style.background = 'linear-gradient(90deg, #8BC34A, #CDDC39)';
+    } else if (relativeError < 0.05) {
+        // Acceptable (< 5% error)
+        energyBar.style.background = 'linear-gradient(90deg, #ff9800, #ffc107)';
+    } else {
+        // Poor conservation
+        energyBar.style.background = 'linear-gradient(90deg, #f44336, #ff5722)';
+    }
+}
+
+// Helper function is now imported from dynamics-animation.js
+// getDynamicsState is imported at the top
+
+// =====================================================
+// BUILD ADVANCED TAB
+// =====================================================
+
+// Graph product algorithms
+function computeCartesianProduct(adjA, adjB) {
+    // G □ H: vertices are pairs (i,j), edges when:
+    // - (i1,j) ~ (i2,j) if i1 ~ i2 in G (same j)
+    // - (i,j1) ~ (i,j2) if j1 ~ j2 in H (same i)
+    // Eigenvalues: λᵢ(G) + μⱼ(H)
+    const nA = adjA.length;
+    const nB = adjB.length;
+    const n = nA * nB;
+    
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    for (let i1 = 0; i1 < nA; i1++) {
+        for (let j = 0; j < nB; j++) {
+            const v1 = i1 * nB + j;
+            
+            // Edges from G (vary i, fix j)
+            for (let i2 = 0; i2 < nA; i2++) {
+                if (adjA[i1][i2] !== 0) {
+                    const v2 = i2 * nB + j;
+                    adj[v1][v2] = adjA[i1][i2];
+                }
+            }
+            
+            // Edges from H (fix i, vary j)
+            for (let j2 = 0; j2 < nB; j2++) {
+                if (adjB[j][j2] !== 0) {
+                    const v2 = i1 * nB + j2;
+                    adj[v1][v2] = adjB[j][j2];
+                }
+            }
+        }
+    }
+    
+    return adj;
+}
+
+function computeTensorProduct(adjA, adjB) {
+    // G ⊗ H: vertices are pairs (i,j), edges when:
+    // - (i1,j1) ~ (i2,j2) if i1 ~ i2 in G AND j1 ~ j2 in H
+    // Eigenvalues: λᵢ(G) · μⱼ(H)
+    const nA = adjA.length;
+    const nB = adjB.length;
+    const n = nA * nB;
+    
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    for (let i1 = 0; i1 < nA; i1++) {
+        for (let j1 = 0; j1 < nB; j1++) {
+            const v1 = i1 * nB + j1;
+            
+            for (let i2 = 0; i2 < nA; i2++) {
+                for (let j2 = 0; j2 < nB; j2++) {
+                    if (adjA[i1][i2] !== 0 && adjB[j1][j2] !== 0) {
+                        const v2 = i2 * nB + j2;
+                        // Use product of edge weights
+                        adj[v1][v2] = adjA[i1][i2] * adjB[j1][j2];
+                    }
+                }
+            }
+        }
+    }
+    
+    return adj;
+}
+
+function computeStrongProduct(adjA, adjB) {
+    // G ⊠ H = G □ H ∪ G ⊗ H
+    // Eigenvalues: (1+λᵢ)(1+μⱼ) - 1 = λᵢ + μⱼ + λᵢμⱼ
+    const nA = adjA.length;
+    const nB = adjB.length;
+    const n = nA * nB;
+    
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    for (let i1 = 0; i1 < nA; i1++) {
+        for (let j1 = 0; j1 < nB; j1++) {
+            const v1 = i1 * nB + j1;
+            
+            for (let i2 = 0; i2 < nA; i2++) {
+                for (let j2 = 0; j2 < nB; j2++) {
+                    if (i1 === i2 && j1 === j2) continue;
+                    
+                    const v2 = i2 * nB + j2;
+                    const edgeG = adjA[i1][i2] !== 0;
+                    const edgeH = adjB[j1][j2] !== 0;
+                    const sameI = i1 === i2;
+                    const sameJ = j1 === j2;
+                    
+                    // Strong product: edge if (edgeG AND sameJ) OR (sameI AND edgeH) OR (edgeG AND edgeH)
+                    if ((edgeG && sameJ) || (sameI && edgeH) || (edgeG && edgeH)) {
+                        adj[v1][v2] = 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Make skew-symmetric
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            if (adj[i][j] !== 0 || adj[j][i] !== 0) {
+                adj[i][j] = 1;
+                adj[j][i] = -1;
+            }
+        }
+    }
+    
+    return adj;
+}
+
+// Generate base graph adjacency matrices (skew-symmetric)
+function generateBaseGraph(type, n) {
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    switch (type) {
+        case 'path':
+            for (let i = 0; i < n - 1; i++) {
+                adj[i][i + 1] = 1;
+                adj[i + 1][i] = -1;
+            }
+            break;
+            
+        case 'cycle':
+            for (let i = 0; i < n; i++) {
+                const next = (i + 1) % n;
+                adj[i][next] = 1;
+                adj[next][i] = -1;
+            }
+            break;
+            
+        case 'star':
+            for (let i = 1; i < n; i++) {
+                adj[0][i] = 1;
+                adj[i][0] = -1;
+            }
+            break;
+            
+        case 'complete':
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    adj[i][j] = 1;
+                    adj[j][i] = -1;
+                }
+            }
+            break;
+    }
+    
+    return adj;
+}
+
+// Parameterized family builders
+function buildSTree(d, p) {
+    // S^d_p tree: depth d, p branches at center
+    // N = d*p + 1 vertices
+    const n = d * p + 1;
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    // Vertex 0 is center, connects to p vertices at level 1
+    // Each level-k vertex connects to one vertex at level k+1
+    let vertexIndex = 1;
+    
+    // Create p branches
+    for (let branch = 0; branch < p; branch++) {
+        let parent = 0;
+        for (let level = 1; level <= d; level++) {
+            adj[parent][vertexIndex] = 1;
+            adj[vertexIndex][parent] = -1;
+            parent = vertexIndex;
+            vertexIndex++;
+        }
+    }
+    
+    return { adj, n, name: `S${superscript(d)}${subscript(p)} Tree` };
+}
+
+function buildCirculant(n, steps) {
+    // C(n, S): vertex i connects to i±s (mod n) for each s in S
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    for (let i = 0; i < n; i++) {
+        for (const s of steps) {
+            const j = (i + s) % n;
+            if (adj[i][j] === 0 && adj[j][i] === 0) {
+                adj[i][j] = 1;
+                adj[j][i] = -1;
+            }
+        }
+    }
+    
+    return { adj, n, name: `Circulant C(${n}, {${steps.join(',')}})` };
+}
+
+function buildGeneralizedPetersen(n, k) {
+    // GP(n,k): outer cycle + inner star polygon + connections
+    // 2n vertices: 0..n-1 (outer), n..2n-1 (inner)
+    const totalN = 2 * n;
+    const adj = Array(totalN).fill(null).map(() => Array(totalN).fill(0));
+    
+    // Outer cycle
+    for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        adj[i][next] = 1;
+        adj[next][i] = -1;
+    }
+    
+    // Inner star polygon (step k)
+    for (let i = 0; i < n; i++) {
+        const inner_i = n + i;
+        const inner_j = n + ((i + k) % n);
+        if (adj[inner_i][inner_j] === 0 && adj[inner_j][inner_i] === 0) {
+            adj[inner_i][inner_j] = 1;
+            adj[inner_j][inner_i] = -1;
+        }
+    }
+    
+    // Spokes connecting outer to inner
+    for (let i = 0; i < n; i++) {
+        adj[i][n + i] = 1;
+        adj[n + i][i] = -1;
+    }
+    
+    return { adj, n: totalN, name: `GP(${n},${k})` };
+}
+
+function buildPrism(m) {
+    // Prism Y_m = C_m □ P_2
+    const adj = Array(2 * m).fill(null).map(() => Array(2 * m).fill(0));
+    
+    // Two cycles
+    for (let i = 0; i < m; i++) {
+        const next = (i + 1) % m;
+        // Bottom cycle
+        adj[i][next] = 1;
+        adj[next][i] = -1;
+        // Top cycle
+        adj[m + i][m + next] = 1;
+        adj[m + next][m + i] = -1;
+    }
+    
+    // Vertical edges
+    for (let i = 0; i < m; i++) {
+        adj[i][m + i] = 1;
+        adj[m + i][i] = -1;
+    }
+    
+    return { adj, n: 2 * m, name: `Prism Y${subscript(m)}` };
+}
+
+function buildAntiprism(m) {
+    // Antiprism: two m-cycles with alternating triangular faces
+    const adj = Array(2 * m).fill(null).map(() => Array(2 * m).fill(0));
+    
+    // Two cycles
+    for (let i = 0; i < m; i++) {
+        const next = (i + 1) % m;
+        adj[i][next] = 1;
+        adj[next][i] = -1;
+        adj[m + i][m + next] = 1;
+        adj[m + next][m + i] = -1;
+    }
+    
+    // Cross edges (each top vertex connects to two bottom vertices)
+    for (let i = 0; i < m; i++) {
+        // Connect top[i] to bottom[i] and bottom[(i+1) mod m]
+        adj[i][m + i] = 1;
+        adj[m + i][i] = -1;
+        const next = (i + 1) % m;
+        adj[i][m + next] = 1;
+        adj[m + next][i] = -1;
+    }
+    
+    return { adj, n: 2 * m, name: `Antiprism A${subscript(m)}` };
+}
+
+function buildMobiusLadder(n) {
+    // Möbius ladder M_{2n}: cycle with antipodal chords
+    // Actually M_n has n vertices
+    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    // Cycle
+    for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        adj[i][next] = 1;
+        adj[next][i] = -1;
+    }
+    
+    // Antipodal chords (connect i to i + n/2)
+    const half = Math.floor(n / 2);
+    for (let i = 0; i < half; i++) {
+        const j = i + half;
+        adj[i][j] = 1;
+        adj[j][i] = -1;
+    }
+    
+    return { adj, n, name: `Möbius M${subscript(n)}` };
+}
+
+// Helper for superscript/subscript
+function superscript(n) {
+    const sups = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+    return String(n).split('').map(d => sups[parseInt(d)]).join('');
+}
+
+function subscript(n) {
+    const subs = '₀₁₂₃₄₅₆₇₈₉';
+    return String(n).split('').map(d => subs[parseInt(d)]).join('');
+}
+
+// Add a vertex at position (x, y, z)
+function addVertex(x, y, z) {
+    const position = new THREE.Vector3(x, y, z);
+    const index = state.vertexMeshes.length;
+    return createVertex(position, index);
+}
+
+// Apply built graph to the visualization
+function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
+    const n = adjMatrix.length;
+    
+    // Clear current graph
+    clearGraph();
+    
+    // Generate vertices in appropriate layout
+    const radius = 40;
+    
+    if (layoutType === 'grid' && Math.sqrt(n) === Math.floor(Math.sqrt(n))) {
+        // Square grid layout
+        const side = Math.floor(Math.sqrt(n));
+        const spacing = radius * 2 / (side - 1);
+        for (let i = 0; i < n; i++) {
+            const row = Math.floor(i / side);
+            const col = i % side;
+            const x = (col - (side - 1) / 2) * spacing;
+            const z = (row - (side - 1) / 2) * spacing;
+            addVertex(x, 0, z);
+        }
+    } else if (layoutType === 'bipartite') {
+        // Two-row layout for product graphs
+        const half = Math.floor(n / 2);
+        for (let i = 0; i < n; i++) {
+            const angle = (i % half) / half * Math.PI - Math.PI / 2;
+            const r = (i < half) ? radius : radius * 0.6;
+            const y = (i < half) ? 10 : -10;
+            addVertex(r * Math.cos(angle), y, r * Math.sin(angle));
+        }
+    } else {
+        // Circle layout (default)
+        for (let i = 0; i < n; i++) {
+            const angle = (2 * Math.PI * i) / n;
+            addVertex(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+        }
+    }
+    
+    // Initialize adjacency matrices BEFORE adding edges
+    state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    // Copy the adjacency matrix and create visual edges
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            state.adjacencyMatrix[i][j] = adjMatrix[i][j];
+            state.symmetricAdjMatrix[i][j] = Math.abs(adjMatrix[i][j]);
+        }
+    }
+    
+    // Create visual edges from adjacency matrix
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            if (adjMatrix[i][j] !== 0 || adjMatrix[j][i] !== 0) {
+                // Create the arrow visual directly
+                const fromPos = state.vertexMeshes[i].position;
+                const toPos = state.vertexMeshes[j].position;
+                
+                const direction = new THREE.Vector3().subVectors(toPos, fromPos);
+                const length = direction.length();
+                direction.normalize();
+                
+                const arrowStart = fromPos.clone().add(direction.clone().multiplyScalar(VERTEX_RADIUS));
+                const arrowLength = length - 2 * VERTEX_RADIUS - 1;
+                
+                if (arrowLength > 0) {
+                    const arrow = new THREE.ArrowHelper(
+                        direction,
+                        arrowStart,
+                        arrowLength,
+                        0xff4444,
+                        Math.min(arrowLength * 0.3, 4),
+                        Math.min(arrowLength * 0.15, 2)
+                    );
+                    state.graphGroup.add(arrow);
+                    state.edgeObjects.push({ from: i, to: j, arrow });
+                }
+            }
+        }
+    }
+    
+    updateStats();
+    console.log(`Built: ${name} with ${n} vertices, ${state.edgeObjects.length} edges`);
+}
+
+// Setup Advanced Build tab event listeners
+function setupAdvancedBuildTab() {
+    // Product graph controls
+    const productGraphA = document.getElementById('product-graph-a');
+    const productNA = document.getElementById('product-n-a');
+    const productNARow = document.getElementById('product-n-a-row');
+    const productType = document.getElementById('product-type');
+    const productGraphB = document.getElementById('product-graph-b');
+    const productNB = document.getElementById('product-n-b');
+    const productNBRow = document.getElementById('product-n-b-row');
+    const productResultName = document.getElementById('product-result-name');
+    const productResultVertices = document.getElementById('product-result-vertices');
+    const productResultFormula = document.getElementById('product-result-formula');
+    const buildProductBtn = document.getElementById('build-product-btn');
+    
+    // Show/hide n parameter rows based on selection
+    function updateProductParamVisibility() {
+        const typeA = productGraphA ? productGraphA.value : 'current';
+        const typeB = productGraphB ? productGraphB.value : 'path';
+        
+        if (productNARow) {
+            productNARow.style.display = (typeA === 'current') ? 'none' : 'flex';
+        }
+        if (productNBRow) {
+            productNBRow.style.display = (typeB === 'current') ? 'none' : 'flex';
+        }
+    }
+    
+    // Update preview when parameters change
+    function updateProductPreview() {
+        if (!productGraphA || !productGraphB) return;
+        
+        updateProductParamVisibility();
+        
+        const typeA = productGraphA.value;
+        const nA = typeA === 'current' ? state.vertexMeshes.length : (parseInt(productNA.value) || 4);
+        const typeB = productGraphB.value;
+        const nB = typeB === 'current' ? state.vertexMeshes.length : (parseInt(productNB.value) || 3);
+        const prodType = productType.value;
+        
+        const nameA = typeA === 'current' ? `G(${nA})` : `${typeA.charAt(0).toUpperCase()}${subscript(nA)}`;
+        const nameB = typeB === 'current' ? `G(${nB})` : `${typeB.charAt(0).toUpperCase()}${subscript(nB)}`;
+        const symbol = prodType === 'cartesian' ? '□' : prodType === 'tensor' ? '⊗' : '⊠';
+        
+        // Can't use current graph for both A and B
+        if (typeA === 'current' && typeB === 'current') {
+            if (productResultName) productResultName.textContent = '⚠️ Cannot use current for both A and B';
+            if (productResultVertices) productResultVertices.textContent = '';
+            if (productResultFormula) productResultFormula.textContent = '';
+            return;
+        }
+        
+        const totalN = nA * nB;
+        
+        if (productResultName) {
+            let resultName = `${nameA} ${symbol} ${nameB}`;
+            // Special names for common products
+            if (typeA === 'current' && typeB === 'path' && prodType === 'cartesian') {
+                resultName += ` = Extrusion`;
+            } else if (typeA === 'cycle' && typeB === 'path' && prodType === 'cartesian') {
+                resultName += ` = Cylinder`;
+            } else if (typeA === 'path' && typeB === 'path' && prodType === 'cartesian') {
+                resultName += ` = Grid ${nA}×${nB}`;
+            } else if (typeA === 'cycle' && typeB === 'cycle' && prodType === 'cartesian') {
+                resultName += ` = Torus`;
+            }
+            productResultName.textContent = resultName;
+        }
+        
+        if (productResultVertices) {
+            if (typeA === 'current' && nA < 2) {
+                productResultVertices.textContent = 'Build a graph first';
+            } else {
+                productResultVertices.textContent = `Vertices: ${totalN}`;
+            }
+        }
+        
+        if (productResultFormula) {
+            if (prodType === 'cartesian') {
+                productResultFormula.textContent = 'λᵢⱼ = λᵢ(A) + μⱼ(B)';
+            } else if (prodType === 'tensor') {
+                productResultFormula.textContent = 'λᵢⱼ = λᵢ(A) · μⱼ(B)';
+            } else {
+                productResultFormula.textContent = 'λᵢⱼ = (1+λᵢ)(1+μⱼ) - 1';
+            }
+        }
+    }
+    
+    if (productGraphA) productGraphA.addEventListener('change', updateProductPreview);
+    if (productNA) productNA.addEventListener('input', updateProductPreview);
+    if (productType) productType.addEventListener('change', updateProductPreview);
+    if (productGraphB) productGraphB.addEventListener('change', updateProductPreview);
+    if (productNB) productNB.addEventListener('input', updateProductPreview);
+    
+    // Build product graph
+    if (buildProductBtn) {
+        buildProductBtn.addEventListener('click', () => {
+            const typeA = productGraphA.value;
+            const nA = parseInt(productNA.value) || 4;
+            const typeB = productGraphB.value;
+            const nB = parseInt(productNB.value) || 3;
+            const prodType = productType.value;
+            
+            // Can't use current for both
+            if (typeA === 'current' && typeB === 'current') {
+                alert('Cannot use Current Graph for both A and B');
+                return;
+            }
+            
+            let adjA, adjB;
+            let actualNA, actualNB;
+            
+            if (typeA === 'current') {
+                adjA = state.adjacencyMatrix;
+                if (!adjA || adjA.length < 2) {
+                    alert('Build a graph first to use as Graph A');
+                    return;
+                }
+                actualNA = adjA.length;
+            } else {
+                adjA = generateBaseGraph(typeA, nA);
+                actualNA = nA;
+            }
+            
+            if (typeB === 'current') {
+                adjB = state.adjacencyMatrix;
+                if (!adjB || adjB.length < 2) {
+                    alert('Build a graph first to use as Graph B');
+                    return;
+                }
+                actualNB = adjB.length;
+            } else {
+                adjB = generateBaseGraph(typeB, nB);
+                actualNB = nB;
+            }
+            
+            let productAdj;
+            if (prodType === 'cartesian') {
+                productAdj = computeCartesianProduct(adjA, adjB);
+            } else if (prodType === 'tensor') {
+                productAdj = computeTensorProduct(adjA, adjB);
+            } else {
+                productAdj = computeStrongProduct(adjA, adjB);
+            }
+            
+            const symbol = prodType === 'cartesian' ? '□' : prodType === 'tensor' ? '⊗' : '⊠';
+            const nameA = typeA === 'current' ? `G${subscript(actualNA)}` : `${typeA.charAt(0).toUpperCase()}${subscript(actualNA)}`;
+            const nameB = typeB === 'current' ? `G${subscript(actualNB)}` : `${typeB.charAt(0).toUpperCase()}${subscript(actualNB)}`;
+            
+            applyBuiltGraph(productAdj, `${nameA} ${symbol} ${nameB}`);
+        });
+    }
+    
+    // Parameterized families
+    const paramFamily = document.getElementById('param-family');
+    const buildFamilyBtn = document.getElementById('build-family-btn');
+    
+    // S-tree parameters
+    const streeD = document.getElementById('stree-d');
+    const streeP = document.getElementById('stree-p');
+    const streeDLabel = document.getElementById('stree-d-label');
+    const streePLabel = document.getElementById('stree-p-label');
+    const streeVertices = document.getElementById('stree-vertices');
+    const streeFormula = document.getElementById('stree-formula');
+    
+    // Circulant parameters
+    const circulantN = document.getElementById('circulant-n');
+    const circulantSteps = document.getElementById('circulant-steps');
+    const circulantInfo = document.getElementById('circulant-info');
+    
+    // GP parameters
+    const gpN = document.getElementById('gp-n');
+    const gpK = document.getElementById('gp-k');
+    const gpInfo = document.getElementById('gp-info');
+    
+    // Prism parameters
+    const prismM = document.getElementById('prism-m');
+    const prismInfo = document.getElementById('prism-info');
+    
+    // Show/hide parameter groups
+    function updateParamVisibility() {
+        const family = paramFamily ? paramFamily.value : 's-tree';
+        
+        document.getElementById('params-s-tree').style.display = family === 's-tree' ? 'block' : 'none';
+        document.getElementById('params-circulant').style.display = family === 'circulant' ? 'block' : 'none';
+        document.getElementById('params-gp').style.display = family === 'gp' ? 'block' : 'none';
+        
+        const prismParams = document.getElementById('params-prism');
+        if (prismParams) {
+            prismParams.style.display = (family === 'prism' || family === 'antiprism' || family === 'mobius') ? 'block' : 'none';
+        }
+    }
+    
+    if (paramFamily) paramFamily.addEventListener('change', updateParamVisibility);
+    
+    // Update S-tree info
+    function updateStreeInfo() {
+        const d = parseInt(streeD?.value) || 2;
+        const p = parseInt(streeP?.value) || 4;
+        
+        if (streeDLabel) streeDLabel.textContent = d;
+        if (streePLabel) streePLabel.textContent = p;
+        if (streeVertices) streeVertices.textContent = `N = d·p + 1 = ${d * p + 1}`;
+        
+        if (streeFormula) {
+            if (d === 2) {
+                streeFormula.textContent = `λ = ±√(${p}+1) = ±${Math.sqrt(p+1).toFixed(3)}, ±1 (×${p-1}), 0`;
+            } else {
+                streeFormula.textContent = `Eigenvalues from ${d}×${d} tridiagonal matrix`;
+            }
+        }
+    }
+    
+    if (streeD) streeD.addEventListener('input', updateStreeInfo);
+    if (streeP) streeP.addEventListener('input', updateStreeInfo);
+    
+    // Update Circulant info
+    function updateCirculantInfo() {
+        const n = parseInt(circulantN?.value) || 8;
+        const stepsStr = circulantSteps?.value || '1,2';
+        const steps = stepsStr.split(',').map(s => parseInt(s.trim())).filter(s => !isNaN(s) && s > 0);
+        
+        let degree = 0;
+        for (const s of steps) {
+            degree += (s === n / 2) ? 1 : 2;
+        }
+        
+        if (circulantInfo) {
+            circulantInfo.textContent = `C(${n}, {${steps.join(',')}): ${n} vertices, ${degree}-regular`;
+        }
+    }
+    
+    if (circulantN) circulantN.addEventListener('input', updateCirculantInfo);
+    if (circulantSteps) circulantSteps.addEventListener('input', updateCirculantInfo);
+    
+    // Update GP info
+    function updateGPInfo() {
+        const n = parseInt(gpN?.value) || 5;
+        const k = parseInt(gpK?.value) || 2;
+        
+        if (gpInfo) {
+            let name = `GP(${n},${k})`;
+            if (n === 5 && k === 2) name += ' = Petersen';
+            else if (n === 4 && k === 1) name += ' = Cube Q₃';
+            gpInfo.textContent = `${name}: ${2*n} vertices`;
+        }
+    }
+    
+    if (gpN) gpN.addEventListener('input', updateGPInfo);
+    if (gpK) gpK.addEventListener('input', updateGPInfo);
+    
+    // Update Prism info
+    function updatePrismInfo() {
+        const m = parseInt(prismM?.value) || 5;
+        const family = paramFamily?.value || 'prism';
+        
+        if (prismInfo) {
+            if (family === 'prism') {
+                prismInfo.textContent = `Prism Y${subscript(m)}: ${2*m} vertices`;
+            } else if (family === 'antiprism') {
+                prismInfo.textContent = `Antiprism A${subscript(m)}: ${2*m} vertices`;
+            } else if (family === 'mobius') {
+                prismInfo.textContent = `Möbius M${subscript(m)}: ${m} vertices`;
+            }
+        }
+    }
+    
+    if (prismM) prismM.addEventListener('input', updatePrismInfo);
+    if (paramFamily) paramFamily.addEventListener('change', updatePrismInfo);
+    
+    // Build parameterized family
+    if (buildFamilyBtn) {
+        buildFamilyBtn.addEventListener('click', () => {
+            const family = paramFamily?.value || 's-tree';
+            let result;
+            
+            switch (family) {
+                case 's-tree':
+                    const d = parseInt(streeD?.value) || 2;
+                    const p = parseInt(streeP?.value) || 4;
+                    result = buildSTree(d, p);
+                    break;
+                    
+                case 'circulant':
+                    const n = parseInt(circulantN?.value) || 8;
+                    const stepsStr = circulantSteps?.value || '1,2';
+                    const steps = stepsStr.split(',').map(s => parseInt(s.trim())).filter(s => !isNaN(s) && s > 0);
+                    result = buildCirculant(n, steps);
+                    break;
+                    
+                case 'gp':
+                    const gpn = parseInt(gpN?.value) || 5;
+                    const gpk = parseInt(gpK?.value) || 2;
+                    result = buildGeneralizedPetersen(gpn, gpk);
+                    break;
+                    
+                case 'prism':
+                    const prism_m = parseInt(prismM?.value) || 5;
+                    result = buildPrism(prism_m);
+                    break;
+                    
+                case 'antiprism':
+                    const anti_m = parseInt(prismM?.value) || 5;
+                    result = buildAntiprism(anti_m);
+                    break;
+                    
+                case 'mobius':
+                    const mob_m = parseInt(prismM?.value) || 8;
+                    result = buildMobiusLadder(mob_m);
+                    break;
+                    
+                default:
+                    console.error('Unknown family:', family);
+                    return;
+            }
+            
+            if (result && result.adj) {
+                applyBuiltGraph(result.adj, result.name);
+            }
+        });
+    }
+    
+    // Initialize
+    updateProductPreview();
+    updateParamVisibility();
+    updateStreeInfo();
+    updateCirculantInfo();
+    updateGPInfo();
+    updatePrismInfo();
+}
+
+// =====================================================
+// COPY TO CLIPBOARD FUNCTIONALITY
+// =====================================================
+
+function setupCopyButtons() {
+    // Helper to copy text and show feedback
+    function copyToClipboard(text, button) {
+        navigator.clipboard.writeText(text).then(() => {
+            const originalText = button.textContent;
+            button.textContent = '✓';
+            button.classList.add('copied');
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.classList.remove('copied');
+            }, 1500);
+        }).catch(err => {
+            console.error('Copy failed:', err);
+            alert('Copy failed. Please select and copy manually.');
+        });
+    }
+    
+    // Copy Symmetric Eigenvalues
+    const copySymEigBtn = document.getElementById('copy-sym-eig-btn');
+    if (copySymEigBtn) {
+        copySymEigBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const formula = document.getElementById('analytic-formula-display')?.textContent || '';
+            const numerical = document.getElementById('eigenvalues-display')?.textContent || '';
+            const text = `Symmetric Eigenvalues\n${'='.repeat(40)}\nFormula: ${formula}\n\nNumerical Values:\n${numerical}`;
+            copyToClipboard(text, copySymEigBtn);
+        });
+    }
+    
+    // Copy Skew-Symmetric Eigenvalues
+    const copySkewEigBtn = document.getElementById('copy-skew-eig-btn');
+    if (copySkewEigBtn) {
+        copySkewEigBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const formula = document.getElementById('skew-analytic-formula-display')?.textContent || '';
+            const numerical = document.getElementById('skew-eigenvalues-display')?.textContent || '';
+            const text = `Skew-Symmetric Eigenvalues\n${'='.repeat(40)}\nFormula: ${formula}\n\nNumerical Values:\n${numerical}`;
+            copyToClipboard(text, copySkewEigBtn);
+        });
+    }
+    
+    // Copy Characteristic Polynomial
+    const copyCharPolyBtn = document.getElementById('copy-charpoly-btn');
+    if (copyCharPolyBtn) {
+        copyCharPolyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const poly = document.getElementById('char-polynomial-display')?.textContent || '';
+            copyToClipboard(`Characteristic Polynomial:\n${poly}`, copyCharPolyBtn);
+        });
+    }
+    
+    // Copy Skew-Symmetric Matrix
+    const copySkewMatrixBtn = document.getElementById('copy-skew-matrix-btn');
+    if (copySkewMatrixBtn) {
+        copySkewMatrixBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const n = state.adjacencyMatrix.length;
+            if (n === 0) {
+                alert('No graph to copy');
+                return;
+            }
+            // Format as space-separated values
+            let text = `Skew-Symmetric Adjacency Matrix (${n}×${n}):\n`;
+            for (let i = 0; i < n; i++) {
+                text += state.adjacencyMatrix[i].map(v => v >= 0 ? ` ${v}` : `${v}`).join(' ') + '\n';
+            }
+            copyToClipboard(text, copySkewMatrixBtn);
+        });
+    }
+    
+    // Copy Symmetric Matrix
+    const copySymMatrixBtn = document.getElementById('copy-sym-matrix-btn');
+    if (copySymMatrixBtn) {
+        copySymMatrixBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const n = state.symmetricAdjMatrix.length;
+            if (n === 0) {
+                alert('No graph to copy');
+                return;
+            }
+            // Format as space-separated values
+            let text = `Symmetric Adjacency Matrix (${n}×${n}):\n`;
+            for (let i = 0; i < n; i++) {
+                text += state.symmetricAdjMatrix[i].join(' ') + '\n';
+            }
+            copyToClipboard(text, copySymMatrixBtn);
+        });
+    }
+}
+
+// =====================================================
+// KEYBOARD SHORTCUTS
+// =====================================================
+
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        // Ignore if typing in an input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+            return;
+        }
+        
+        switch (e.key.toLowerCase()) {
+            case 'f':
+                // Fit graph to view
+                fitGraphToView();
+                break;
+            case 'escape':
+                // Deselect current vertex
+                if (state.selectedVertex !== null) {
+                    setVertexMaterial(state.vertexMeshes[state.selectedVertex], 'default');
+                    state.selectedVertex = null;
+                }
+                break;
+        }
+    });
+}
+
+// Fit graph to view - adjusts camera to show all vertices
+function fitGraphToView() {
+    if (state.vertexMeshes.length === 0) return;
+    
+    // Calculate bounding box of all vertices
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    for (const mesh of state.vertexMeshes) {
+        const pos = mesh.position;
+        minX = Math.min(minX, pos.x);
+        maxX = Math.max(maxX, pos.x);
+        minY = Math.min(minY, pos.y);
+        maxY = Math.max(maxY, pos.y);
+        minZ = Math.min(minZ, pos.z);
+        maxZ = Math.max(maxZ, pos.z);
+    }
+    
+    // Calculate center and size
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    
+    const sizeX = maxX - minX;
+    const sizeY = maxY - minY;
+    const sizeZ = maxZ - minZ;
+    const maxSize = Math.max(sizeX, sizeY, sizeZ, 20); // Minimum size of 20
+    
+    // Position camera to see the whole graph
+    const distance = maxSize * 1.8;
+    
+    // Set camera position (looking from front-top-right)
+    camera.position.set(
+        centerX + distance * 0.3,
+        centerY + distance * 0.5,
+        centerZ + distance
+    );
+    
+    // Point camera at center
+    controls.target.set(centerX, centerY, centerZ);
+    controls.update();
+    
+    console.log(`Fit to view: center=(${centerX.toFixed(1)}, ${centerY.toFixed(1)}, ${centerZ.toFixed(1)}), size=${maxSize.toFixed(1)}`);
+}
+
+// =====================================================
+// AUTO-START
+// =====================================================
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}

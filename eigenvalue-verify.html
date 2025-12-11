@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Eigenvalue Verification Test</title>
+    <style>
+        body {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { color: #4a9eff; }
+        h2 { color: #4CAF50; margin-top: 30px; }
+        .test-case {
+            background: #0a0a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .test-case.pass { border-color: #4CAF50; }
+        .test-case.fail { border-color: #f44336; }
+        .test-title {
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        .formula {
+            background: #1a1a3a;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: 'Consolas', monospace;
+            margin: 5px 0;
+        }
+        .eigenvalues {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .eig-value {
+            background: #2a2a4a;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .eig-value.match { background: #1a4a1a; }
+        .eig-value.mismatch { background: #4a1a1a; }
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 10px;
+        }
+        .col-header {
+            font-weight: bold;
+            color: #4a9eff;
+            margin-bottom: 5px;
+        }
+        .status {
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .status.pass { color: #4CAF50; }
+        .status.fail { color: #f44336; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th { color: #4a9eff; }
+        .error { color: #ff9800; font-size: 12px; }
+        #summary {
+            background: #0a0a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔬 Eigenvalue Verification Test</h1>
+    <p>Comparing numerical eigenvalues against known analytic formulas for standard graph families.</p>
+    
+    <div id="results"></div>
+    <div id="summary"></div>
+
+    <script type="module">
+        import { computeSkewSymmetricEigenvalues } from './spectral-analysis.js';
+        
+        const results = document.getElementById('results');
+        const summary = document.getElementById('summary');
+        
+        let totalTests = 0;
+        let passedTests = 0;
+        
+        // Helper: Create skew-symmetric adjacency matrix for cycle C_n
+        function createCycleMatrix(n) {
+            const A = Array(n).fill(null).map(() => Array(n).fill(0));
+            for (let i = 0; i < n; i++) {
+                const next = (i + 1) % n;
+                A[i][next] = 1;
+                A[next][i] = -1;
+            }
+            return A;
+        }
+        
+        // Helper: Create skew-symmetric adjacency matrix for path P_n
+        function createPathMatrix(n) {
+            const A = Array(n).fill(null).map(() => Array(n).fill(0));
+            for (let i = 0; i < n - 1; i++) {
+                A[i][i + 1] = 1;
+                A[i + 1][i] = -1;
+            }
+            return A;
+        }
+        
+        // Helper: Create skew-symmetric adjacency matrix for star S_n (n leaves + 1 center)
+        function createStarMatrix(n) {
+            const total = n + 1;  // center + n leaves
+            const A = Array(total).fill(null).map(() => Array(total).fill(0));
+            // Center is node 0, leaves are 1 to n
+            for (let i = 1; i <= n; i++) {
+                A[0][i] = 1;
+                A[i][0] = -1;
+            }
+            return A;
+        }
+        
+        // Helper: Create complete graph K_n (skew-symmetric tournament)
+        function createCompleteMatrix(n) {
+            const A = Array(n).fill(null).map(() => Array(n).fill(0));
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    A[i][j] = 1;
+                    A[j][i] = -1;
+                }
+            }
+            return A;
+        }
+        
+        // Analytic eigenvalues for Cycle C_n (skew-symmetric)
+        function analyticCycleEigenvalues(n) {
+            const eigs = [];
+            for (let k = 0; k < n; k++) {
+                const imag = 2 * Math.sin(2 * Math.PI * k / n);
+                eigs.push(imag);
+            }
+            return eigs.sort((a, b) => b - a);
+        }
+        
+        // Analytic eigenvalues for Path P_n (skew-symmetric)
+        // For path, eigenvalues of B*B^T give us the squared values
+        // Actually for skew-symmetric path: λ = ±i * 2cos(kπ/(n+1)), k=1,...,n
+        function analyticPathEigenvalues(n) {
+            const eigs = [];
+            for (let k = 1; k <= n; k++) {
+                const imag = 2 * Math.cos(k * Math.PI / (n + 1));
+                eigs.push(imag);
+                eigs.push(-imag);
+            }
+            // Remove duplicates and sort
+            const unique = [...new Set(eigs.map(e => e.toFixed(8)))].map(parseFloat);
+            return unique.sort((a, b) => b - a);
+        }
+        
+        // Analytic eigenvalues for Star S_n (center + n leaves)
+        // λ = ±i√n, plus (n-1) zeros
+        function analyticStarEigenvalues(n) {
+            const sqrtN = Math.sqrt(n);
+            const eigs = [sqrtN, -sqrtN];
+            for (let i = 0; i < n - 1; i++) {
+                eigs.push(0);
+            }
+            return eigs.sort((a, b) => b - a);
+        }
+        
+        // Compare two sorted arrays of eigenvalues
+        function compareEigenvalues(computed, analytic, tolerance = 0.0001) {
+            if (computed.length !== analytic.length) {
+                return { match: false, errors: [`Length mismatch: ${computed.length} vs ${analytic.length}`] };
+            }
+            
+            const errors = [];
+            let allMatch = true;
+            
+            for (let i = 0; i < computed.length; i++) {
+                const diff = Math.abs(computed[i] - analytic[i]);
+                if (diff > tolerance) {
+                    allMatch = false;
+                    errors.push(`Index ${i}: computed=${computed[i].toFixed(6)}, analytic=${analytic[i].toFixed(6)}, diff=${diff.toFixed(6)}`);
+                }
+            }
+            
+            return { match: allMatch, errors };
+        }
+        
+        // Run a single test
+        function runTest(name, matrix, analyticEigs, formula) {
+            totalTests++;
+            
+            const numericalResult = computeSkewSymmetricEigenvalues(matrix);
+            const numericalEigs = numericalResult.map(e => e.imag).sort((a, b) => b - a);
+            
+            const comparison = compareEigenvalues(numericalEigs, analyticEigs);
+            
+            if (comparison.match) passedTests++;
+            
+            const div = document.createElement('div');
+            div.className = `test-case ${comparison.match ? 'pass' : 'fail'}`;
+            
+            div.innerHTML = `
+                <div class="test-title">${name}</div>
+                <div class="formula">Formula: ${formula}</div>
+                <div class="comparison">
+                    <div>
+                        <div class="col-header">Numerical (computed)</div>
+                        <div class="eigenvalues">
+                            ${numericalEigs.map((e, i) => {
+                                const match = Math.abs(e - analyticEigs[i]) < 0.0001;
+                                return `<span class="eig-value ${match ? 'match' : 'mismatch'}">${e.toFixed(6)}</span>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                    <div>
+                        <div class="col-header">Analytic (expected)</div>
+                        <div class="eigenvalues">
+                            ${analyticEigs.map(e => `<span class="eig-value">${e.toFixed(6)}</span>`).join('')}
+                        </div>
+                    </div>
+                </div>
+                ${comparison.errors.length > 0 ? `<div class="error">Errors: ${comparison.errors.join(', ')}</div>` : ''}
+                <div class="status ${comparison.match ? 'pass' : 'fail'}">
+                    ${comparison.match ? '✓ PASS' : '✗ FAIL'}
+                </div>
+            `;
+            
+            results.appendChild(div);
+            
+            return comparison.match;
+        }
+        
+        // Run all tests
+        function runAllTests() {
+            results.innerHTML = '<h2>Cycle Graphs (C_n)</h2>';
+            
+            // Test cycles
+            for (const n of [4, 5, 6, 7, 8, 10, 12]) {
+                const matrix = createCycleMatrix(n);
+                const analytic = analyticCycleEigenvalues(n);
+                runTest(
+                    `Cycle C_${n} (${n} nodes)`,
+                    matrix,
+                    analytic,
+                    `λ = 2·sin(2πk/n), k = 0,1,...,${n-1}`
+                );
+            }
+            
+            results.innerHTML += '<h2>Path Graphs (P_n)</h2>';
+            
+            // Test paths
+            for (const n of [3, 4, 5, 6, 8]) {
+                const matrix = createPathMatrix(n);
+                const analytic = analyticPathEigenvalues(n);
+                runTest(
+                    `Path P_${n} (${n} nodes)`,
+                    matrix,
+                    analytic,
+                    `λ = ±2·cos(kπ/(n+1)), k = 1,...,${n}`
+                );
+            }
+            
+            results.innerHTML += '<h2>Star Graphs (S_n)</h2>';
+            
+            // Test stars (n leaves + 1 center = n+1 total nodes)
+            for (const n of [3, 4, 5, 6, 8]) {
+                const matrix = createStarMatrix(n);
+                const analytic = analyticStarEigenvalues(n);
+                runTest(
+                    `Star S_${n} (1 center + ${n} leaves = ${n+1} nodes)`,
+                    matrix,
+                    analytic,
+                    `λ = ±√${n} = ±${Math.sqrt(n).toFixed(4)}, plus ${n-1} zeros`
+                );
+            }
+            
+            // Summary
+            summary.innerHTML = `
+                <h2>Summary</h2>
+                <p style="font-size: 24px;">
+                    Tests passed: <span style="color: ${passedTests === totalTests ? '#4CAF50' : '#f44336'}">${passedTests}/${totalTests}</span>
+                </p>
+                <p>
+                    ${passedTests === totalTests 
+                        ? '✓ All eigenvalue calculations are correct!' 
+                        : '⚠ Some tests failed - check the calculations above.'}
+                </p>
+            `;
+        }
+        
+        // Run tests when page loads
+        runAllTests();
+    </script>
+</body>
+</html>
