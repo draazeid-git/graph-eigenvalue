@@ -204,6 +204,7 @@ export function init() {
     setupAdvancedBuildTab();
     setupCopyButtons();
     setupKeyboardShortcuts();
+    setupMobileToggle();
     
     // Generate initial graph
     generateGraph();
@@ -4760,6 +4761,57 @@ function fitGraphToView() {
     controls.update();
     
     console.log(`Fit to view: center=(${centerX.toFixed(1)}, ${centerY.toFixed(1)}, ${centerZ.toFixed(1)}), size=${maxSize.toFixed(1)}`);
+}
+
+// =====================================================
+// MOBILE MENU TOGGLE
+// =====================================================
+
+function setupMobileToggle() {
+    const toggleBtn = document.getElementById('mobile-menu-toggle');
+    const controlsPanel = document.getElementById('controls-panel');
+    
+    if (!toggleBtn || !controlsPanel) return;
+    
+    toggleBtn.addEventListener('click', () => {
+        const isOpen = controlsPanel.classList.toggle('mobile-visible');
+        toggleBtn.classList.toggle('menu-open', isOpen);
+        
+        // Update icon
+        const icon = toggleBtn.querySelector('.toggle-icon');
+        if (icon) {
+            icon.textContent = isOpen ? '✕' : '☰';
+        }
+    });
+    
+    // Close menu when clicking outside (on the overlay)
+    controlsPanel.addEventListener('click', (e) => {
+        // If clicking on the overlay area (pseudo-element creates this effect)
+        // Check if the click is outside the actual panel content
+        const rect = controlsPanel.getBoundingClientRect();
+        if (e.clientX < rect.left) {
+            controlsPanel.classList.remove('mobile-visible');
+            toggleBtn.classList.remove('menu-open');
+            const icon = toggleBtn.querySelector('.toggle-icon');
+            if (icon) icon.textContent = '☰';
+        }
+    });
+    
+    // Close menu when selecting a graph template on mobile
+    if (window.innerWidth <= 768) {
+        const templateSelect = document.getElementById('graph-template');
+        if (templateSelect) {
+            templateSelect.addEventListener('change', () => {
+                // Auto-close menu after selecting a template
+                setTimeout(() => {
+                    controlsPanel.classList.remove('mobile-visible');
+                    toggleBtn.classList.remove('menu-open');
+                    const icon = toggleBtn.querySelector('.toggle-icon');
+                    if (icon) icon.textContent = '☰';
+                }, 500);
+            });
+        }
+    }
 }
 
 // =====================================================

@@ -911,9 +911,79 @@ button.small {
    RESPONSIVE
    ===================================================== */
 
+/* =====================================================
+   MOBILE STYLES
+   ===================================================== */
+
+/* Mobile toggle button */
+#mobile-menu-toggle {
+    display: none;
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 1001;
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 24px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    transition: all 0.2s ease;
+}
+
+#mobile-menu-toggle:hover {
+    background: var(--bg-hover);
+}
+
+#mobile-menu-toggle:active {
+    transform: scale(0.95);
+}
+
+#mobile-menu-toggle .toggle-icon {
+    line-height: 1;
+}
+
 @media (max-width: 768px) {
+    /* Show toggle button on mobile */
+    #mobile-menu-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    /* Sidebar collapses off-screen by default on mobile */
     #controls-panel {
-        width: 260px;
+        position: fixed;
+        right: -320px;
+        width: 300px;
+        max-width: 85vw;
+        transition: right 0.3s ease;
+        z-index: 1000;
+    }
+    
+    /* Show sidebar when active */
+    #controls-panel.mobile-visible {
+        right: 0;
+    }
+    
+    /* Overlay when menu is open */
+    #controls-panel.mobile-visible::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 300px;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: -1;
+    }
+    
+    /* Update toggle icon when open */
+    #mobile-menu-toggle.menu-open .toggle-icon::before {
+        content: '✕';
     }
     
     .tab-label {
@@ -922,6 +992,29 @@ button.small {
     
     .tab-icon {
         font-size: 20px;
+    }
+    
+    /* Make container full width when sidebar hidden */
+    #container {
+        width: 100vw !important;
+    }
+    
+    /* Smaller fonts on mobile */
+    .control-group h4 {
+        font-size: 13px;
+    }
+    
+    .hint {
+        font-size: 10px;
+    }
+    
+    button, select, input {
+        font-size: 13px;
+    }
+    
+    /* Keyboard shortcuts hint */
+    .keyboard-hints {
+        display: none;
     }
 }
 
