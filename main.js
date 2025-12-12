@@ -632,8 +632,76 @@ function setupEventListeners() {
     });
     window.addEventListener('mouseup', onMouseUp);
     
+    // Touch events for mobile support
+    let touchStartTime = 0;
+    let touchStartPos = { x: 0, y: 0 };
+    let touchVertexHit = null;
+    
+    window.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            const touch = e.touches[0];
+            touchStartTime = Date.now();
+            touchStartPos = { x: touch.clientX, y: touch.clientY };
+            
+            // Check if touching a vertex
+            const touchEvent = createTouchEventWrapper(touch);
+            touchVertexHit = getIntersectedVertex(touchEvent);
+            
+            // If we hit a vertex, handle selection immediately for better responsiveness
+            if (touchVertexHit) {
+                onMouseDown(touchEvent);
+                // Temporarily disable OrbitControls to prevent interference
+                if (controls) controls.enabled = false;
+            }
+        }
+    }, { passive: false });
+    
+    window.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && touchVertexHit) {
+            const touch = e.touches[0];
+            const touchEvent = createTouchEventWrapper(touch);
+            onMouseMove(touchEvent);
+            e.preventDefault(); // Prevent scrolling when dragging vertex
+        }
+    }, { passive: false });
+    
+    window.addEventListener('touchend', (e) => {
+        const touchDuration = Date.now() - touchStartTime;
+        const touch = e.changedTouches[0];
+        const moveDistance = touch ? Math.sqrt(
+            Math.pow(touch.clientX - touchStartPos.x, 2) + 
+            Math.pow(touch.clientY - touchStartPos.y, 2)
+        ) : 0;
+        
+        // Detect tap (short duration, minimal movement)
+        const isTap = touchDuration < 300 && moveDistance < 20;
+        
+        if (isTap && touch) {
+            const touchEvent = createTouchEventWrapper(touch);
+            onMouseClick(touchEvent);
+        }
+        
+        onMouseUp(e);
+        
+        // Re-enable OrbitControls based on current mode
+        updateMode();
+        
+        touchVertexHit = null;
+    });
+    
     // Sidebar resize
     setupSidebarResize();
+}
+
+// Helper to convert touch event to mouse-like event
+function createTouchEventWrapper(touch) {
+    return {
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        target: touch.target,
+        preventDefault: () => {},
+        stopPropagation: () => {}
+    };
 }
 
 function setupSidebarResize() {
@@ -2822,8 +2890,34 @@ function onMouseClick(event) {
     const deleteMode = deleteModeCheckbox && deleteModeCheckbox.checked;
     const addVertexMode = currentEditMode === 'add-vertex';
     const deleteVertexMode = currentEditMode === 'delete-vertex';
+    const dragMode = dragModeCheckbox && dragModeCheckbox.checked;
     
-    if (!addMode && !deleteMode && !addVertexMode && !deleteVertexMode) return;
+    // In VIEW mode, allow tap/click to select vertex for info display
+    const isViewMode = !addMode && !deleteMode && !addVertexMode && !deleteVertexMode && !dragMode;
+    
+    if (isViewMode) {
+        // Allow selecting vertices in view mode (for info purposes)
+        const vertex = getIntersectedVertex(event);
+        if (vertex) {
+            // Deselect previous
+            if (state.selectedVertex && state.selectedVertex !== vertex) {
+                setVertexMaterial(state.selectedVertex, 'default');
+            }
+            // Select new vertex
+            state.selectedVertex = vertex;
+            setVertexMaterial(vertex, 'selected');
+            
+            // Show vertex info
+            const idx = vertex.userData.index;
+            const pos = vertex.position;
+            console.log(`Selected vertex ${idx} at (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
+        } else if (state.selectedVertex) {
+            // Clicked empty space - deselect
+            setVertexMaterial(state.selectedVertex, 'default');
+            state.selectedVertex = null;
+        }
+        return;
+    }
     
     if (addMode) {
         const vertex = getIntersectedVertex(event);
