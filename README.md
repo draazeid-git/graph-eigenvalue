@@ -4,7 +4,7 @@ Interactive 3D visualization tool for graph theory and dynamic systems analysis,
 
 ## 🚀 Live Demo
 
-Visit: `https://YOUR_USERNAME.github.io/graph-eigenvalue-viz/`
+Visit: `https://draazeid-git.github.io/graph-eigenvalue/`
 
 ## Version 21 Changes - Analytic Graph Library
 
