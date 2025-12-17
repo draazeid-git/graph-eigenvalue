@@ -15,7 +15,7 @@ import {
     getConcentricSpherePositions2,
     startForceLayout, stopForceLayout,
     getIntersectedVertex, getIntersectedEdge,
-    VERTEX_RADIUS,
+    VERTEX_RADIUS, Arrow3D,
     removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle
 } from './graph-core.js';
 
@@ -23,7 +23,8 @@ import {
     initDynamics, startDynamics, stopDynamics, resetDynamics,
     invalidateCaches, isDynamicsRunning,
     updatePhaseNodeSelectors, clearPhaseTrail, updatePhaseLabels, togglePhaseDiagram,
-    resetDynamicsVisuals, getDynamicsState, setDynamicsUpdateCallback
+    resetDynamicsVisuals, getDynamicsState, setDynamicsUpdateCallback,
+    setFreezeNodesMode, getFreezeNodesMode
 } from './dynamics-animation.js';
 
 import {
@@ -32,7 +33,8 @@ import {
 } from './matrix-analysis-ui.js';
 
 import {
-    findAnalyticGraphs, loadGraphFromResult, cancelSearch
+    findAnalyticGraphs, loadGraphFromResult, cancelSearch,
+    initializeDatabase, resetDatabase, getDatabaseStats
 } from './graph-finder.js';
 
 import {
@@ -48,8 +50,18 @@ import {
 } from './zeid-rosenberg.js';
 
 import {
-    computeSkewSymmetricEigenvalues
+    computeSkewSymmetricEigenvalues,
+    computeSkewSymmetricEigenvaluesWithMultiplicity
 } from './spectral-analysis.js';
+
+import {
+    initLibrary, saveLibrary, clearLibrary,
+    addToLibrary, addSearchResultsToLibrary, removeFromLibrary,
+    getGraphById, getAllGraphs, getLibraryStats,
+    filterGraphs, sortGraphs,
+    exportGraphToJSON, exportLibraryToJSON, importFromJSON,
+    downloadGraphJSON, downloadLibraryJSON, downloadGraphHTML, downloadLibrarySummaryHTML
+} from './graph-library.js';
 
 // =====================================================
 // DOM ELEMENT REFERENCES
@@ -81,6 +93,8 @@ let findAnalyticBtn, finderProgress, finderStatus, finderProgressBar;
 let finderResults, finderSummary, analyticGraphSelect;
 let selectedGraphInfo, graphFamilyDisplay, graphEdgesDisplay, graphEigenvaluesDisplay;
 let loadAnalyticGraphBtn, finderConnectedOnlyCheckbox, cancelSearchBtn, finderLayoutSelect;
+let finderVerticesInput;
+let clearDbBtn;
 let discoveredGraphs = []; // Store found graphs
 
 // Edit mode
@@ -141,6 +155,16 @@ let zrComplexPlane, zrComparisonDisplay, compareBoundsBtn;
 let directsumG1Select, directsumG2Select, computeDirectsumBtn, directsumResult;
 let currentSpectrum = null;  // Store computed spectrum for reuse
 
+// Library tab
+let libTotalDisplay, libFamiliesDisplay;
+let librarySearch, libraryFilterN, libraryFilterFamily, librarySort;
+let libraryTableBody, librarySelectAll, libraryEmpty;
+let libraryLoadSelected, libraryDeleteSelected;
+let libraryExportJSON, libraryExportHTML, libraryImportBtn, libraryImportFile;
+let libraryClearAll;
+let addToLibraryBtn, addAllToLibraryBtn;
+let productALibraryGroup, productBLibraryGroup;
+
 // =====================================================
 // INITIALIZATION
 // =====================================================
@@ -196,6 +220,12 @@ export function init() {
     // Initialize complex plane visualization
     initComplexPlane();
     
+    // Initialize graph database for analytic graph finder
+    initializeDatabase(7);
+    
+    // Initialize graph library
+    initLibrary();
+    
     // Setup event listeners
     setupEventListeners();
     setupTabs();
@@ -205,6 +235,7 @@ export function init() {
     setupCopyButtons();
     setupKeyboardShortcuts();
     setupMobileToggle();
+    setupLibraryEventListeners();
     
     // Generate initial graph
     generateGraph();
@@ -305,8 +336,10 @@ function grabDOMElements() {
     graphEigenvaluesDisplay = document.getElementById('graph-eigenvalues');
     loadAnalyticGraphBtn = document.getElementById('load-analytic-graph-btn');
     finderConnectedOnlyCheckbox = document.getElementById('finder-connected-only');
+    finderVerticesInput = document.getElementById('finder-vertices');
     cancelSearchBtn = document.getElementById('cancel-search-btn');
     finderLayoutSelect = document.getElementById('finder-layout-select');
+    clearDbBtn = document.getElementById('clear-db-btn');
     
     // Edit mode
     addModeCheckbox = document.getElementById('add-mode-checkbox');
@@ -427,6 +460,28 @@ function grabDOMElements() {
     vizShowGrid = document.getElementById('viz-show-grid');
     vizZoom = document.getElementById('viz-zoom');
     vizZoomLabel = document.getElementById('viz-zoom-label');
+    
+    // Library tab
+    libTotalDisplay = document.getElementById('lib-total');
+    libFamiliesDisplay = document.getElementById('lib-families');
+    librarySearch = document.getElementById('library-search');
+    libraryFilterN = document.getElementById('library-filter-n');
+    libraryFilterFamily = document.getElementById('library-filter-family');
+    librarySort = document.getElementById('library-sort');
+    libraryTableBody = document.getElementById('library-table-body');
+    librarySelectAll = document.getElementById('library-select-all');
+    libraryEmpty = document.getElementById('library-empty');
+    libraryLoadSelected = document.getElementById('library-load-selected');
+    libraryDeleteSelected = document.getElementById('library-delete-selected');
+    libraryExportJSON = document.getElementById('library-export-json');
+    libraryExportHTML = document.getElementById('library-export-html');
+    libraryImportBtn = document.getElementById('library-import-btn');
+    libraryImportFile = document.getElementById('library-import-file');
+    libraryClearAll = document.getElementById('library-clear-all');
+    addToLibraryBtn = document.getElementById('add-to-library-btn');
+    addAllToLibraryBtn = document.getElementById('add-all-to-library-btn');
+    productALibraryGroup = document.getElementById('product-a-library');
+    productBLibraryGroup = document.getElementById('product-b-library');
 }
 
 // =====================================================
@@ -495,6 +550,15 @@ function setupEventListeners() {
         });
     }
     
+    if (clearDbBtn) {
+        clearDbBtn.addEventListener('click', () => {
+            if (confirm('Clear cached graph analysis results? This will require re-computation on next search.')) {
+                resetDatabase();
+                alert('Cache cleared. Database re-seeded with known families.');
+            }
+        });
+    }
+    
     analyticGraphSelect.addEventListener('change', () => {
         showSelectedGraphInfo();
     });
@@ -553,6 +617,14 @@ function setupEventListeners() {
     if (phaseNodeJSelect) phaseNodeJSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); });
     if (phaseModeSelect) phaseModeSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); updatePhaseModeExplanation(); });
     if (animationModeSelect) animationModeSelect.addEventListener('change', updateAnimationModeExplanation);
+    
+    // Freeze nodes teaching toggle
+    const freezeNodesCheckbox = document.getElementById('freeze-nodes-checkbox');
+    if (freezeNodesCheckbox) {
+        freezeNodesCheckbox.addEventListener('change', () => {
+            setFreezeNodesMode(freezeNodesCheckbox.checked);
+        });
+    }
     
     // Eigenvalue plot with alpha/beta sliders (new in v17)
     if (phaseAlphaInput) {
@@ -777,6 +849,11 @@ function setupTabs() {
             // Update bounds tab when switching to it
             if (tab.dataset.tab === 'bounds') {
                 updateBoundsTab();
+            }
+            
+            // Update library tab when switching to it
+            if (tab.dataset.tab === 'library') {
+                updateLibraryUI();
             }
         });
     });
@@ -1392,7 +1469,7 @@ function updatePhaseModeExplanation() {
         'velocity': 'Shows position vs velocity of a node - reveals momentum and oscillation characteristics',
         'node-power': 'Power = xᵢ·ẋᵢ shows instantaneous energy flow rate at node i',
         'power-power': 'Compares energy flow patterns between two nodes - useful for energy transfer analysis',
-        'edge-power': 'Shows power flowing along the edge i→j, computed as xᵢẋⱼ - xⱼẋᵢ'
+        'edge-power': 'Edge power Pᵢⱼ = Aᵢⱼ·xᵢ·xⱼ shows true power exchange along edge i→j'
     };
     
     phaseModeHint.textContent = explanations[mode] || 'Select a plot mode';
@@ -1402,12 +1479,22 @@ function updateAnimationModeExplanation() {
     if (!animationModeHint || !animationModeSelect) return;
     
     const mode = animationModeSelect.value;
+    const freezeContainer = document.getElementById('freeze-nodes-container');
+    
     const explanations = {
         'displacement': 'Color shows node state magnitude: cyan (+) / magenta (-). Arrows show product xᵢxⱼ between connected nodes.',
-        'power': 'Color shows node power xᵢ·ẋᵢ: yellow (gaining energy) / blue (losing energy). Arrow direction shows energy flow.'
+        'power': `<strong>Edge Power Flow: P<sub>ij</sub> = A<sub>ij</sub>·x<sub>i</sub>·x<sub>j</sub></strong>
+<b>Vertices:</b> <span style="color:#4FD1C5">●</span> Cyan = net gain | <span style="color:#F87171">●</span> Coral = net loss<br>
+<b>Arrows:</b> True edge power exchange. Direction = flow. Glow/length = |P<sub>ij</sub>|<br>
+<em>Skew-symmetric: P<sub>ij</sub> = −P<sub>ji</sub> (energy conserved)</em>`
     };
     
-    animationModeHint.textContent = explanations[mode] || 'Select an animation mode';
+    animationModeHint.innerHTML = explanations[mode] || 'Select an animation mode';
+    
+    // Show freeze toggle only in power mode
+    if (freezeContainer) {
+        freezeContainer.style.display = mode === 'power' ? 'flex' : 'none';
+    }
 }
 
 function compareWithNumericalEigenvalues() {
@@ -2999,13 +3086,28 @@ function onMouseClick(event) {
 // =====================================================
 
 async function findAllAnalyticGraphs() {
-    const n = parseInt(numVerticesInput.value) || 5;
+    // Use the finder's own vertices input, NOT the general BUILD tab input
+    const n = parseInt(finderVerticesInput?.value) || 5;
     const connectedOnly = finderConnectedOnlyCheckbox ? finderConnectedOnlyCheckbox.checked : true;
     
     if (n > 7) {
-        const msg = n >= 8 
-            ? `Finding graphs for n=${n} will check ${Math.pow(2, n*(n-1)/2).toLocaleString()} graphs.\nThis may take a very long time and use significant memory.\n\nConsider using n≤7 or enabling "Connected only".\n\nContinue anyway?`
-            : `Finding graphs for n=${n} may take several minutes. Continue?`;
+        const totalGraphs = Math.pow(2, n*(n-1)/2);
+        // For n=8, there are about 11.1M connected graphs vs 268M total
+        const connectedEstimate = n === 8 ? '~11 million' : 'many millions of';
+        
+        let msg = `Finding graphs for n=${n} involves checking ${totalGraphs.toLocaleString()} edge combinations.\n\n`;
+        
+        if (connectedOnly) {
+            msg += `With "Connected only" enabled, disconnected graphs will be skipped.\n`;
+            msg += `(For n=8, there are ${connectedEstimate} connected graphs)\n\n`;
+        } else {
+            msg += `Consider enabling "Connected only" for faster results.\n\n`;
+        }
+        
+        msg += `⚠️ MEMORY WARNING: This search may use 10+ GB of RAM.\n`;
+        msg += `Close other applications before continuing.\n\n`;
+        msg += `The search can be cancelled at any time.\n\nContinue?`;
+        
         if (!confirm(msg)) {
             return;
         }
@@ -3045,8 +3147,28 @@ async function findAllAnalyticGraphs() {
         } else {
             const filterNote = connectedOnly ? ' connected' : '';
             summaryText = `Found ${results.analyticCount} of ${results.totalUnique}${filterNote} graphs with closed-form eigenvalues (${results.elapsed.toFixed(1)}s)`;
+            
+            // Add optimization stats if available
+            if (results.stats) {
+                const s = results.stats;
+                
+                // Show skipped disconnected
+                if (s.skippedDisconnected > 0) {
+                    summaryText += `\n📊 Skipped ${s.skippedDisconnected.toLocaleString()} disconnected graphs`;
+                }
+                
+                // Show instant resolutions
+                const optimized = s.resolvedByProduct + s.resolvedByDisconnected + s.resolvedByPolyCache;
+                if (optimized > 0) {
+                    summaryText += `\n⚡ ${optimized} resolved via cache`;
+                    if (s.resolvedByProduct > 0) summaryText += ` (${s.resolvedByProduct} products)`;
+                    if (s.resolvedByPolyCache > 0) summaryText += ` (${s.resolvedByPolyCache} poly cache)`;
+                    if (s.resolvedByDisconnected > 0) summaryText += ` (${s.resolvedByDisconnected} components)`;
+                }
+            }
         }
         finderSummary.textContent = summaryText;
+        finderSummary.style.whiteSpace = 'pre-line';  // Allow line breaks
         
         // Populate dropdown
         analyticGraphSelect.innerHTML = '<option value="">-- Select a graph --</option>';
@@ -3082,63 +3204,89 @@ function showSelectedGraphInfo() {
     }
     
     const graph = discoveredGraphs[parseInt(idx)];
+    if (!graph) {
+        selectedGraphInfo.style.display = 'none';
+        return;
+    }
     
     // Display family/name
     graphFamilyDisplay.textContent = graph.family || `Graph on ${graph.n} vertices`;
     
     // Display edges
-    if (graph.edges.length === 0) {
+    if (!graph.edges || graph.edges.length === 0) {
         graphEdgesDisplay.textContent = 'Edges: ∅ (no edges)';
     } else {
         const edgeStr = graph.edges.map(([i, j]) => `${i}-${j}`).join(', ');
         graphEdgesDisplay.textContent = `Edges: ${edgeStr}`;
     }
     
-    // Display eigenvalues
-    const eigStr = graph.symmetricEigenvalues.map(e => {
-        const mult = e.multiplicity > 1 ? ` (×${e.multiplicity})` : '';
-        return e.form + mult;
-    }).join(', ');
-    graphEigenvaluesDisplay.textContent = `λ: ${eigStr}`;
+    // Display eigenvalues (stored as 'eigenvalues', not 'symmetricEigenvalues')
+    const eigenvalues = graph.eigenvalues || graph.symmetricEigenvalues;
+    if (eigenvalues && eigenvalues.length > 0) {
+        const eigStr = eigenvalues.map(e => {
+            if (typeof e === 'object' && e.form) {
+                const mult = e.multiplicity > 1 ? ` (×${e.multiplicity})` : '';
+                return e.form + mult;
+            } else if (typeof e === 'object' && e.value !== undefined) {
+                const mult = e.multiplicity > 1 ? ` (×${e.multiplicity})` : '';
+                return e.value.toFixed(4) + mult;
+            } else {
+                return String(e);
+            }
+        }).join(', ');
+        graphEigenvaluesDisplay.textContent = `λ: ${eigStr}`;
+    } else {
+        graphEigenvaluesDisplay.textContent = 'λ: (not computed)';
+    }
     
     selectedGraphInfo.style.display = 'block';
 }
 
 function loadSelectedAnalyticGraph() {
     const idx = analyticGraphSelect.value;
+    console.log('loadSelectedAnalyticGraph: idx =', idx, 'discoveredGraphs.length =', discoveredGraphs.length);
     
     if (idx === '' || discoveredGraphs.length === 0) {
         alert('Please select a graph first');
         return;
     }
     
-    const graph = discoveredGraphs[parseInt(idx)];
+    const graphIndex = parseInt(idx);
+    const graph = discoveredGraphs[graphIndex];
+    console.log('loadSelectedAnalyticGraph: graphIndex =', graphIndex, 'graph =', graph);
     
-    // Get layout options from UI
-    const layoutType = finderLayoutSelect ? finderLayoutSelect.value : layoutTypeSelect.value;
-    const radius = parseInt(radiusInput.value) || 40;
-    const innerRatio = parseInt(innerRatioInput?.value) || 50;
-    const middleRatio = parseInt(middleRatioInput?.value) || 70;
-    const customSplit = customSplitInput?.value || null;
+    if (!graph) {
+        alert('Graph not found at index ' + graphIndex);
+        return;
+    }
     
-    // Load the graph into visualization with selected layout
-    loadGraphFromResult(graph, {
-        type: layoutType,
-        radius: radius,
-        innerRatio: innerRatio,
-        middleRatio: middleRatio,
-        customSplit: customSplit
-    });
+    // Get layout type from UI
+    const layoutType = finderLayoutSelect ? finderLayoutSelect.value : 'circle';
+    console.log('loadSelectedAnalyticGraph: layoutType =', layoutType);
+    
+    // Load the graph into visualization
+    const result = loadGraphFromResult(graph, layoutType);
+    console.log('loadSelectedAnalyticGraph: loadGraphFromResult returned', result);
+    
+    if (!result) {
+        alert('Failed to load graph - check console for details');
+        return;
+    }
     
     // Update UI
-    numVerticesInput.value = graph.n;
-    templateSelect.value = 'custom';
+    if (numVerticesInput) {
+        numVerticesInput.value = graph.n;
+        console.log('loadSelectedAnalyticGraph: Set numVerticesInput to', graph.n);
+    }
+    if (templateSelect) templateSelect.value = 'custom';
     updateStats();
     updatePhaseNodeSelectors();
     invalidateCaches();  // Reset dynamics caches for new graph
     
     // Optionally show analysis
     setTimeout(() => showAnalysis(), 100);
+    
+    console.log('loadSelectedAnalyticGraph: Complete');
 }
 
 // =====================================================
@@ -3434,35 +3582,36 @@ function drawEnhancedPhaseMain() {
     
     // Get b1 from spectrum
     let b1 = 2.0; // default
-    if (currentSpectrum && currentSpectrum.b1_over_beta) {
-        b1 = currentSpectrum.b1_over_beta;
-    }
+    // Get current energy for amplitude bound (replaces misleading b₁ bound)
+    const dynamicsStateForBound = getDynamicsState();
+    const currentEnergy = dynamicsStateForBound ? dynamicsStateForBound.energy : 4.0;
+    const amplitudeBound = Math.sqrt(currentEnergy); // Max possible amplitude for a single node
     
-    // Draw stable region (green tint inside b1 circle)
+    // Draw amplitude bound circle (energy-based, not b₁)
     if (vizShowBounds && vizShowBounds.checked) {
-        const b1Radius = b1 * scale;
-        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, b1Radius);
-        gradient.addColorStop(0, 'rgba(76, 175, 80, 0.15)');
-        gradient.addColorStop(1, 'rgba(76, 175, 80, 0.02)');
+        const boundRadius = amplitudeBound * scale;
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, boundRadius);
+        gradient.addColorStop(0, 'rgba(100, 180, 255, 0.12)');
+        gradient.addColorStop(1, 'rgba(100, 180, 255, 0.02)');
         ctx.fillStyle = gradient;
         ctx.beginPath();
-        ctx.arc(cx, cy, b1Radius, 0, 2 * Math.PI);
+        ctx.arc(cx, cy, boundRadius, 0, 2 * Math.PI);
         ctx.fill();
         
-        // b1 boundary circle (dashed green)
-        ctx.strokeStyle = '#4CAF50';
+        // Amplitude boundary circle (dashed blue)
+        ctx.strokeStyle = '#64b5f6';
         ctx.lineWidth = 2;
         ctx.setLineDash([8, 4]);
         ctx.beginPath();
-        ctx.arc(cx, cy, b1Radius, 0, 2 * Math.PI);
+        ctx.arc(cx, cy, boundRadius, 0, 2 * Math.PI);
         ctx.stroke();
         ctx.setLineDash([]);
         
         // Label
-        ctx.fillStyle = '#4CAF50';
+        ctx.fillStyle = '#64b5f6';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(`b₁ = ${b1.toFixed(2)}`, cx + b1Radius + 5, cy);
+        ctx.fillText(`√E = ${amplitudeBound.toFixed(2)}`, cx + boundRadius + 5, cy);
     }
     
     // Draw grid
@@ -3609,26 +3758,30 @@ function drawFrequencySpectrum() {
     ctx.fillStyle = '#0a0a1a';
     ctx.fillRect(0, 0, W, H);
     
-    // Ensure spectrum is computed
-    ensureSpectrumComputed();
-    
-    // Get unique eigenvalue frequencies with multiplicities
+    // ALWAYS compute eigenvalues numerically from actual adjacency matrix
+    // Use version WITH multiplicity to correctly count frequencies
     let freqData = [];
-    if (currentSpectrum && currentSpectrum.eigenvalues) {
-        // Count frequencies
-        const freqMap = new Map();
-        currentSpectrum.eigenvalues.forEach(e => {
-            const f = Math.abs(e.im);
-            if (f > 0.01) {
-                const key = f.toFixed(4);
-                freqMap.set(key, (freqMap.get(key) || 0) + 1);
-            }
-        });
+    
+    if (state.adjacencyMatrix && state.adjacencyMatrix.length >= 2) {
+        // Compute ALL numerical eigenvalues (including duplicates)
+        const allEigs = computeSkewSymmetricEigenvaluesWithMultiplicity(state.adjacencyMatrix);
         
-        // Convert to array sorted by frequency (descending)
-        freqData = Array.from(freqMap.entries())
-            .map(([f, mult]) => ({ freq: parseFloat(f), mult }))
-            .sort((a, b) => b.freq - a.freq);
+        if (allEigs && allEigs.length > 0) {
+            // Count frequencies (absolute values of imaginary parts)
+            const freqMap = new Map();
+            allEigs.forEach(e => {
+                const f = Math.abs(e.imag);
+                if (f > 0.01) {
+                    const key = f.toFixed(4);
+                    freqMap.set(key, (freqMap.get(key) || 0) + 1);
+                }
+            });
+            
+            // Convert to array sorted by frequency (descending)
+            freqData = Array.from(freqMap.entries())
+                .map(([f, mult]) => ({ freq: parseFloat(f), mult }))
+                .sort((a, b) => b.freq - a.freq);
+        }
     }
     
     if (freqData.length === 0) {
@@ -4325,6 +4478,9 @@ function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
     }
     
     // Create visual edges from adjacency matrix
+    // Dynamic scaling based on graph size
+    const scaleFactor = n <= 5 ? 1.0 : n <= 20 ? 1.0 - (n - 5) * 0.025 : 0.625;
+    
     for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
             if (adjMatrix[i][j] !== 0 || adjMatrix[j][i] !== 0) {
@@ -4340,13 +4496,13 @@ function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
                 const arrowLength = length - 2 * VERTEX_RADIUS - 1;
                 
                 if (arrowLength > 0) {
-                    const arrow = new THREE.ArrowHelper(
+                    const arrow = new Arrow3D(
                         direction,
                         arrowStart,
                         arrowLength,
-                        0xff4444,
-                        Math.min(arrowLength * 0.3, 4),
-                        Math.min(arrowLength * 0.15, 2)
+                        0xe57373,  // Soft coral/salmon
+                        Math.min(arrowLength * 0.35 * scaleFactor, 5 * scaleFactor),
+                        Math.min(arrowLength * 0.18 * scaleFactor, 2.5 * scaleFactor)
                     );
                     state.graphGroup.add(arrow);
                     state.edgeObjects.push({ from: i, to: j, arrow });
@@ -4906,6 +5062,578 @@ function setupMobileToggle() {
             });
         }
     }
+}
+
+// =====================================================
+// LIBRARY TAB
+// =====================================================
+
+function setupLibraryEventListeners() {
+    // Initialize library UI
+    updateLibraryUI();
+    
+    // Search and filter handlers
+    if (librarySearch) {
+        librarySearch.addEventListener('input', debounce(() => {
+            updateLibraryTable();
+        }, 300));
+    }
+    
+    if (libraryFilterN) {
+        libraryFilterN.addEventListener('change', updateLibraryTable);
+    }
+    
+    if (libraryFilterFamily) {
+        libraryFilterFamily.addEventListener('change', updateLibraryTable);
+    }
+    
+    if (librarySort) {
+        librarySort.addEventListener('change', updateLibraryTable);
+    }
+    
+    // Select all checkbox
+    if (librarySelectAll) {
+        librarySelectAll.addEventListener('change', () => {
+            const checkboxes = libraryTableBody.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(cb => cb.checked = librarySelectAll.checked);
+            updateLibraryActionButtons();
+        });
+    }
+    
+    // Load selected button
+    if (libraryLoadSelected) {
+        libraryLoadSelected.addEventListener('click', loadSelectedFromLibrary);
+    }
+    
+    // Delete selected button
+    if (libraryDeleteSelected) {
+        libraryDeleteSelected.addEventListener('click', deleteSelectedFromLibrary);
+    }
+    
+    // Export JSON
+    if (libraryExportJSON) {
+        libraryExportJSON.addEventListener('click', () => {
+            const selected = getSelectedLibraryIds();
+            if (selected.length > 0) {
+                // Export only selected
+                const graphs = selected.map(id => getGraphById(id)).filter(Boolean);
+                const json = JSON.stringify({
+                    exportVersion: 1,
+                    exportDate: new Date().toISOString(),
+                    type: 'collection',
+                    graphs
+                }, null, 2);
+                downloadFileFromContent(json, `selected-graphs-${selected.length}.json`, 'application/json');
+                showLibraryToast(`Exported ${selected.length} graph(s)`, 'success');
+            } else {
+                // Export entire library
+                downloadLibraryJSON();
+                showLibraryToast('Exported entire library', 'success');
+            }
+        });
+    }
+    
+    // Export HTML
+    if (libraryExportHTML) {
+        libraryExportHTML.addEventListener('click', () => {
+            const selected = getSelectedLibraryIds();
+            if (selected.length === 1) {
+                downloadGraphHTML(selected[0]);
+                showLibraryToast('Exported graph as HTML', 'success');
+            } else {
+                downloadLibrarySummaryHTML();
+                showLibraryToast('Exported library summary', 'success');
+            }
+        });
+    }
+    
+    // Import JSON
+    if (libraryImportBtn && libraryImportFile) {
+        libraryImportBtn.addEventListener('click', () => {
+            libraryImportFile.click();
+        });
+        
+        libraryImportFile.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            try {
+                const text = await file.text();
+                const result = importFromJSON(text);
+                
+                if (result.success) {
+                    showLibraryToast(`Imported ${result.imported} graph(s), ${result.duplicates} duplicates skipped`, 'success');
+                    updateLibraryUI();
+                } else {
+                    showLibraryToast('Import failed: ' + result.error, 'error');
+                }
+            } catch (err) {
+                showLibraryToast('Import error: ' + err.message, 'error');
+            }
+            
+            // Reset file input
+            libraryImportFile.value = '';
+        });
+    }
+    
+    // Clear all
+    if (libraryClearAll) {
+        libraryClearAll.addEventListener('click', () => {
+            const stats = getLibraryStats();
+            if (stats.total === 0) {
+                showLibraryToast('Library is already empty', 'info');
+                return;
+            }
+            
+            if (confirm(`Are you sure you want to delete all ${stats.total} graphs from the library?\n\nThis cannot be undone!`)) {
+                clearLibrary();
+                updateLibraryUI();
+                showLibraryToast('Library cleared', 'success');
+            }
+        });
+    }
+    
+    // Add to library from finder
+    if (addToLibraryBtn) {
+        addToLibraryBtn.addEventListener('click', () => {
+            const idx = analyticGraphSelect.value;
+            if (idx === '' || discoveredGraphs.length === 0) {
+                showLibraryToast('Please select a graph first', 'error');
+                return;
+            }
+            
+            const graph = discoveredGraphs[parseInt(idx)];
+            if (!graph) return;
+            
+            const result = addToLibrary(graph, {
+                source: 'search',
+                searchParams: { n: graph.n }
+            });
+            
+            if (result.success) {
+                showLibraryToast(`Added "${result.graph.name}" to library`, 'success');
+                updateLibraryUI();
+            } else if (result.reason === 'duplicate') {
+                showLibraryToast('Graph already in library', 'info');
+            }
+        });
+    }
+    
+    // Add all to library from finder
+    if (addAllToLibraryBtn) {
+        addAllToLibraryBtn.addEventListener('click', () => {
+            if (discoveredGraphs.length === 0) {
+                showLibraryToast('No graphs to add', 'error');
+                return;
+            }
+            
+            const n = finderVerticesInput ? parseInt(finderVerticesInput.value) : 5;
+            const result = addSearchResultsToLibrary(discoveredGraphs, { n });
+            
+            showLibraryToast(`Added ${result.added} graph(s), ${result.duplicates} duplicates`, 'success');
+            updateLibraryUI();
+        });
+    }
+}
+
+/**
+ * Update entire library UI
+ */
+function updateLibraryUI() {
+    updateLibraryStats();
+    updateLibraryFilters();
+    updateLibraryTable();
+    updateProductGraphLibraryOptions();
+}
+
+/**
+ * Update library statistics display
+ */
+function updateLibraryStats() {
+    const stats = getLibraryStats();
+    
+    if (libTotalDisplay) {
+        libTotalDisplay.textContent = stats.total;
+    }
+    
+    if (libFamiliesDisplay) {
+        libFamiliesDisplay.textContent = Object.keys(stats.byFamily).length;
+    }
+}
+
+/**
+ * Update filter dropdowns
+ */
+function updateLibraryFilters() {
+    const stats = getLibraryStats();
+    
+    // Update vertex count filter
+    if (libraryFilterN) {
+        const currentValue = libraryFilterN.value;
+        libraryFilterN.innerHTML = '<option value="">All</option>';
+        
+        const nValues = Object.keys(stats.byVertexCount).map(Number).sort((a, b) => a - b);
+        for (const n of nValues) {
+            const count = stats.byVertexCount[n];
+            const option = document.createElement('option');
+            option.value = n;
+            option.textContent = `n=${n} (${count})`;
+            libraryFilterN.appendChild(option);
+        }
+        
+        libraryFilterN.value = currentValue;
+    }
+    
+    // Update family filter
+    if (libraryFilterFamily) {
+        const currentValue = libraryFilterFamily.value;
+        libraryFilterFamily.innerHTML = '<option value="">All</option>';
+        
+        const families = Object.keys(stats.byFamily).sort();
+        for (const family of families) {
+            const count = stats.byFamily[family];
+            const option = document.createElement('option');
+            option.value = family;
+            option.textContent = `${family} (${count})`;
+            libraryFilterFamily.appendChild(option);
+        }
+        
+        libraryFilterFamily.value = currentValue;
+    }
+}
+
+/**
+ * Update library table display
+ */
+function updateLibraryTable() {
+    if (!libraryTableBody) return;
+    
+    // Get filter values
+    const filters = {};
+    if (librarySearch && librarySearch.value) {
+        filters.query = librarySearch.value;
+    }
+    if (libraryFilterN && libraryFilterN.value) {
+        filters.n = parseInt(libraryFilterN.value);
+    }
+    if (libraryFilterFamily && libraryFilterFamily.value) {
+        filters.family = libraryFilterFamily.value;
+    }
+    
+    // Get sort values
+    let sortBy = 'dateAdded';
+    let sortOrder = 'desc';
+    if (librarySort && librarySort.value) {
+        const [field, order] = librarySort.value.split('-');
+        sortBy = field;
+        sortOrder = order;
+    }
+    
+    // Get filtered and sorted graphs
+    let graphs = filterGraphs(filters);
+    graphs = sortGraphs(graphs, sortBy, sortOrder);
+    
+    // Clear table
+    libraryTableBody.innerHTML = '';
+    
+    // Show empty state if needed
+    if (libraryEmpty) {
+        libraryEmpty.style.display = graphs.length === 0 ? 'block' : 'none';
+    }
+    
+    // Populate table
+    for (const graph of graphs) {
+        const row = createLibraryTableRow(graph);
+        libraryTableBody.appendChild(row);
+    }
+    
+    // Update action buttons
+    updateLibraryActionButtons();
+}
+
+/**
+ * Create a table row for a library graph
+ */
+function createLibraryTableRow(graph) {
+    const row = document.createElement('tr');
+    row.dataset.graphId = graph.id;
+    
+    // Checkbox cell
+    const checkboxCell = document.createElement('td');
+    checkboxCell.className = 'col-select';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.addEventListener('change', () => {
+        row.classList.toggle('selected', checkbox.checked);
+        updateLibraryActionButtons();
+    });
+    checkboxCell.appendChild(checkbox);
+    row.appendChild(checkboxCell);
+    
+    // Name cell
+    const nameCell = document.createElement('td');
+    nameCell.className = 'col-name';
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'graph-name-cell';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'graph-name';
+    nameSpan.textContent = graph.name;
+    nameDiv.appendChild(nameSpan);
+    
+    if (graph.family && graph.family !== graph.name) {
+        const familySpan = document.createElement('span');
+        familySpan.className = 'graph-family';
+        familySpan.textContent = graph.family;
+        nameDiv.appendChild(familySpan);
+    }
+    
+    nameCell.appendChild(nameDiv);
+    row.appendChild(nameCell);
+    
+    // Vertex count cell
+    const nCell = document.createElement('td');
+    nCell.className = 'col-n';
+    nCell.textContent = graph.n;
+    row.appendChild(nCell);
+    
+    // Edge count cell
+    const edgeCell = document.createElement('td');
+    edgeCell.className = 'col-edges';
+    edgeCell.textContent = graph.edgeCount;
+    row.appendChild(edgeCell);
+    
+    // Actions cell
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'col-actions';
+    
+    // Load button
+    const loadBtn = document.createElement('button');
+    loadBtn.className = 'table-action-btn load-btn';
+    loadBtn.innerHTML = '▶';
+    loadBtn.title = 'Load this graph';
+    loadBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loadGraphFromLibrary(graph.id);
+    });
+    actionsCell.appendChild(loadBtn);
+    
+    // Export button
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'table-action-btn export-btn';
+    exportBtn.innerHTML = '📥';
+    exportBtn.title = 'Export as JSON';
+    exportBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        downloadGraphJSON(graph.id);
+        showLibraryToast('Exported graph', 'success');
+    });
+    actionsCell.appendChild(exportBtn);
+    
+    // Delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'table-action-btn delete-btn';
+    deleteBtn.innerHTML = '✕';
+    deleteBtn.title = 'Remove from library';
+    deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm(`Remove "${graph.name}" from library?`)) {
+            removeFromLibrary(graph.id);
+            updateLibraryUI();
+            showLibraryToast('Removed from library', 'success');
+        }
+    });
+    actionsCell.appendChild(deleteBtn);
+    
+    row.appendChild(actionsCell);
+    
+    // Row click to toggle selection
+    row.addEventListener('click', (e) => {
+        if (e.target.type !== 'checkbox' && !e.target.closest('button')) {
+            checkbox.checked = !checkbox.checked;
+            row.classList.toggle('selected', checkbox.checked);
+            updateLibraryActionButtons();
+        }
+    });
+    
+    return row;
+}
+
+/**
+ * Update action button states
+ */
+function updateLibraryActionButtons() {
+    const selected = getSelectedLibraryIds();
+    
+    if (libraryLoadSelected) {
+        libraryLoadSelected.disabled = selected.length !== 1;
+        libraryLoadSelected.textContent = selected.length === 1 ? 'Load Selected' : 'Load (select 1)';
+    }
+    
+    if (libraryDeleteSelected) {
+        libraryDeleteSelected.disabled = selected.length === 0;
+        libraryDeleteSelected.textContent = selected.length > 0 ? `Delete (${selected.length})` : 'Delete';
+    }
+}
+
+/**
+ * Get IDs of selected library items
+ */
+function getSelectedLibraryIds() {
+    if (!libraryTableBody) return [];
+    
+    const selected = [];
+    const checkboxes = libraryTableBody.querySelectorAll('input[type="checkbox"]:checked');
+    checkboxes.forEach(cb => {
+        const row = cb.closest('tr');
+        if (row && row.dataset.graphId) {
+            selected.push(row.dataset.graphId);
+        }
+    });
+    
+    return selected;
+}
+
+/**
+ * Load a graph from library into visualization
+ */
+function loadGraphFromLibrary(graphId) {
+    const graph = getGraphById(graphId);
+    if (!graph) {
+        showLibraryToast('Graph not found', 'error');
+        return;
+    }
+    
+    // Convert library format to finder result format
+    const finderGraph = {
+        n: graph.n,
+        edges: graph.edges,
+        edgeCount: graph.edgeCount,
+        eigenvalues: graph.eigenvalues,
+        family: graph.family
+    };
+    
+    // Get layout type
+    const layoutType = finderLayoutSelect ? finderLayoutSelect.value : 'circle';
+    
+    // Load the graph
+    const result = loadGraphFromResult(finderGraph, layoutType);
+    
+    if (result) {
+        if (numVerticesInput) numVerticesInput.value = graph.n;
+        if (templateSelect) templateSelect.value = 'custom';
+        updateStats();
+        updatePhaseNodeSelectors();
+        invalidateCaches();
+        setTimeout(() => showAnalysis(), 100);
+        showLibraryToast(`Loaded "${graph.name}"`, 'success');
+    } else {
+        showLibraryToast('Failed to load graph', 'error');
+    }
+}
+
+/**
+ * Load selected graph from library
+ */
+function loadSelectedFromLibrary() {
+    const selected = getSelectedLibraryIds();
+    if (selected.length === 1) {
+        loadGraphFromLibrary(selected[0]);
+    }
+}
+
+/**
+ * Delete selected graphs from library
+ */
+function deleteSelectedFromLibrary() {
+    const selected = getSelectedLibraryIds();
+    if (selected.length === 0) return;
+    
+    if (confirm(`Delete ${selected.length} graph(s) from library?`)) {
+        for (const id of selected) {
+            removeFromLibrary(id);
+        }
+        updateLibraryUI();
+        showLibraryToast(`Deleted ${selected.length} graph(s)`, 'success');
+    }
+}
+
+/**
+ * Update product graph library options
+ */
+function updateProductGraphLibraryOptions() {
+    const graphs = getAllGraphs();
+    
+    // Update Graph A library group
+    if (productALibraryGroup) {
+        productALibraryGroup.innerHTML = '';
+        for (const g of graphs) {
+            const option = document.createElement('option');
+            option.value = `lib:${g.id}`;
+            option.textContent = `${g.name} (n=${g.n})`;
+            productALibraryGroup.appendChild(option);
+        }
+    }
+    
+    // Update Graph B library group
+    if (productBLibraryGroup) {
+        productBLibraryGroup.innerHTML = '';
+        for (const g of graphs) {
+            const option = document.createElement('option');
+            option.value = `lib:${g.id}`;
+            option.textContent = `${g.name} (n=${g.n})`;
+            productBLibraryGroup.appendChild(option);
+        }
+    }
+}
+
+/**
+ * Show toast notification
+ */
+function showLibraryToast(message, type = 'info') {
+    // Remove existing toast
+    const existingToast = document.querySelector('.library-toast');
+    if (existingToast) {
+        existingToast.remove();
+    }
+    
+    // Create new toast
+    const toast = document.createElement('div');
+    toast.className = `library-toast ${type} show`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+/**
+ * Download helper for arbitrary content
+ */
+function downloadFileFromContent(content, filename, mimeType = 'application/json') {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Debounce utility
+ */
+function debounce(fn, delay) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), delay);
+    };
 }
 
 // =====================================================

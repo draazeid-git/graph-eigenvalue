@@ -46,6 +46,10 @@
                 <span class="tab-icon">🔧</span>
                 <span class="tab-label">Advanced</span>
             </button>
+            <button class="sidebar-tab" data-tab="library" title="Graph Library">
+                <span class="tab-icon">📚</span>
+                <span class="tab-label">Library</span>
+            </button>
         </div>
 
         <!-- ==================== BUILD TAB ==================== -->
@@ -365,9 +369,13 @@
                         <option value="power">Power</option>
                     </select>
                 </div>
-                <div id="animation-mode-explanation" class="hint-box">
+                <div id="animation-mode-explanation" class="hint-box power-mode-hint">
                     <span id="animation-mode-hint">Color shows node state magnitude</span>
                 </div>
+                <label class="checkbox-label teaching-toggle" id="freeze-nodes-container" style="display: none;">
+                    <input type="checkbox" id="freeze-nodes-checkbox">
+                    <span>🎓 Freeze nodes (show only edge exchange)</span>
+                </label>
                 <div class="input-row">
                     <label>Nodes:</label>
                     <select id="phase-node-i" class="small-select"></select>
@@ -617,10 +625,15 @@
                         <label>Graph A:</label>
                         <select id="product-graph-a">
                             <option value="current">★ Current Graph</option>
-                            <option value="path">Path Pₙ</option>
-                            <option value="cycle">Cycle Cₙ</option>
-                            <option value="star">Star Sₙ</option>
-                            <option value="complete">Complete Kₙ</option>
+                            <optgroup label="Basic Families">
+                                <option value="path">Path Pₙ</option>
+                                <option value="cycle">Cycle Cₙ</option>
+                                <option value="star">Star Sₙ</option>
+                                <option value="complete">Complete Kₙ</option>
+                            </optgroup>
+                            <optgroup id="product-a-library" label="📚 From Library">
+                                <!-- Populated dynamically -->
+                            </optgroup>
                         </select>
                     </div>
                     <div id="product-n-a-row" class="input-row" style="display:none;">
@@ -639,11 +652,16 @@
                     <div class="input-row">
                         <label>Graph B:</label>
                         <select id="product-graph-b">
-                            <option value="path" selected>Path Pₙ</option>
-                            <option value="cycle">Cycle Cₙ</option>
-                            <option value="star">Star Sₙ</option>
-                            <option value="complete">Complete Kₙ</option>
+                            <optgroup label="Basic Families">
+                                <option value="path" selected>Path Pₙ</option>
+                                <option value="cycle">Cycle Cₙ</option>
+                                <option value="star">Star Sₙ</option>
+                                <option value="complete">Complete Kₙ</option>
+                            </optgroup>
                             <option value="current">★ Current Graph</option>
+                            <optgroup id="product-b-library" label="📚 From Library">
+                                <!-- Populated dynamically -->
+                            </optgroup>
                         </select>
                     </div>
                     <div id="product-n-b-row" class="input-row">
@@ -742,18 +760,21 @@
             
             <div class="control-group">
                 <h4>🔍 Find Analytic Graphs</h4>
-                <p class="hint">Exhaustive search for small graphs with closed-form eigenvalues</p>
+                <p class="hint">Hierarchical search with product graph optimization</p>
                 <div class="input-row">
                     <label>Vertices:</label>
-                    <input id="finder-vertices" type="number" value="5" min="3" max="7">
-                    <span class="badge warning">n ≤ 7</span>
+                    <input id="finder-vertices" type="number" value="5" min="3" max="8">
+                    <span class="badge warning">n ≤ 8</span>
                 </div>
                 <label class="checkbox-label">
                     <input type="checkbox" id="finder-connected-only" checked>
                     <span>Connected only</span>
                     <span class="badge success">faster</span>
                 </label>
-                <button id="find-analytic-btn" class="info">Find All Analytic Graphs</button>
+                <div class="button-row">
+                    <button id="find-analytic-btn" class="info">Find All Analytic Graphs</button>
+                    <button id="cancel-search-btn" class="warning" style="display:none;">Cancel</button>
+                </div>
                 <div id="finder-progress" style="display: none;">
                     <div id="finder-status">Searching...</div>
                     <div class="progress-bar">
@@ -765,12 +786,28 @@
                     <select id="analytic-graph-select">
                         <option value="">-- Select a graph --</option>
                     </select>
+                    <div class="input-row" style="margin-top: 8px;">
+                        <label>Layout:</label>
+                        <select id="finder-layout-select">
+                            <option value="circle">Circle</option>
+                            <option value="sphere">Sphere</option>
+                            <option value="concentric2">2-Ring</option>
+                            <option value="concentric3">3-Ring</option>
+                        </select>
+                    </div>
                     <div id="selected-graph-info" style="display: none;">
                         <div id="graph-family"></div>
                         <div id="graph-edges"></div>
                         <div id="graph-eigenvalues"></div>
                     </div>
-                    <button id="load-analytic-graph-btn" class="success">Load Selected</button>
+                    <div class="button-row">
+                        <button id="load-analytic-graph-btn" class="success">Load Selected</button>
+                        <button id="add-to-library-btn" class="purple" title="Add selected to library">📚 Add</button>
+                    </div>
+                    <div class="button-row" style="margin-top: 8px;">
+                        <button id="add-all-to-library-btn" class="info small" title="Add all search results to library">📚 Add All to Library</button>
+                    </div>
+                    <button id="clear-db-btn" class="secondary" style="margin-top:8px; font-size:11px;">Clear Cache</button>
                 </div>
             </div>
             
@@ -788,6 +825,105 @@
                             <b>Extrusion:</b> 2D mesh × Pₙ = 3D extruded mesh<br>
                             Example: Cycle × Path = Cylinder surface
                         </p>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <!-- ==================== LIBRARY TAB ==================== -->
+        <div id="sidebar-library" class="sidebar-tab-content">
+            
+            <div class="control-group">
+                <h4>📚 Analytic Graph Library</h4>
+                <p class="hint">Persistent storage for graphs with closed-form eigenvalues</p>
+                
+                <div id="library-stats" class="library-stats">
+                    <div class="stat-mini">
+                        <span class="stat-mini-value" id="lib-total">0</span>
+                        <span class="stat-mini-label">Graphs</span>
+                    </div>
+                    <div class="stat-mini">
+                        <span class="stat-mini-value" id="lib-families">0</span>
+                        <span class="stat-mini-label">Families</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>🔍 Search Library</h4>
+                <div class="input-row">
+                    <input id="library-search" type="text" placeholder="Search by name, family..." style="flex:1;">
+                </div>
+                <div class="filter-row">
+                    <label>n:</label>
+                    <select id="library-filter-n" style="width: 70px;">
+                        <option value="">All</option>
+                    </select>
+                    <label>Family:</label>
+                    <select id="library-filter-family" style="flex:1;">
+                        <option value="">All</option>
+                    </select>
+                </div>
+                <div class="sort-row">
+                    <label>Sort:</label>
+                    <select id="library-sort">
+                        <option value="dateAdded-desc">Newest first</option>
+                        <option value="dateAdded-asc">Oldest first</option>
+                        <option value="n-asc">Vertices ↑</option>
+                        <option value="n-desc">Vertices ↓</option>
+                        <option value="edges-asc">Edges ↑</option>
+                        <option value="edges-desc">Edges ↓</option>
+                        <option value="name-asc">Name A-Z</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="control-group library-table-container">
+                <div id="library-table-wrapper">
+                    <table id="library-table" class="library-table">
+                        <thead>
+                            <tr>
+                                <th class="col-select"><input type="checkbox" id="library-select-all"></th>
+                                <th class="col-name">Name</th>
+                                <th class="col-n">n</th>
+                                <th class="col-edges">E</th>
+                                <th class="col-actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="library-table-body">
+                            <!-- Library entries will be populated here -->
+                        </tbody>
+                    </table>
+                    <div id="library-empty" class="library-empty" style="display:none;">
+                        <div class="empty-icon">📚</div>
+                        <div class="empty-title">Library is empty</div>
+                        <div class="empty-hint">Use the ADVANCED tab to find analytic graphs,<br>then add them to your library.</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>📤 Actions</h4>
+                <div class="button-row">
+                    <button id="library-load-selected" class="success small" disabled>Load Selected</button>
+                    <button id="library-delete-selected" class="danger small" disabled>Delete</button>
+                </div>
+                <div class="button-row" style="margin-top: 8px;">
+                    <button id="library-export-json" class="info small">Export JSON</button>
+                    <button id="library-export-html" class="secondary small">Export HTML</button>
+                </div>
+                <div class="button-row" style="margin-top: 8px;">
+                    <button id="library-import-btn" class="purple small">Import JSON</button>
+                    <input type="file" id="library-import-file" accept=".json" style="display:none;">
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <details class="collapsible">
+                    <summary><h4 style="display:inline;">⚠️ Danger Zone</h4></summary>
+                    <div style="padding-top: 10px;">
+                        <button id="library-clear-all" class="danger">Clear Entire Library</button>
+                        <p class="hint" style="margin-top: 8px;">This cannot be undone!</p>
                     </div>
                 </details>
             </div>
@@ -824,7 +960,7 @@
                     <canvas id="enhanced-phase-main" width="320" height="250"></canvas>
                     <div class="panel-legend">
                         <span class="legend-item"><span class="legend-line cyan"></span> Trajectory</span>
-                        <span class="legend-item"><span class="legend-dot green"></span> b₁ stability bound</span>
+                        <span class="legend-item"><span class="legend-dot blue"></span> √E amplitude bound</span>
                         <span class="legend-item"><span class="legend-line orange"></span> Frequency modes</span>
                     </div>
                     <div class="panel-note">

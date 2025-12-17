@@ -4,7 +4,17 @@
  */
 
 import * as THREE from 'three';
-import { state, VERTEX_RADIUS, interpolateYellowBlue } from './graph-core.js';
+import { 
+    state, VERTEX_RADIUS, 
+    interpolateYellowBlue, interpolateRedGreen, 
+    interpolatePowerColor, updateVertexPowerRing 
+} from './graph-core.js';
+
+// Base vertex radius for scaling
+const BASE_VERTEX_RADIUS = VERTEX_RADIUS;
+
+// Teaching mode: freeze nodes to show only edge exchange
+let freezeNodesMode = false;
 
 // =====================================================
 // DYNAMICS STATE
@@ -508,42 +518,84 @@ function updateDynamicsVisuals() {
     const n = state.vertexMeshes.length;
     const animMode = animationModeSelect ? animationModeSelect.value : 'displacement';
     
-    const arrowScale = arrowScaleInput ? parseInt(arrowScaleInput.value) || 30 : 30;
-    const minLength = arrowMinLengthInput ? parseInt(arrowMinLengthInput.value) || 8 : 8;
-    const maxLength = 40;
+    // Dynamic scaling based on node count
+    // For small graphs (<=5): full size
+    // For medium graphs (6-15): scale down gradually
+    // For large graphs (>15): compact arrows
+    const nodeScaleFactor = n <= 5 ? 1.0 : n <= 15 ? 1.0 - (n - 5) * 0.04 : 0.6;
+    
+    const baseArrowScale = arrowScaleInput ? parseInt(arrowScaleInput.value) || 30 : 30;
+    const arrowScale = baseArrowScale * nodeScaleFactor;
+    
+    const baseMinLength = arrowMinLengthInput ? parseInt(arrowMinLengthInput.value) || 8 : 8;
+    const minLength = Math.max(3, baseMinLength * nodeScaleFactor);
+    const maxLength = 40 * nodeScaleFactor;
     
     if (animMode === 'power') {
-        // POWER MODE: Visualize energy flow through edges
-        // For each directed edge i→j, we show the power flow based on
-        // the source node's power: P_i = x_i * ẋ_i
-        // - When P_i < 0: node i is losing energy → arrow points i→j (forward)
-        // - When P_i > 0: node i is gaining energy → arrow points j→i (backward)
+        // POWER MODE: Visualize true edge-wise energy exchange
+        // 
+        // Physics: For ẋ = Ax with energy E_i = ½x_i²
+        // Node power: P_i = x_i·ẋ_i = Σ_j A_ij·x_i·x_j
+        // 
+        // Edge power flow: P_ij = A_ij · x_i · x_j
+        // This is the power flowing INTO node i FROM node j along edge (i,j)
+        // 
+        // For skew-symmetric A: P_ij = -P_ji (conservation)
+        // - P_ij > 0: energy flows j → i (arrow points j→i)
+        // - P_ij < 0: energy flows i → j (arrow points i→j)
         
-        // First pass: compute all powers and find global max for node power
+        const A = state.adjacencyMatrix;
+        
+        // Neutral color for freeze mode
+        const neutralColor = new THREE.Color(0x94A3B8);
+        
+        // First pass: compute node powers for vertex visualization
         let globalMaxNodePower = 0.001;
-        for (let i = 0; i < n; i++) {
-            const Pi = Math.abs(nodeStates[i] * nodeDerivatives[i]);
-            if (Pi > globalMaxNodePower) globalMaxNodePower = Pi;
-        }
-        
-        // Update vertex colors with globally normalized power
+        const nodePowers = [];
         for (let i = 0; i < n; i++) {
             const Pi = nodeStates[i] * nodeDerivatives[i];
+            nodePowers.push(Pi);
+            const absP = Math.abs(Pi);
+            if (absP > globalMaxNodePower) globalMaxNodePower = absP;
+        }
+        
+        // Update vertex colors, scale, and power rings
+        for (let i = 0; i < n; i++) {
+            const Pi = nodePowers[i];
             const absP = Math.abs(Pi);
             const sign = Pi >= 0 ? 1 : -1;
             const normalizedP = absP / globalMaxNodePower;
             
-            // Yellow for gaining energy, blue for losing energy
-            const hue = sign > 0 ? 55/360 : 210/360;
-            const saturation = Math.min(0.4 + normalizedP * 0.6, 1);
-            const lightness = 0.4 + normalizedP * 0.2;
-            
-            state.vertexMeshes[i].material.color.setHSL(hue, saturation, lightness);
-            state.vertexMeshes[i].material.emissive.setHSL(hue, saturation, 0.3 + normalizedP * 0.2);
+            if (freezeNodesMode) {
+                // Freeze mode: neutral gray, no scaling
+                state.vertexMeshes[i].material.color.copy(neutralColor);
+                state.vertexMeshes[i].material.emissive.copy(neutralColor).multiplyScalar(0.2);
+                state.vertexMeshes[i].scale.setScalar(1.0);
+                // Hide power ring in freeze mode
+                updateVertexPowerRing(state.vertexMeshes[i], 0, neutralColor);
+            } else {
+                // Normal mode: cyan/coral coloring with power ring
+                const color = interpolatePowerColor(sign * normalizedP);
+                
+                state.vertexMeshes[i].material.color.copy(color);
+                state.vertexMeshes[i].material.emissive.copy(color).multiplyScalar(0.25 + normalizedP * 0.25);
+                
+                // Scale vertex based on power
+                const scaleMultiplier = sign > 0 
+                    ? 1.0 + normalizedP * 0.5
+                    : 1.0 - normalizedP * 0.4;
+                
+                const currentScale = state.vertexMeshes[i].scale.x;
+                const smoothedScale = currentScale + (scaleMultiplier - currentScale) * 0.15;
+                state.vertexMeshes[i].scale.setScalar(smoothedScale);
+                
+                // Update power ring: brightness proportional to |P_i|
+                updateVertexPowerRing(state.vertexMeshes[i], normalizedP, color);
+            }
         }
         
-        // First pass for edges: compute all powers and find global max
-        const instantPowers = [];
+        // First pass for edges: compute TRUE edge power P_ij = A_ij · x_i · x_j
+        const edgePowers = [];
         let globalMaxEdgePower = 0.001;
         
         for (let idx = 0; idx < state.edgeObjects.length; idx++) {
@@ -551,21 +603,19 @@ function updateDynamicsVisuals() {
             const i = edge.from;
             const j = edge.to;
             
-            const xi = nodeStates[i];
-            const dxi = nodeDerivatives[i] || 0;
+            // True edge power flow: P_ij = A_ij · x_i · x_j
+            const A_ij = A[i][j];
+            const x_i = nodeStates[i];
+            const x_j = nodeStates[j];
+            const P_ij = A_ij * x_i * x_j;
             
-            // Source node power (negative = losing energy = sending)
-            const Pi = xi * dxi;
+            edgePowers.push(P_ij);
             
-            // Use negative of source power: positive means energy flows i→j
-            const flowPower = -Pi;
-            instantPowers.push(flowPower);
-            
-            const absP = Math.abs(flowPower);
+            const absP = Math.abs(P_ij);
             if (absP > globalMaxEdgePower) globalMaxEdgePower = absP;
         }
         
-        // Second pass: update arrows using global normalization
+        // Second pass: update arrows based on true edge power
         for (let idx = 0; idx < state.edgeObjects.length; idx++) {
             const edge = state.edgeObjects[idx];
             if (!edge.arrow) continue;
@@ -575,46 +625,63 @@ function updateDynamicsVisuals() {
             const fromPos = state.vertexMeshes[i].position;
             const toPos = state.vertexMeshes[j].position;
             
-            const P = instantPowers[idx];
-            const absP = Math.abs(P);
-            const sign = P >= 0 ? 1 : -1;
+            const P_ij = edgePowers[idx];
+            const absP = Math.abs(P_ij);
             
-            // Normalize by global max for consistent scaling across all edges
+            // Normalize by global max for consistent scaling
             const normalizedP = absP / globalMaxEdgePower;
             
-            // Smooth yellow-blue color transition
-            const color = interpolateYellowBlue(sign * normalizedP, 0.5 + normalizedP * 0.5);
+            // Arrow color: warm gradient based on power magnitude
+            // Low power: cool blue-gray → High power: warm amber
+            const color = new THREE.Color();
+            color.setRGB(
+                0.4 + normalizedP * 0.55,     // R: 0.4 → 0.95
+                0.45 + normalizedP * 0.35,    // G: 0.45 → 0.8
+                0.6 - normalizedP * 0.35      // B: 0.6 → 0.25
+            );
             
             // Length proportional to power magnitude
             const length = minLength + normalizedP * arrowScale;
             const clampedLength = Math.max(minLength, Math.min(length, maxLength));
             
             // Head size proportional to length
-            const headLength = Math.max(2, clampedLength * 0.3);
-            const headRadius = Math.max(1, clampedLength * 0.15);
+            const headLength = Math.max(3, clampedLength * 0.35);
+            const headRadius = Math.max(1.5, clampedLength * 0.18);
             
-            // Direction: positive = from→to, negative = to→from
+            // Direction based on power flow
             const edgeDir = new THREE.Vector3().subVectors(toPos, fromPos).normalize();
             let arrowDir, arrowStart;
             
-            if (sign >= 0) {
-                arrowDir = edgeDir;
-                arrowStart = fromPos.clone().add(edgeDir.clone().multiplyScalar(VERTEX_RADIUS + 0.5));
-            } else {
+            const fromScale = freezeNodesMode ? 1.0 : state.vertexMeshes[i].scale.x;
+            const toScale = freezeNodesMode ? 1.0 : state.vertexMeshes[j].scale.x;
+            
+            if (P_ij > 0) {
+                // Power flows j → i
                 arrowDir = edgeDir.clone().negate();
-                arrowStart = toPos.clone().add(arrowDir.clone().multiplyScalar(VERTEX_RADIUS + 0.5));
+                const scaledRadius = VERTEX_RADIUS * toScale + 0.5;
+                arrowStart = toPos.clone().add(arrowDir.clone().multiplyScalar(scaledRadius));
+            } else {
+                // Power flows i → j
+                arrowDir = edgeDir;
+                const scaledRadius = VERTEX_RADIUS * fromScale + 0.5;
+                arrowStart = fromPos.clone().add(edgeDir.clone().multiplyScalar(scaledRadius));
             }
             
             edge.arrow.setColor(color);
             edge.arrow.setDirection(arrowDir);
             edge.arrow.position.copy(arrowStart);
             edge.arrow.setLength(clampedLength, headLength, headRadius * 0.7);
+            
+            // Set arrow glow proportional to power
+            if (edge.arrow.setGlow) {
+                edge.arrow.setGlow(normalizedP);
+            }
         }
         
     } else {
         // DISPLACEMENT MODE: cyan/magenta based on state value
         
-        // Update vertex colors
+        // Update vertex colors and reset scale
         for (let i = 0; i < n; i++) {
             const value = nodeStates[i];
             const absValue = Math.abs(value);
@@ -626,6 +693,13 @@ function updateDynamicsVisuals() {
             
             state.vertexMeshes[i].material.color.setHSL(hue, saturation, lightness);
             state.vertexMeshes[i].material.emissive.setHSL(hue, saturation * 0.5, lightness * 0.3);
+            
+            // Reset vertex scale smoothly to 1.0 in displacement mode
+            const currentScale = state.vertexMeshes[i].scale.x;
+            if (Math.abs(currentScale - 1.0) > 0.01) {
+                const smoothedScale = currentScale + (1.0 - currentScale) * 0.1;
+                state.vertexMeshes[i].scale.setScalar(smoothedScale);
+            }
         }
         
         // Update edge arrows based on product xᵢxⱼ
@@ -692,10 +766,11 @@ export function resetDynamicsVisuals() {
     cayleyMatrix = null;
     rodriguesCache = null;
     
-    // Reset vertex colors
+    // Reset vertex colors AND scale
     for (let i = 0; i < n; i++) {
         state.vertexMeshes[i].material.color.setHSL(0.5, 0, 0.4);
         state.vertexMeshes[i].material.emissive.setHSL(0.5, 0, 0.1);
+        state.vertexMeshes[i].scale.setScalar(1.0); // Reset to base size
     }
     
     // Reset arrows
@@ -775,6 +850,10 @@ function updatePhaseDiagram() {
     const dxi = nodeDerivatives[nodeI];
     const dxj = nodeDerivatives[nodeJ];
     
+    // Get adjacency matrix entry for edge power calculation
+    const A = state.adjacencyMatrix;
+    const A_ij = (A && A[nodeI] && A[nodeI][nodeJ] !== undefined) ? A[nodeI][nodeJ] : 0;
+    
     let plotX, plotY;
     
     switch (mode) {
@@ -795,8 +874,9 @@ function updatePhaseDiagram() {
             plotY = xj * dxj;
             break;
         case 'edge-power':
+            // True edge power: P_ij = A_ij · x_i · x_j
             plotX = xi;
-            plotY = xi * dxj - xj * dxi;
+            plotY = A_ij * xi * xj;
             break;
         default:
             plotX = xi;
@@ -908,8 +988,8 @@ export function updatePhaseLabels() {
             break;
         case 'edge-power':
             phaseXLabel.textContent = `x${i}`;
-            phaseYLabel.textContent = `x${i}ẋ${j} - x${j}ẋ${i}`;
-            if (phaseModeHint) phaseModeHint.textContent = 'Power flow along edge i→j';
+            phaseYLabel.textContent = `P${i}${j} = A${i}${j}·x${i}·x${j}`;
+            if (phaseModeHint) phaseModeHint.textContent = 'Edge power Pᵢⱼ = Aᵢⱼ·xᵢ·xⱼ';
             break;
     }
 }
@@ -949,4 +1029,13 @@ export function getDynamicsState() {
 // Set callback for enhanced visualization updates
 export function setDynamicsUpdateCallback(callback) {
     dynamicsUpdateCallback = callback;
+}
+
+// Teaching mode: freeze nodes to show only edge exchange
+export function setFreezeNodesMode(enabled) {
+    freezeNodesMode = enabled;
+}
+
+export function getFreezeNodesMode() {
+    return freezeNodesMode;
 }

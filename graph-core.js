@@ -31,25 +31,26 @@ export let scene, camera, renderer, controls, raycaster, mouse;
 
 export const VERTEX_RADIUS = 2.0;
 
+// Softer, more appealing color palette for vertices
 const defaultVertexMaterial = new THREE.MeshStandardMaterial({ 
-    color: 0x00aaff, 
-    emissive: 0x002244,
-    metalness: 0.3,
-    roughness: 0.4
+    color: 0x5dade2,      // Soft sky blue
+    emissive: 0x1a5276,   // Deep blue glow
+    metalness: 0.35,
+    roughness: 0.35
 });
 
 const hoverVertexMaterial = new THREE.MeshStandardMaterial({ 
-    color: 0xffff00, 
-    emissive: 0x444400,
-    metalness: 0.3,
-    roughness: 0.4
+    color: 0xf7dc6f,      // Soft gold/yellow
+    emissive: 0x7d6608,   // Warm glow
+    metalness: 0.35,
+    roughness: 0.35
 });
 
 const selectedVertexMaterial = new THREE.MeshStandardMaterial({ 
-    color: 0x00ff00, 
-    emissive: 0x004400,
-    metalness: 0.3,
-    roughness: 0.4
+    color: 0x58d68d,      // Soft mint green
+    emissive: 0x1e8449,   // Deep green glow
+    metalness: 0.35,
+    roughness: 0.35
 });
 
 // Force-directed layout parameters
@@ -90,31 +91,83 @@ export function interpolateYellowBlue(t, intensity = 1.0) {
     );
 }
 
+// Power flow color palette
+// Net gain: Cyan/Teal #4FD1C5 (0.31, 0.82, 0.77)
+// Net loss: Coral #F87171 (0.97, 0.44, 0.44)
+// Neutral: Gray-blue #94A3B8 (0.58, 0.64, 0.72)
+const POWER_COLORS = {
+    gain: new THREE.Color(0x4FD1C5),    // Cyan/teal - absorbing energy
+    loss: new THREE.Color(0xF87171),    // Coral/ember - bleeding energy
+    neutral: new THREE.Color(0x94A3B8)  // Desaturated gray-blue - balanced
+};
+
+export function interpolatePowerColor(normalizedPower) {
+    // normalizedPower: -1 (full loss) to +1 (full gain), 0 = neutral
+    const absP = Math.min(Math.abs(normalizedPower), 1.0);
+    // Smooth step for better visual transition
+    const smoothP = absP * absP * (3 - 2 * absP);
+    
+    const result = new THREE.Color();
+    
+    if (absP < 0.05) {
+        // Near neutral - use gray-blue
+        result.copy(POWER_COLORS.neutral);
+    } else if (normalizedPower > 0) {
+        // Gaining energy - interpolate neutral → cyan
+        result.lerpColors(POWER_COLORS.neutral, POWER_COLORS.gain, smoothP);
+    } else {
+        // Losing energy - interpolate neutral → coral
+        result.lerpColors(POWER_COLORS.neutral, POWER_COLORS.loss, smoothP);
+    }
+    
+    return result;
+}
+
+// Legacy function name for compatibility
+export function interpolateRedGreen(t, intensity = 1.0) {
+    return interpolatePowerColor(t);
+}
+
 export function create3DArrow(direction, origin, length, color, headLength, headRadius) {
     const group = new THREE.Group();
     
-    headLength = headLength || Math.min(length * 0.3, 4);
-    headRadius = headRadius || Math.min(length * 0.15, 2);
+    headLength = headLength || Math.min(length * 0.35, 5);
+    headRadius = headRadius || Math.min(length * 0.18, 2.5);
     const shaftLength = Math.max(0.1, length - headLength);
-    const shaftRadius = headRadius * 0.3;
+    const shaftRadius = headRadius * 0.35;
     
-    const shaftGeom = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 8);
+    // Enhanced shaft with gradient-like taper and more segments
+    const shaftGeom = new THREE.CylinderGeometry(shaftRadius * 0.7, shaftRadius, shaftLength, 16);
     const shaftMat = new THREE.MeshStandardMaterial({
         color: color,
-        emissive: color.clone().multiplyScalar(0.3),
-        metalness: 0.35,
-        roughness: 0.3
+        emissive: color.clone().multiplyScalar(0.4),
+        metalness: 0.5,
+        roughness: 0.2
     });
     const shaft = new THREE.Mesh(shaftGeom, shaftMat);
     shaft.position.y = shaftLength / 2;
     group.add(shaft);
     
-    const headGeom = new THREE.ConeGeometry(headRadius, headLength, 12);
+    // Collar ring at base of arrow head for 3D depth effect
+    const collarGeom = new THREE.TorusGeometry(headRadius * 0.7, shaftRadius * 0.5, 8, 16);
+    const collarMat = new THREE.MeshStandardMaterial({
+        color: color,
+        emissive: color.clone().multiplyScalar(0.5),
+        metalness: 0.6,
+        roughness: 0.15
+    });
+    const collar = new THREE.Mesh(collarGeom, collarMat);
+    collar.rotation.x = Math.PI / 2;
+    collar.position.y = shaftLength;
+    group.add(collar);
+    
+    // Enhanced arrow head with more segments for smoother look
+    const headGeom = new THREE.ConeGeometry(headRadius, headLength, 24);
     const headMat = new THREE.MeshStandardMaterial({
         color: color,
-        emissive: color.clone().multiplyScalar(0.4),
-        metalness: 0.45,
-        roughness: 0.2
+        emissive: color.clone().multiplyScalar(0.55),
+        metalness: 0.55,
+        roughness: 0.1
     });
     const head = new THREE.Mesh(headGeom, headMat);
     head.position.y = shaftLength + headLength / 2;
@@ -125,8 +178,10 @@ export function create3DArrow(direction, origin, length, color, headLength, head
     
     group.userData.shaft = shaft;
     group.userData.head = head;
+    group.userData.collar = collar;
     group.userData.shaftMat = shaftMat;
     group.userData.headMat = headMat;
+    group.userData.collarMat = collarMat;
     
     return group;
 }
@@ -134,11 +189,15 @@ export function create3DArrow(direction, origin, length, color, headLength, head
 export function update3DArrowColor(arrowGroup, color) {
     if (arrowGroup.userData.shaftMat) {
         arrowGroup.userData.shaftMat.color.copy(color);
-        arrowGroup.userData.shaftMat.emissive.copy(color).multiplyScalar(0.3);
+        arrowGroup.userData.shaftMat.emissive.copy(color).multiplyScalar(0.4);
     }
     if (arrowGroup.userData.headMat) {
         arrowGroup.userData.headMat.color.copy(color);
-        arrowGroup.userData.headMat.emissive.copy(color).multiplyScalar(0.4);
+        arrowGroup.userData.headMat.emissive.copy(color).multiplyScalar(0.55);
+    }
+    if (arrowGroup.userData.collarMat) {
+        arrowGroup.userData.collarMat.color.copy(color);
+        arrowGroup.userData.collarMat.emissive.copy(color).multiplyScalar(0.5);
     }
 }
 
@@ -150,19 +209,179 @@ export function update3DArrowGeometry(arrowGroup, direction, origin, length, hea
     
     const shaft = arrowGroup.userData.shaft;
     const head = arrowGroup.userData.head;
+    const collar = arrowGroup.userData.collar;
     
     if (shaft && head) {
         shaft.geometry.dispose();
-        shaft.geometry = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 8);
+        shaft.geometry = new THREE.CylinderGeometry(shaftRadius * 0.7, shaftRadius, shaftLength, 16);
         shaft.position.y = shaftLength / 2;
         
         head.geometry.dispose();
-        head.geometry = new THREE.ConeGeometry(headRadius, headLength, 12);
+        head.geometry = new THREE.ConeGeometry(headRadius, headLength, 24);
         head.position.y = shaftLength + headLength / 2;
+        
+        if (collar) {
+            collar.geometry.dispose();
+            collar.geometry = new THREE.TorusGeometry(headRadius * 0.7, shaftRadius * 0.5, 8, 16);
+            collar.position.y = shaftLength;
+        }
     }
     
     arrowGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
     arrowGroup.position.copy(origin);
+}
+
+// Arrow3D class - provides ArrowHelper-compatible interface with 3D geometry
+export class Arrow3D extends THREE.Group {
+    constructor(direction, origin, length, color, headLength, headRadius) {
+        super();
+        
+        this._direction = direction.clone().normalize();
+        this._length = length;
+        this._headLength = headLength || Math.min(length * 0.35, 5);
+        this._headRadius = headRadius || Math.min(length * 0.18, 2.5);
+        
+        this._buildArrow(color);
+        this._updateOrientation();
+        this.position.copy(origin);
+    }
+    
+    _buildArrow(color) {
+        const colorObj = (color instanceof THREE.Color) ? color : new THREE.Color(color);
+        
+        const shaftLength = Math.max(0.1, this._length - this._headLength);
+        const shaftRadius = this._headRadius * 0.35;
+        
+        // Glow cylinder (larger, transparent, for "breathing" effect)
+        const glowGeom = new THREE.CylinderGeometry(shaftRadius * 2.5, shaftRadius * 2.5, shaftLength * 0.9, 12);
+        this._glowMat = new THREE.MeshBasicMaterial({
+            color: colorObj,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false
+        });
+        this._glow = new THREE.Mesh(glowGeom, this._glowMat);
+        this._glow.position.y = shaftLength / 2;
+        this.add(this._glow);
+        
+        // Shaft with taper
+        const shaftGeom = new THREE.CylinderGeometry(shaftRadius * 0.7, shaftRadius, shaftLength, 16);
+        this._shaftMat = new THREE.MeshStandardMaterial({
+            color: colorObj,
+            emissive: colorObj.clone().multiplyScalar(0.4),
+            metalness: 0.5,
+            roughness: 0.2
+        });
+        this._shaft = new THREE.Mesh(shaftGeom, this._shaftMat);
+        this._shaft.position.y = shaftLength / 2;
+        this.add(this._shaft);
+        
+        // Collar ring
+        const collarGeom = new THREE.TorusGeometry(this._headRadius * 0.7, shaftRadius * 0.5, 8, 16);
+        this._collarMat = new THREE.MeshStandardMaterial({
+            color: colorObj,
+            emissive: colorObj.clone().multiplyScalar(0.5),
+            metalness: 0.6,
+            roughness: 0.15
+        });
+        this._collar = new THREE.Mesh(collarGeom, this._collarMat);
+        this._collar.rotation.x = Math.PI / 2;
+        this._collar.position.y = shaftLength;
+        this.add(this._collar);
+        
+        // Arrow head
+        const headGeom = new THREE.ConeGeometry(this._headRadius, this._headLength, 24);
+        this._headMat = new THREE.MeshStandardMaterial({
+            color: colorObj,
+            emissive: colorObj.clone().multiplyScalar(0.55),
+            metalness: 0.55,
+            roughness: 0.1
+        });
+        this._head = new THREE.Mesh(headGeom, this._headMat);
+        this._head.position.y = shaftLength + this._headLength / 2;
+        this.add(this._head);
+        
+        // Store references for updates
+        this.userData.shaft = this._shaft;
+        this.userData.head = this._head;
+        this.userData.collar = this._collar;
+        this.userData.glow = this._glow;
+        this.userData.shaftMat = this._shaftMat;
+        this.userData.headMat = this._headMat;
+        this.userData.collarMat = this._collarMat;
+        this.userData.glowMat = this._glowMat;
+    }
+    
+    _updateOrientation() {
+        this.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this._direction);
+    }
+    
+    setColor(color) {
+        const colorObj = (color instanceof THREE.Color) ? color : new THREE.Color(color);
+        
+        this._shaftMat.color.copy(colorObj);
+        this._shaftMat.emissive.copy(colorObj).multiplyScalar(0.4);
+        
+        this._collarMat.color.copy(colorObj);
+        this._collarMat.emissive.copy(colorObj).multiplyScalar(0.5);
+        
+        this._headMat.color.copy(colorObj);
+        this._headMat.emissive.copy(colorObj).multiplyScalar(0.55);
+        
+        this._glowMat.color.copy(colorObj);
+    }
+    
+    // Set glow intensity (0-1) - makes arrow "breathe"
+    setGlow(intensity) {
+        if (this._glowMat) {
+            this._glowMat.opacity = Math.min(intensity * 0.35, 0.3);
+        }
+    }
+    
+    setDirection(direction) {
+        this._direction = direction.clone().normalize();
+        this._updateOrientation();
+    }
+    
+    setLength(length, headLength, headRadius) {
+        this._length = length;
+        this._headLength = headLength || Math.min(length * 0.35, 5);
+        this._headRadius = headRadius || Math.min(length * 0.18, 2.5);
+        
+        const shaftLength = Math.max(0.1, length - this._headLength);
+        const shaftRadius = this._headRadius * 0.35;
+        
+        // Update glow
+        this._glow.geometry.dispose();
+        this._glow.geometry = new THREE.CylinderGeometry(shaftRadius * 2.5, shaftRadius * 2.5, shaftLength * 0.9, 12);
+        this._glow.position.y = shaftLength / 2;
+        
+        // Update shaft
+        this._shaft.geometry.dispose();
+        this._shaft.geometry = new THREE.CylinderGeometry(shaftRadius * 0.7, shaftRadius, shaftLength, 16);
+        this._shaft.position.y = shaftLength / 2;
+        
+        // Update collar
+        this._collar.geometry.dispose();
+        this._collar.geometry = new THREE.TorusGeometry(this._headRadius * 0.7, shaftRadius * 0.5, 8, 16);
+        this._collar.position.y = shaftLength;
+        
+        // Update head
+        this._head.geometry.dispose();
+        this._head.geometry = new THREE.ConeGeometry(this._headRadius, this._headLength, 24);
+        this._head.position.y = shaftLength + this._headLength / 2;
+    }
+    
+    dispose() {
+        this._glow.geometry.dispose();
+        this._glowMat.dispose();
+        this._shaft.geometry.dispose();
+        this._shaftMat.dispose();
+        this._collar.geometry.dispose();
+        this._collarMat.dispose();
+        this._head.geometry.dispose();
+        this._headMat.dispose();
+    }
 }
 
 // =====================================================
@@ -171,7 +390,7 @@ export function update3DArrowGeometry(arrowGroup, direction, origin, length, hea
 
 export function initScene(container) {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x101015);
+    scene.background = new THREE.Color(0x0d1117);  // Softer dark background
     
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 30, 80);
@@ -188,19 +407,19 @@ export function initScene(container) {
     controls.panSpeed = 0.8;
     controls.enabled = true;
     
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    // Enhanced lighting for better color rendering
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
     
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const keyLight = new THREE.DirectionalLight(0xfff5e6, 0.85);  // Warm key light
     keyLight.position.set(50, 80, 50);
     scene.add(keyLight);
     
-    const fillLight = new THREE.DirectionalLight(0x88aaff, 0.4);
+    const fillLight = new THREE.DirectionalLight(0x88ccff, 0.4);  // Cool fill
     fillLight.position.set(-50, 40, -30);
     scene.add(fillLight);
     
-    const backLight = new THREE.DirectionalLight(0xffaa88, 0.3);
+    const backLight = new THREE.DirectionalLight(0xffbb99, 0.35);  // Warm rim
     backLight.position.set(0, -50, -50);
     scene.add(backLight);
     
@@ -231,6 +450,20 @@ export function createVertex(position, index) {
     const mesh = new THREE.Mesh(geometry, defaultVertexMaterial.clone());
     mesh.position.copy(position);
     mesh.userData.index = index;
+    
+    // Create power ring (outer glow ring that shows |P_i|)
+    const ringGeometry = new THREE.RingGeometry(VERTEX_RADIUS * 1.15, VERTEX_RADIUS * 1.35, 32);
+    const ringMaterial = new THREE.MeshBasicMaterial({
+        color: 0x4FD1C5,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.rotation.x = Math.PI / 2; // Make ring horizontal initially
+    mesh.add(ring); // Parent to vertex so it moves with it
+    mesh.userData.powerRing = ring;
+    
     state.graphGroup.add(mesh);
     state.vertexMeshes.push(mesh);
     
@@ -239,6 +472,23 @@ export function createVertex(position, index) {
     state.vertexLabels.push(label);
     
     return mesh;
+}
+
+// Update power ring visibility and color
+export function updateVertexPowerRing(mesh, normalizedPower, color) {
+    const ring = mesh.userData.powerRing;
+    if (!ring) return;
+    
+    const absP = Math.abs(normalizedPower);
+    
+    // Ring opacity proportional to |P_i|, disappears near zero
+    ring.material.opacity = absP > 0.05 ? Math.min(absP * 0.8, 0.7) : 0;
+    ring.material.color.copy(color);
+    
+    // Make ring face camera (billboard effect)
+    if (camera) {
+        ring.quaternion.copy(camera.quaternion);
+    }
 }
 
 function createVertexLabel(text, position) {
@@ -315,6 +565,17 @@ export function setVertexMaterial(mesh, type) {
 // EDGE MANAGEMENT
 // =====================================================
 
+// Helper function for dynamic arrow scaling based on node count
+function getArrowScaleFactor() {
+    const n = state.vertexMeshes.length;
+    // For small graphs (<=5): full size
+    // For medium graphs (6-20): scale down gradually
+    // For large graphs (>20): compact arrows
+    if (n <= 5) return 1.0;
+    if (n <= 20) return 1.0 - (n - 5) * 0.025;
+    return 0.625;
+}
+
 export function addEdge(fromIdx, toIdx) {
     if (fromIdx === toIdx) return false;
     if (state.adjacencyMatrix[fromIdx][toIdx] === 1) return false;
@@ -334,14 +595,17 @@ export function addEdge(fromIdx, toIdx) {
     const arrowStart = fromPos.clone().add(direction.clone().multiplyScalar(VERTEX_RADIUS));
     const arrowLength = length - 2 * VERTEX_RADIUS - 1;
     
+    // Dynamic scaling based on graph size
+    const scaleFactor = getArrowScaleFactor();
+    
     if (arrowLength > 0) {
-        const arrow = new THREE.ArrowHelper(
+        const arrow = new Arrow3D(
             direction,
             arrowStart,
             arrowLength,
-            0xff4444,
-            Math.min(arrowLength * 0.3, 4),
-            Math.min(arrowLength * 0.15, 2)
+            0xe57373,  // Soft coral/salmon
+            Math.min(arrowLength * 0.35 * scaleFactor, 5 * scaleFactor),
+            Math.min(arrowLength * 0.18 * scaleFactor, 2.5 * scaleFactor)
         );
         state.graphGroup.add(arrow);
         state.edgeObjects.push({ from: fromIdx, to: toIdx, arrow });
@@ -558,8 +822,6 @@ export function updateAllEdges() {
         const fromPos = state.vertexMeshes[edgeObj.from].position;
         const toPos = state.vertexMeshes[edgeObj.to].position;
         
-        state.graphGroup.remove(edgeObj.arrow);
-        
         const direction = new THREE.Vector3().subVectors(toPos, fromPos);
         const length = direction.length();
         direction.normalize();
@@ -568,16 +830,17 @@ export function updateAllEdges() {
         const arrowLength = length - 2 * VERTEX_RADIUS - 1;
         
         if (arrowLength > 0) {
-            const arrow = new THREE.ArrowHelper(
-                direction,
-                arrowStart,
+            // Dynamic scaling based on graph size
+            const scaleFactor = getArrowScaleFactor();
+            
+            // Update existing arrow in place using Arrow3D methods
+            edgeObj.arrow.setDirection(direction);
+            edgeObj.arrow.position.copy(arrowStart);
+            edgeObj.arrow.setLength(
                 arrowLength,
-                0xff4444,
-                Math.min(arrowLength * 0.3, 4),
-                Math.min(arrowLength * 0.15, 2)
+                Math.min(arrowLength * 0.35 * scaleFactor, 5 * scaleFactor),
+                Math.min(arrowLength * 0.18 * scaleFactor, 2.5 * scaleFactor)
             );
-            state.graphGroup.add(arrow);
-            edgeObj.arrow = arrow;
         }
     }
 }

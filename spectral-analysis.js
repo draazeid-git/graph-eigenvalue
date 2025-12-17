@@ -1145,7 +1145,8 @@ export function computeEigenvaluesNumerical(matrix) {
 // SKEW-SYMMETRIC EIGENVALUES
 // =====================================================
 
-export function computeSkewSymmetricEigenvalues(matrix) {
+// Returns ALL eigenvalues including duplicates (for multiplicity counting)
+export function computeSkewSymmetricEigenvaluesWithMultiplicity(matrix) {
     const n = matrix.length;
     if (n === 0) return [];
     
@@ -1173,10 +1174,16 @@ export function computeSkewSymmetricEigenvalues(matrix) {
     }
     
     eigenvalues.sort((a, b) => b.imag - a.imag);
+    return eigenvalues;
+}
+
+// Returns unique eigenvalues (deduplicated)
+export function computeSkewSymmetricEigenvalues(matrix) {
+    const allEigs = computeSkewSymmetricEigenvaluesWithMultiplicity(matrix);
     
     const seen = new Set();
     const unique = [];
-    for (const ev of eigenvalues) {
+    for (const ev of allEigs) {
         const key = ev.imag.toFixed(8);
         if (!seen.has(key)) {
             seen.add(key);

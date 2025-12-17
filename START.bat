@@ -1,13 +1,12 @@
 @echo off
-echo Starting Graph Visualization Server...
-echo.
-echo Press Ctrl+C to stop the server when done.
+echo ============================================================
+echo   Graph Eigenvalue Visualization Server
+echo   No-Cache Mode - Changes load automatically!
+echo ============================================================
 echo.
 
-REM Try to open in Chrome (common installation paths)
-start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" http://localhost:8000
-if %ERRORLEVEL% NEQ 0 (
-    start "" "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" http://localhost:8000
-)
+REM Open browser
+start http://localhost:8000
 
-python -m http.server 8000
+REM Start server with no-cache headers
+python server.py 8000

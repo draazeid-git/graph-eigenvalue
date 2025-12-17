@@ -1,22 +1,27 @@
 """
-Analytic Eigenvalue Graph Finder
-================================
-Finds all non-isomorphic skew-symmetric graphs (up to n vertices) 
-that have closed-form eigenvalue formulas.
+Analytic Eigenvalue Graph Finder (Optimized Version)
+===================================================
+Finds non-isomorphic skew-symmetric graphs (up to n vertices) that have 
+closed-form eigenvalue formulas.
+
+Optimizations Implemented:
+    1. Pre-Exclusion: Skips all known analytic families (Empty, Complete, Cycle, 
+       Path, Star) to focus the search on novel structures.
+    2. Irreducible Factor Degree Cutoff: Skips root-finding for any characteristic 
+       polynomial that contains an irreducible factor of degree 5 or greater, 
+       as these are not generally solvable by algebraic means (Abel-Ruffini theorem).
+    3. Weisfeiler-Lehman Hashing: Robust isomorphism detection via NetworkX.
 
 Usage:
     python find_analytic_graphs.py [n]
+    python find_analytic_graphs.py --json [n]   # Output JSON only (for web integration)
     
     where n is the number of vertices (default: 5)
-
-Output:
-    - Console display of all graphs with analytic eigenvalues
-    - JSON file with full results: analytic_graphs_n{n}.json
 
 Requirements:
     pip install sympy numpy networkx
 
-Author: Graph Spectral Analysis Project
+Author: Graph Spectral Analysis Project  
 """
 
 import sys
@@ -29,65 +34,60 @@ import numpy as np
 # Sympy for symbolic computation
 from sympy import (
     symbols, Matrix, roots, simplify, expand, factor,
-    sqrt, cos, sin, pi, I, Rational, nsimplify,
-    Poly, degree, LC, sympify
+    sqrt, cos, sin, pi, I, Rational, nsimplify, sympify, factor_list, Abs
 )
 from sympy.core.numbers import Float
+from sympy.polys.rootoftools import RootOf
+
+# NetworkX for graph structure and isomorphism handling
+import networkx as nx
 
 # =====================================================
-# GRAPH GENERATION
+# CONFIGURATION
+# =====================================================
+
+# Known families that always have analytic eigenvalues (skip calculation)
+KNOWN_ANALYTIC_FAMILIES = {
+    "Empty graph", "Complete graph", "Cycle graph", "Path graph", "Star graph"
+}
+
+# Max degree for which a general polynomial is solvable in terms of radicals
+# (Abel-Ruffini theorem)
+MAX_ANALYTIC_DEGREE = 4 
+
+# =====================================================
+# GRAPH GENERATION & ISOMORPHISM FILTERING
 # =====================================================
 
 def generate_all_edge_sets(n):
     """
     Generate all possible undirected edge sets for n vertices.
-    Each edge set represents an undirected graph.
-    
-    Yields: tuple of edges, e.g., ((0,1), (0,2), (1,2))
+    Yields: tuple of edges
     """
     possible_edges = [(i, j) for i in range(n) for j in range(i+1, n)]
     
-    # Generate all subsets of edges (2^(n choose 2) graphs)
     for r in range(len(possible_edges) + 1):
         for edge_set in combinations(possible_edges, r):
             yield edge_set
 
 
-def canonical_form(n, edges):
-    """
-    Compute a canonical form for the graph to identify isomorphism classes.
-    Uses degree sequence + sorted adjacency as a simple canonical form.
-    
-    Note: This is a simplified approach. For production use, 
-    consider using nauty/pynauty for true canonical labeling.
-    """
-    if not edges:
-        return (tuple([0] * n), ())
-    
-    # Build adjacency list
-    adj = [set() for _ in range(n)]
-    for i, j in edges:
-        adj[i].add(j)
-        adj[j].add(i)
-    
-    # Compute degree sequence (sorted)
-    degrees = tuple(sorted([len(adj[i]) for i in range(n)], reverse=True))
-    
-    # For simple canonical form: use degree sequence + edge count + substructure
-    # This catches most isomorphisms but not all
-    edge_degrees = tuple(sorted([(len(adj[i]), len(adj[j])) for i, j in edges]))
-    
-    return (degrees, edge_degrees, len(edges))
+def get_networkx_graph(n, edges):
+    """Create a NetworkX graph object."""
+    G = nx.Graph()
+    G.add_nodes_from(range(n))
+    G.add_edges_from(edges)
+    return G
+
+
+def canonical_form_nx(n, edges):
+    """Compute the NetworkX graph's canonical label string using WL hash."""
+    G = get_networkx_graph(n, edges)
+    return nx.algorithms.graph_hashing.weisfeiler_lehman_graph_hash(G)
 
 
 def enumerate_unique_graphs(n, use_isomorphism_filter=True):
     """
     Generate unique graphs (up to isomorphism) for n vertices.
-    
-    Args:
-        n: Number of vertices
-        use_isomorphism_filter: If True, filter out isomorphic copies
-        
     Yields: (edges, canonical_form_key)
     """
     if not use_isomorphism_filter:
@@ -98,7 +98,7 @@ def enumerate_unique_graphs(n, use_isomorphism_filter=True):
     seen = set()
     
     for edges in generate_all_edge_sets(n):
-        canon = canonical_form(n, edges)
+        canon = canonical_form_nx(n, edges)
         
         if canon not in seen:
             seen.add(canon)
@@ -110,11 +110,7 @@ def enumerate_unique_graphs(n, use_isomorphism_filter=True):
 # =====================================================
 
 def make_skew_symmetric_matrix(n, edges):
-    """
-    Create skew-symmetric adjacency matrix.
-    A[i,j] = 1 if edge (i,j) with i < j
-    A[j,i] = -1 (skew-symmetric)
-    """
+    """Create skew-symmetric adjacency matrix."""
     A = [[0] * n for _ in range(n)]
     for i, j in edges:
         if i < j:
@@ -129,23 +125,39 @@ def make_skew_symmetric_matrix(n, edges):
 def compute_characteristic_polynomial(A):
     """
     Compute the characteristic polynomial det(A - λI).
-    Returns sympy polynomial in x (using x instead of lambda to avoid Python keyword issues).
+    Returns factored sympy polynomial in x.
     """
     n = len(A)
     x = symbols('x')
     M = Matrix(A) - x * Matrix.eye(n)
     char_poly = M.det()
-    return expand(char_poly), x
-
-
-def polynomial_to_string(poly, var):
-    """Convert polynomial to a readable string."""
-    return str(poly)
+    # Factoring helps both root-finding and the degree cutoff check
+    return factor(char_poly), x
 
 
 # =====================================================
-# EIGENVALUE ANALYSIS
+# EIGENVALUE ANALYSIS (WITH DEGREE CUTOFF)
 # =====================================================
+
+def check_degree_cutoff(char_poly, var):
+    """
+    Check if the polynomial contains an irreducible factor of degree > 4.
+    If so, solving it is generally impossible in closed form (Abel-Ruffini).
+    
+    Returns: True if degree > MAX_ANALYTIC_DEGREE, False otherwise.
+    """
+    try:
+        # Get a list of (irreducible factor, multiplicity)
+        factors = factor_list(char_poly, var)[1]
+        
+        for factor_poly, _ in factors:
+            if factor_poly.as_poly(var).degree() > MAX_ANALYTIC_DEGREE:
+                return True
+        return False
+    except Exception:
+        # If factoring fails, allow the more expensive root-finding to proceed
+        return False
+
 
 def find_eigenvalues(char_poly, var):
     """
@@ -155,101 +167,141 @@ def find_eigenvalues(char_poly, var):
     try:
         eigs = roots(char_poly, var)
         return eigs
-    except Exception as e:
+    except Exception:
         return None
 
 
 def is_nice_closed_form(expr):
     """
     Check if an expression is a "nice" closed form.
-    
-    Nice forms include:
-    - Integers, rationals
-    - Square roots of integers
-    - Trigonometric values (cos, sin of rational multiples of π)
-    - Combinations of the above with i (imaginary unit)
-    
-    Reject:
-    - RootOf expressions (unsolved polynomial roots)
-    - Floating point approximations
-    - Nested radicals of degree > 2
+    Accepts: exact algebraic forms (sqrt, trig, etc.)
+    Rejects: Float approximations, RootOf/CRootOf placeholder solutions.
     """
     if expr is None:
         return False
     
-    s = str(expr)
-    
-    # Reject unsolved forms
-    if 'RootOf' in s or 'CRootOf' in s:
+    # Reject Floating Point Approximations
+    if expr.has(Float):
         return False
     
-    # Reject floating point
-    if isinstance(expr, Float):
+    # Reject Unsolved Algebraic Forms (RootOf means SymPy couldn't solve)
+    if expr.has(RootOf) or 'CRootOf' in str(expr):
         return False
-    if 'Float' in s or '.' in s.replace('...', ''):
-        # Check if it's actually a float vs decimal in string repr
-        try:
-            if expr.has(Float):
-                return False
-        except:
-            pass
-    
-    # Reject very complex expressions (heuristic)
-    if len(s) > 200:
-        return False
-    
+        
     return True
 
 
 def classify_eigenvalue(eig):
     """
-    Classify an eigenvalue into a category.
-    
-    Returns: (category, simplified_form)
+    Classify an eigenvalue (skew-symmetric implies zero or pure imaginary).
+    Returns: (category, display_string)
     """
     try:
         simp = simplify(eig)
-        s = str(simp)
         
-        # Check for zero
         if simp == 0:
             return ('zero', '0')
         
-        # Check for pure imaginary (±i * something)
-        if simp.is_imaginary or (I in simp.free_symbols or 'I' in s):
-            # Extract the coefficient of I
-            coeff = simp / I
-            coeff_simp = simplify(coeff)
-            
-            if coeff_simp.is_real:
-                return ('pure_imaginary', f'±{coeff_simp}i')
+        # Check if purely imaginary: simp / I should be real
+        coeff = simp / I
+        coeff_simp = simplify(coeff)
         
-        # Check for real
-        if simp.is_real:
-            return ('real', str(simp))
-        
-        # Complex
-        return ('complex', str(simp))
+        if coeff_simp.is_real:
+            abs_coeff = simplify(Abs(coeff_simp))
+            return ('pure_imaginary', f'±{abs_coeff}i')
+        else:
+            return ('complex/error', str(simp))
         
     except:
         return ('unknown', str(eig))
 
 
-def analyze_eigenvalues(eigs):
+def format_eigenvalue_for_js(eig):
     """
-    Analyze a set of eigenvalues for nice closed forms.
+    Format eigenvalue for JavaScript consumption.
+    Try to express in terms of sqrt, cos, sin, etc.
+    """
+    try:
+        simp = simplify(eig)
+        
+        if simp == 0:
+            return {'value': 0, 'formula': '0', 'type': 'zero'}
+        
+        # Extract imaginary coefficient
+        coeff = simplify(simp / I)
+        
+        if coeff.is_real:
+            # Try to nsimplify to find nice form
+            nice = nsimplify(coeff, rational=False)
+            
+            # Check for sqrt patterns
+            nice_str = str(nice)
+            
+            # Try to detect cos/sin patterns
+            for k in range(1, 20):
+                for n in range(k+1, 30):
+                    test_cos = 2 * cos(pi * k / n)
+                    test_sin = 2 * sin(pi * k / n)
+                    
+                    if abs(float(nice) - float(test_cos)) < 1e-10:
+                        return {
+                            'value': float(nice),
+                            'formula': f'2cos({k}π/{n})',
+                            'type': 'trig',
+                            'k': k, 'n': n, 'func': 'cos'
+                        }
+                    if abs(float(nice) - float(test_sin)) < 1e-10:
+                        return {
+                            'value': float(nice),
+                            'formula': f'2sin({k}π/{n})',
+                            'type': 'trig',
+                            'k': k, 'n': n, 'func': 'sin'
+                        }
+            
+            # Check for sqrt patterns
+            for base in range(1, 20):
+                if abs(float(nice) - float(sqrt(base))) < 1e-10:
+                    return {
+                        'value': float(nice),
+                        'formula': f'√{base}',
+                        'type': 'sqrt',
+                        'radicand': base
+                    }
+            
+            return {
+                'value': float(nice),
+                'formula': nice_str,
+                'type': 'algebraic'
+            }
+        
+        return {'value': str(simp), 'formula': str(simp), 'type': 'complex'}
+        
+    except Exception as e:
+        return {'value': str(eig), 'formula': str(eig), 'type': 'unknown', 'error': str(e)}
+
+
+def analyze_eigenvalues(char_poly, x):
+    """
+    Analyze a polynomial for nice closed forms, applying the degree cutoff.
+    """
+    # OPTIMIZATION: Check for irreducible factors of degree > 4
+    if check_degree_cutoff(char_poly, x):
+        return {
+            'all_analytic': False,
+            'eigenvalues': [],
+            'skipped_reason': f'irreducible_factor_degree>{MAX_ANALYTIC_DEGREE}',
+            'summary': f'Skipped: Contains irreducible factor of degree > {MAX_ANALYTIC_DEGREE}'
+        }
+
+    # Proceed to root-finding
+    eigs = find_eigenvalues(char_poly, x)
     
-    Returns: {
-        'all_analytic': bool,
-        'eigenvalues': [(value, multiplicity, category, nice_form), ...],
-        'summary': str
-    }
-    """
     if eigs is None:
         return {
             'all_analytic': False,
             'eigenvalues': [],
-            'summary': 'Could not solve'
+            'skipped_reason': 'solve_failed',
+            'summary': 'Could not solve polynomial analytically'
         }
     
     results = []
@@ -258,22 +310,25 @@ def analyze_eigenvalues(eigs):
     for eig, mult in eigs.items():
         is_nice = is_nice_closed_form(eig)
         category, nice_str = classify_eigenvalue(eig)
+        js_format = format_eigenvalue_for_js(eig)
         
         if not is_nice:
             all_nice = False
         
         results.append({
-            'value': str(simplify(eig)),
+            'raw': str(simplify(eig)),
             'multiplicity': int(mult),
             'category': category,
-            'is_nice': is_nice
+            'display': nice_str,
+            'is_nice': is_nice,
+            'js': js_format
         })
     
     # Create summary
     if all_nice:
         summary = 'All eigenvalues have closed forms'
     else:
-        summary = 'Some eigenvalues lack closed forms'
+        summary = 'Some eigenvalues lack closed forms (RootOf or Float)'
     
     return {
         'all_analytic': all_nice,
@@ -288,62 +343,57 @@ def analyze_eigenvalues(eigs):
 
 def identify_graph_family(n, edges):
     """
-    Try to identify if the graph belongs to a known family.
+    Identify if the graph belongs to a known family.
+    Returns (family_base_name, full_description) or (None, None)
     """
-    m = len(edges)
-    
-    # Build adjacency for analysis
-    adj = [set() for _ in range(n)]
-    for i, j in edges:
-        adj[i].add(j)
-        adj[j].add(i)
-    
-    degrees = [len(adj[i]) for i in range(n)]
+    G = get_networkx_graph(n, edges)
+    m = G.number_of_edges()
+    is_connected = nx.is_connected(G) if n > 0 else False
+    degrees = sorted([d for _, d in G.degree()], reverse=True)
     
     # Empty graph
     if m == 0:
-        return f"Empty graph E_{n}"
+        return ("Empty graph", f"Empty graph E_{n}")
     
-    # Complete graph K_n
+    # Complete graph
     if m == n * (n - 1) // 2:
-        return f"Complete graph K_{n}"
+        return ("Complete graph", f"Complete graph K_{n}")
     
-    # Check for path P_n
-    if m == n - 1:
-        degree_count = defaultdict(int)
-        for d in degrees:
-            degree_count[d] += 1
-        if degree_count[1] == 2 and degree_count[2] == n - 2 and n > 2:
-            return f"Path graph P_{n}"
-        if n == 2:
-            return "Path graph P_2"
-    
-    # Check for cycle C_n
-    if m == n and all(d == 2 for d in degrees):
-        # Verify it's connected
-        visited = set()
-        stack = [0]
-        while stack:
-            node = stack.pop()
-            if node not in visited:
-                visited.add(node)
-                stack.extend(adj[node] - visited)
-        if len(visited) == n:
-            return f"Cycle graph C_{n}"
-    
-    # Check for star K_{1,n-1}
-    if m == n - 1:
-        if max(degrees) == n - 1 and degrees.count(1) == n - 1:
-            return f"Star graph K_{{1,{n-1}}}"
-    
-    # Check for complete bipartite
-    # ... (could add more families)
+    if is_connected:
+        # Cycle
+        if m == n and all(d == 2 for d in degrees):
+            return ("Cycle graph", f"Cycle graph C_{n}")
+        
+        # Path
+        if m == n - 1 and degrees == sorted([1, 1] + [2] * (n - 2), reverse=True):
+            return ("Path graph", f"Path graph P_{n}")
+        
+        # Star
+        if m == n - 1 and degrees == sorted([n - 1] + [1] * (n - 1), reverse=True):
+            return ("Star graph", f"Star graph S_{n}")
+        
+        # Wheel (star + outer cycle)
+        if m == 2 * (n - 1) and degrees[0] == n - 1:
+            non_hub = degrees[1:]
+            if all(d == 3 for d in non_hub):
+                return ("Wheel graph", f"Wheel graph W_{n}")
+        
+        # Ladder
+        if n % 2 == 0:
+            rungs = n // 2
+            expected_edges = 3 * rungs - 2  # 2*(rungs-1) + rungs
+            if m == expected_edges and all(d in [2, 3] for d in degrees):
+                return ("Ladder graph", f"Ladder graph L_{rungs}")
     
     # Regular graphs
     if len(set(degrees)) == 1 and degrees[0] > 0:
-        return f"{degrees[0]}-regular graph on {n} vertices"
+        return (None, f"{degrees[0]}-regular graph on {n} vertices")
     
-    return None
+    # Tree detection
+    if is_connected and m == n - 1:
+        return ("Tree", f"Tree on {n} vertices")
+    
+    return (None, None)
 
 
 def edges_to_string(edges):
@@ -353,20 +403,34 @@ def edges_to_string(edges):
     return ", ".join(f"{i}-{j}" for i, j in sorted(edges))
 
 
+def edges_to_adjacency_matrix(n, edges):
+    """Convert edges to adjacency matrix (for skew-symmetric)."""
+    A = [[0] * n for _ in range(n)]
+    for i, j in edges:
+        if i < j:
+            A[i][j] = 1
+            A[j][i] = -1
+        else:
+            A[j][i] = 1
+            A[i][j] = -1
+    return A
+
+
 # =====================================================
 # MAIN ENUMERATION
 # =====================================================
 
-def find_analytic_graphs(n, verbose=True):
+def find_analytic_graphs(n, verbose=True, include_known=False):
     """
     Find all graphs on n vertices with analytic eigenvalue formulas.
     
     Args:
         n: Number of vertices
         verbose: Print progress
-        
+        include_known: Include known analytic families in output
+    
     Returns:
-        List of graphs with analytic eigenvalues
+        List of result dictionaries
     """
     if verbose:
         print(f"\n{'='*60}")
@@ -374,74 +438,104 @@ def find_analytic_graphs(n, verbose=True):
         print(f"{'='*60}\n")
     
     # Statistics
-    total_graphs = 0
-    unique_graphs = 0
-    unique_polynomials = 0
-    analytic_count = 0
+    graphs_total = 0
+    graphs_skipped_known = 0
+    graphs_skipped_poly = 0
     
-    # Group graphs by polynomial
     poly_groups = defaultdict(list)
-    
+    known_family_results = []
     start_time = time.time()
     
-    # Enumerate unique graphs
+    # Pass 1: Generate and filter
     for edges, canon in enumerate_unique_graphs(n, use_isomorphism_filter=True):
-        unique_graphs += 1
+        graphs_total += 1
+        family_base, family_desc = identify_graph_family(n, edges)
         
-        # Create skew-symmetric matrix
+        graph_data = {
+            'edges': edges,
+            'family_base': family_base,
+            'family': family_desc,
+            'canon': canon
+        }
+        
+        # Check if known analytic family
+        if family_base in KNOWN_ANALYTIC_FAMILIES:
+            graphs_skipped_known += 1
+            if include_known:
+                known_family_results.append(graph_data)
+            continue
+        
+        # Compute polynomial and group by it
         A = make_skew_symmetric_matrix(n, edges)
-        
-        # Compute characteristic polynomial
         char_poly, var = compute_characteristic_polynomial(A)
         poly_str = str(char_poly)
         
-        poly_groups[poly_str].append({
-            'edges': edges,
-            'matrix': A
-        })
-    
-    unique_polynomials = len(poly_groups)
-    
+        graph_data['polynomial'] = poly_str
+        poly_groups[poly_str].append(graph_data)
+
     if verbose:
-        elapsed = time.time() - start_time
-        print(f"Enumerated {unique_graphs} unique graphs in {elapsed:.2f}s")
-        print(f"Found {unique_polynomials} distinct characteristic polynomials\n")
+        print(f"Total unique graphs: {graphs_total}")
+        print(f"Skipped {graphs_skipped_known} known analytic families")
+        print(f"Unique polynomials to analyze: {len(poly_groups)}\n")
     
-    # Analyze each polynomial
+    # Pass 2: Analyze unique polynomials
     results = []
     x = symbols('x')
     
     for poly_str, graphs in poly_groups.items():
         char_poly = sympify(poly_str)
         
-        # Find eigenvalues
-        eigs = find_eigenvalues(char_poly, x)
-        analysis = analyze_eigenvalues(eigs)
+        analysis = analyze_eigenvalues(char_poly, x)
         
-        if analysis['all_analytic']:
-            analytic_count += 1
+        if analysis.get('skipped_reason'):
+            graphs_skipped_poly += len(graphs)
+            continue
             
-            # Get representative graph
+        if analysis['all_analytic']:
             rep = graphs[0]
-            family = identify_graph_family(n, rep['edges'])
             
             result = {
                 'n': n,
-                'edges': rep['edges'],
+                'edges': [list(e) for e in rep['edges']],
                 'edge_string': edges_to_string(rep['edges']),
                 'edge_count': len(rep['edges']),
+                'adjacency_matrix': edges_to_adjacency_matrix(n, rep['edges']),
                 'polynomial': poly_str,
                 'eigenvalues': analysis['eigenvalues'],
-                'family': family,
+                'family': rep['family'],
                 'isomorphism_class_size': len(graphs)
             }
             results.append(result)
     
-    # Sort results by edge count, then by polynomial
-    results.sort(key=lambda x: (x['edge_count'], x['polynomial']))
+    # Add known families if requested
+    if include_known:
+        for graph_data in known_family_results:
+            A = make_skew_symmetric_matrix(n, graph_data['edges'])
+            char_poly, var = compute_characteristic_polynomial(A)
+            analysis = analyze_eigenvalues(char_poly, x)
+            
+            result = {
+                'n': n,
+                'edges': [list(e) for e in graph_data['edges']],
+                'edge_string': edges_to_string(graph_data['edges']),
+                'edge_count': len(graph_data['edges']),
+                'adjacency_matrix': edges_to_adjacency_matrix(n, graph_data['edges']),
+                'polynomial': str(char_poly),
+                'eigenvalues': analysis.get('eigenvalues', []),
+                'family': graph_data['family'],
+                'known_family': True,
+                'isomorphism_class_size': 1
+            }
+            results.append(result)
     
     if verbose:
-        print(f"Found {analytic_count} graphs with analytic eigenvalues\n")
+        elapsed = time.time() - start_time
+        print(f"Skipped {graphs_skipped_poly} graphs (irreducible degree > {MAX_ANALYTIC_DEGREE})")
+        print(f"Time: {elapsed:.2f}s\n")
+        print(f"Found {len(results)} non-isomorphic graphs with analytic eigenvalues")
+    
+    # Sort by edge count
+    results.sort(key=lambda x: (x['edge_count'], x.get('polynomial', '')))
     
     return results
 
@@ -454,18 +548,21 @@ def print_results(results):
     
     for i, r in enumerate(results, 1):
         print(f"\n[{i}] ", end="")
-        if r['family']:
+        if r.get('family'):
             print(f"{r['family']}")
         else:
             print(f"Graph on {r['n']} vertices")
         
         print(f"    Edges: {r['edge_string']}")
-        print(f"    |E| = {r['edge_count']}, isomorphism class size = {r['isomorphism_class_size']}")
+        print(f"    |E| = {r['edge_count']}, isomorphism class size = {r.get('isomorphism_class_size', 1)}")
         print(f"    Characteristic polynomial: {r['polynomial']}")
         print(f"    Eigenvalues:")
-        for eig in r['eigenvalues']:
+        
+        for eig in r.get('eigenvalues', []):
             mult_str = f" (mult. {eig['multiplicity']})" if eig['multiplicity'] > 1 else ""
-            print(f"        λ = {eig['value']}{mult_str}")
+            js = eig.get('js', {})
+            formula = js.get('formula', eig.get('display', eig.get('raw', '?')))
+            print(f"        λ = {formula}{mult_str}")
     
     print("\n" + "="*70)
     print(f"Total: {len(results)} graphs with analytic eigenvalues")
@@ -474,17 +571,19 @@ def print_results(results):
 
 def save_results(results, filename):
     """Save results to JSON file."""
-    # Convert tuples to lists for JSON
-    json_results = []
-    for r in results:
-        jr = r.copy()
-        jr['edges'] = [list(e) for e in r['edges']]
-        json_results.append(jr)
-    
     with open(filename, 'w') as f:
-        json.dump(json_results, f, indent=2)
-    
+        json.dump(results, f, indent=2)
     print(f"\nResults saved to {filename}")
+
+
+# =====================================================
+# WEB API MODE (for integration with server.py)
+# =====================================================
+
+def json_mode(n):
+    """Output JSON only, for web integration."""
+    results = find_analytic_graphs(n, verbose=False, include_known=True)
+    print(json.dumps(results, indent=2))
 
 
 # =====================================================
@@ -496,18 +595,11 @@ def interactive_mode():
     print("\n" + "="*60)
     print("ANALYTIC EIGENVALUE GRAPH FINDER")
     print("="*60)
-    print("\nThis program finds all non-isomorphic graphs on n vertices")
-    print("whose characteristic polynomials have closed-form solutions.")
-    print("\nNote: Computation time grows exponentially with n!")
-    print("  n=4:  ~11 unique graphs     (instant)")
-    print("  n=5:  ~34 unique graphs     (~1 second)")
-    print("  n=6:  ~156 unique graphs    (~10 seconds)")
-    print("  n=7:  ~1044 unique graphs   (~2 minutes)")
-    print("  n=8:  ~12346 unique graphs  (~30+ minutes)")
+    print(f"\nUsing Abel-Ruffini cutoff: degree > {MAX_ANALYTIC_DEGREE} skipped")
     
     while True:
         try:
-            n_input = input("\nEnter number of vertices (2-7, or 'q' to quit): ").strip()
+            n_input = input("\nEnter number of vertices (2-8, or 'q' to quit): ").strip()
             
             if n_input.lower() == 'q':
                 print("Goodbye!")
@@ -519,18 +611,14 @@ def interactive_mode():
                 print("Need at least 2 vertices!")
                 continue
             
-            if n > 7:
-                confirm = input(f"n={n} may take a very long time. Continue? (y/n): ")
+            if n > 8:
+                confirm = input(f"n={n} will be slow. Continue? (y/n): ")
                 if confirm.lower() != 'y':
                     continue
             
-            # Find analytic graphs
             results = find_analytic_graphs(n, verbose=True)
-            
-            # Print results
             print_results(results)
             
-            # Save option
             save_opt = input("\nSave results to JSON? (y/n): ").strip().lower()
             if save_opt == 'y':
                 filename = f"analytic_graphs_n{n}.json"
@@ -541,31 +629,39 @@ def interactive_mode():
         except KeyboardInterrupt:
             print("\n\nInterrupted. Goodbye!")
             break
+        except Exception as e:
+            print(f"\nError: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # =====================================================
-# COMMAND LINE INTERFACE
+# MAIN
 # =====================================================
 
 def main():
     """Main entry point."""
     if len(sys.argv) > 1:
-        # Command line mode
-        try:
-            n = int(sys.argv[1])
-            results = find_analytic_graphs(n, verbose=True)
-            print_results(results)
-            
-            # Auto-save results
-            filename = f"analytic_graphs_n{n}.json"
-            save_results(results, filename)
-            
-        except ValueError:
-            print(f"Error: '{sys.argv[1]}' is not a valid integer")
-            print("Usage: python find_analytic_graphs.py [n]")
-            sys.exit(1)
+        if sys.argv[1] == '--json':
+            # JSON mode for web integration
+            n = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+            json_mode(n)
+        else:
+            # Command line mode
+            try:
+                n = int(sys.argv[1])
+                results = find_analytic_graphs(n, verbose=True)
+                print_results(results)
+                
+                filename = f"analytic_graphs_n{n}.json"
+                save_results(results, filename)
+                
+            except ValueError:
+                print(f"Error: '{sys.argv[1]}' is not a valid integer")
+                print("Usage: python find_analytic_graphs.py [n]")
+                print("       python find_analytic_graphs.py --json [n]")
+                sys.exit(1)
     else:
-        # Interactive mode
         interactive_mode()
 
 
