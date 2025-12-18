@@ -8,7 +8,7 @@
 
 🔗 **Live Demo:** [https://draazeid-git.github.io/graph-eigenvalue/](https://draazeid-git.github.io/graph-eigenvalue/)
 
-![Graph Visualization Demo](docs/images/demo-wheel-graph.gif)
+![Graph Visualization Demo](docs/images/Mobius.jpg)
 
 ---
 
