@@ -114,6 +114,25 @@
             </div>
             
             <div class="control-group">
+                <h4>🎨 Display Options</h4>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="solid-faces-checkbox">
+                    <span>Solid Faces (Polyhedron View)</span>
+                </label>
+                <div id="face-options" class="sub-options hidden">
+                    <div class="input-row">
+                        <label>Opacity:</label>
+                        <input id="face-opacity" type="range" min="10" max="95" value="50">
+                        <span id="face-opacity-label">50%</span>
+                    </div>
+                    <button id="refresh-faces-btn" class="small secondary">🔄 Refresh Faces</button>
+                </div>
+                <p class="hint hidden" id="face-hint">
+                    💡 Best for polyhedra, grids, and mesh graphs
+                </p>
+            </div>
+            
+            <div class="control-group">
                 <h4>Quick Templates</h4>
                 <select id="template-select">
                     <option value="custom">Custom (manual edges)</option>

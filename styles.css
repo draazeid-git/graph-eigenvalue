@@ -334,6 +334,74 @@ select {
     margin-top: 8px;
 }
 
+/* Face Options Panel */
+#face-options {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 10px;
+}
+
+#face-options.hidden {
+    display: none !important;
+}
+
+#face-hint.hidden {
+    display: none !important;
+}
+
+#face-options .input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+#face-options .input-row label {
+    min-width: 55px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+#face-options .input-row input[type="range"] {
+    flex: 1;
+    height: 6px;
+    -webkit-appearance: none;
+    background: var(--bg-hover);
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+#face-options .input-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+#face-options .input-row span {
+    min-width: 35px;
+    font-size: 11px;
+    color: var(--text-primary);
+    text-align: right;
+}
+
+#face-options button {
+    width: 100%;
+    margin-top: 0;
+}
+
+#face-hint {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(74, 158, 255, 0.1);
+    border-radius: 4px;
+    border-left: 3px solid var(--accent-blue);
+}
+
 /* =====================================================
    BUTTONS
    ===================================================== */

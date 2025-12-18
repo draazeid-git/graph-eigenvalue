@@ -16,7 +16,8 @@ import {
     startForceLayout, stopForceLayout,
     getIntersectedVertex, getIntersectedEdge,
     VERTEX_RADIUS, Arrow3D,
-    removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle
+    removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle,
+    toggleFaces, setFaceOpacity, updateFaceMeshes, createFaceMeshes
 } from './graph-core.js';
 
 import {
@@ -79,6 +80,9 @@ let generateBtn;
 
 // Force layout
 let forceLayoutBtn, stopForceBtn, forceSpeedInput, force3DCheckbox;
+
+// Face rendering (Solid Polyhedron Mode)
+let solidFacesCheckbox, faceOptions, faceOpacityInput, faceOpacityLabel, refreshFacesBtn, faceHint;
 
 // Templates
 let templateSelect, applyTemplateBtn, skewSymmetricCheckbox;
@@ -298,6 +302,14 @@ function grabDOMElements() {
     stopForceBtn = document.getElementById('stop-force-btn');
     forceSpeedInput = document.getElementById('force-speed');
     force3DCheckbox = document.getElementById('force-3d-checkbox');
+    
+    // Face rendering
+    solidFacesCheckbox = document.getElementById('solid-faces-checkbox');
+    faceOptions = document.getElementById('face-options');
+    faceOpacityInput = document.getElementById('face-opacity');
+    faceOpacityLabel = document.getElementById('face-opacity-label');
+    refreshFacesBtn = document.getElementById('refresh-faces-btn');
+    faceHint = document.getElementById('face-hint');
     
     // Templates
     templateSelect = document.getElementById('template-select');
@@ -533,6 +545,11 @@ function setupEventListeners() {
         stopForceLayout();
         stopDynamics();
         applyTemplate(templateSelect.value);
+        
+        // Refresh faces if enabled
+        if (state.facesVisible) {
+            setTimeout(() => createFaceMeshes(), 50);
+        }
     });
     
     // Graph Finder
@@ -580,6 +597,62 @@ function setupEventListeners() {
         forceLayoutBtn.style.display = 'block';
         stopForceBtn.style.display = 'none';
     });
+    
+    // Face rendering (Solid Polyhedron Mode)
+    if (solidFacesCheckbox) {
+        solidFacesCheckbox.addEventListener('change', () => {
+            const showFaces = solidFacesCheckbox.checked;
+            console.log('Solid faces toggled:', showFaces);
+            toggleFaces(showFaces);
+            
+            // Show/hide face options using classList
+            const faceOptionsEl = document.getElementById('face-options');
+            const faceHintEl = document.getElementById('face-hint');
+            
+            if (faceOptionsEl) {
+                if (showFaces) {
+                    faceOptionsEl.classList.remove('hidden');
+                } else {
+                    faceOptionsEl.classList.add('hidden');
+                }
+                console.log('Face options visible:', !faceOptionsEl.classList.contains('hidden'));
+            }
+            if (faceHintEl) {
+                if (showFaces) {
+                    faceHintEl.classList.remove('hidden');
+                } else {
+                    faceHintEl.classList.add('hidden');
+                }
+            }
+        });
+    } else {
+        console.error('solid-faces-checkbox not found!');
+    }
+    
+    // Face opacity slider
+    const faceOpacityEl = document.getElementById('face-opacity');
+    const faceOpacityLabelEl = document.getElementById('face-opacity-label');
+    if (faceOpacityEl) {
+        faceOpacityEl.addEventListener('input', () => {
+            const opacity = parseInt(faceOpacityEl.value) / 100;
+            setFaceOpacity(opacity);
+            if (faceOpacityLabelEl) {
+                faceOpacityLabelEl.textContent = faceOpacityEl.value + '%';
+            }
+            console.log('Face opacity set to:', opacity);
+        });
+    }
+    
+    // Refresh faces button
+    const refreshFacesBtnEl = document.getElementById('refresh-faces-btn');
+    if (refreshFacesBtnEl) {
+        refreshFacesBtnEl.addEventListener('click', () => {
+            if (state.facesVisible) {
+                console.log('Refreshing faces...');
+                createFaceMeshes();
+            }
+        });
+    }
     
     // Dynamics controls
     startDynamicsBtn.addEventListener('click', startDynamics);
@@ -2703,25 +2776,25 @@ function applyTemplate(template) {
             break;
             
         case 'mobius-ladder':
-            // Möbius ladder: like circular ladder but with a twist
-            if (n < 6 || n % 2 !== 0) {
-                alert('Möbius ladder requires even n >= 6');
+            // Möbius ladder M_n: single cycle with antipodal chords
+            // Each vertex connects to its neighbor AND to the vertex n/2 positions away
+            if (n < 4 || n % 2 !== 0) {
+                alert('Möbius ladder requires even n >= 4');
                 return;
             }
             generateGraph();
             {
-                const rungs = n / 2;
-                // Two rails with Möbius twist
-                for (let i = 0; i < rungs; i++) {
-                    addBi(i, (i + 1) % rungs);  // Top rail (cycle)
-                    addBi(rungs + i, rungs + ((i + 1) % rungs));  // Bottom rail (cycle)
+                const half = n / 2;
+                
+                // Single cycle: 0-1-2-...(n-1)-0
+                for (let i = 0; i < n; i++) {
+                    addBi(i, (i + 1) % n);
                 }
-                // Rungs with twist at one point
-                for (let i = 0; i < rungs - 1; i++) {
-                    addBi(i, rungs + i);
+                
+                // Antipodal chords: connect i to i + n/2
+                for (let i = 0; i < half; i++) {
+                    addBi(i, i + half);
                 }
-                // Twist: last vertex connects opposite
-                addBi(rungs - 1, rungs);  // instead of rungs-1 to 2*rungs-1
             }
             break;
             

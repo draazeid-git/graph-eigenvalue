@@ -20,7 +20,11 @@ export const state = {
     selectedVertex: null,
     hoveredVertex: null,
     forceSimulationRunning: false,
-    velocities: []
+    velocities: [],
+    // Face rendering (v21)
+    faceMeshes: [],
+    facesVisible: false,
+    faceOpacity: 0.5
 };
 
 export let scene, camera, renderer, controls, raycaster, mouse;
@@ -549,6 +553,7 @@ export function clearGraph() {
     state.symmetricAdjMatrix = [];
     state.selectedVertex = null;
     state.hoveredVertex = null;
+    state.faceMeshes = [];
 }
 
 export function setVertexMaterial(mesh, type) {
@@ -1210,6 +1215,506 @@ export function getIntersectedEdge(event) {
         }
     }
     return null;
+}
+
+// =====================================================
+// FACE RENDERING (Solid Polyhedron Mode)
+// =====================================================
+
+// Scene background is 0x0d1117 (very dark blue-black, ~5% luminance)
+// We need colors with HIGH luminance and avoid dark blues/purples
+
+// Face color palette - "JEWEL TONE" with Emissive Glow
+// Expanded palette (14 colors) to avoid adjacent duplicates
+const FACE_COLORS = [
+    0x00f2ff,  // Electric Cyan
+    0xff5e00,  // Sunset Orange
+    0x00ff88,  // Emerald Glass
+    0xff007f,  // Vivid Rose
+    0xf9d423,  // Bright Gold
+    0x7000ff,  // Neon Purple
+    0x4facfe,  // Sky Blue
+    0xff3366,  // Coral Pink
+    0x00ffcc,  // Aqua
+    0xff9900,  // Tangerine
+    0x88ff00,  // Lime
+    0xff00ff,  // Magenta
+    0x00ccff,  // Azure
+    0xffcc00,  // Amber
+];
+
+// Track assigned colors per face for smarter assignment
+let faceColorAssignments = [];
+
+/**
+ * Get a face color that avoids adjacent face duplicates
+ * Uses prime-based distribution for better spread
+ */
+function getFaceColor(faceIndex, faceVertices = null) {
+    // Use golden ratio-based distribution for better color spread
+    // This ensures colors are well-distributed even for sequential faces
+    const goldenRatio = 0.618033988749895;
+    const baseIndex = Math.floor(faceIndex * goldenRatio * FACE_COLORS.length) % FACE_COLORS.length;
+    
+    return FACE_COLORS[baseIndex];
+}
+
+/**
+ * Detect faces in the graph based on minimal cycles
+ * Uses proper 3D angle sorting and quadrilateral detection
+ */
+export function detectFaces() {
+    const n = state.vertexMeshes.length;
+    if (n < 3) return [];
+    
+    // Build adjacency list and edge set
+    const adj = Array(n).fill(null).map(() => []);
+    const edgeSet = new Set();
+    
+    for (const edge of state.edgeObjects) {
+        const i = edge.from;
+        const j = edge.to;
+        if (!adj[i].includes(j)) adj[i].push(j);
+        if (!adj[j].includes(i)) adj[j].push(i);
+        edgeSet.add(`${Math.min(i,j)}-${Math.max(i,j)}`);
+    }
+    
+    // Helper to check if edge exists
+    const hasEdge = (a, b) => edgeSet.has(`${Math.min(a,b)}-${Math.max(a,b)}`);
+    
+    // Sort neighbors by 3D angle using local coordinate frame
+    for (let i = 0; i < n; i++) {
+        const pos = state.vertexMeshes[i].position;
+        
+        if (adj[i].length < 2) continue;
+        
+        // Compute average normal for this vertex's neighborhood
+        const neighbors = adj[i];
+        const vectors = neighbors.map(j => {
+            const npos = state.vertexMeshes[j].position;
+            return new THREE.Vector3(npos.x - pos.x, npos.y - pos.y, npos.z - pos.z).normalize();
+        });
+        
+        // Use first neighbor as reference direction
+        const refDir = vectors[0].clone();
+        
+        // Compute approximate normal (cross product of first two neighbor directions)
+        let normal = new THREE.Vector3(0, 0, 1);
+        if (vectors.length >= 2) {
+            normal = new THREE.Vector3().crossVectors(vectors[0], vectors[1]).normalize();
+            if (normal.length() < 0.001) {
+                // Vectors are parallel, use Z-up
+                normal.set(0, 0, 1);
+            }
+        }
+        
+        // Sort by angle around the normal
+        adj[i].sort((a, b) => {
+            const posA = state.vertexMeshes[a].position;
+            const posB = state.vertexMeshes[b].position;
+            const vecA = new THREE.Vector3(posA.x - pos.x, posA.y - pos.y, posA.z - pos.z).normalize();
+            const vecB = new THREE.Vector3(posB.x - pos.x, posB.y - pos.y, posB.z - pos.z).normalize();
+            
+            // Compute signed angle around normal
+            const angleA = Math.atan2(
+                new THREE.Vector3().crossVectors(refDir, vecA).dot(normal),
+                refDir.dot(vecA)
+            );
+            const angleB = Math.atan2(
+                new THREE.Vector3().crossVectors(refDir, vecB).dot(normal),
+                refDir.dot(vecB)
+            );
+            
+            return angleA - angleB;
+        });
+    }
+    
+    const faces = [];
+    const visitedEdges = new Set();
+    const faceSignatures = new Set();
+    
+    // Method 1: Edge-walking for triangles and small faces
+    for (let start = 0; start < n; start++) {
+        for (const firstNeighbor of adj[start]) {
+            const edgeKey = `${Math.min(start, firstNeighbor)}-${Math.max(start, firstNeighbor)}-${start < firstNeighbor ? 'f' : 'r'}`;
+            
+            if (visitedEdges.has(edgeKey)) continue;
+            
+            const face = findMinimalFace(start, firstNeighbor, adj, n);
+            
+            if (face && face.length >= 3 && face.length <= 8) {
+                for (let i = 0; i < face.length; i++) {
+                    const curr = face[i];
+                    const next = face[(i + 1) % face.length];
+                    const key = `${Math.min(curr, next)}-${Math.max(curr, next)}-${curr < next ? 'f' : 'r'}`;
+                    visitedEdges.add(key);
+                }
+                
+                const sortedFace = [...face].sort((a, b) => a - b).join(',');
+                if (!faceSignatures.has(sortedFace)) {
+                    faceSignatures.add(sortedFace);
+                    faces.push(face);
+                }
+            }
+        }
+    }
+    
+    // Method 2: Explicit quadrilateral detection
+    // Find all 4-cycles: look for pairs of edges that share endpoints
+    for (let a = 0; a < n; a++) {
+        for (const b of adj[a]) {
+            if (b <= a) continue; // Only process each edge once
+            
+            // Find common neighbors of a and b (potential quad vertices)
+            for (const c of adj[b]) {
+                if (c === a) continue;
+                
+                for (const d of adj[a]) {
+                    if (d === b || d === c) continue;
+                    
+                    // Check if c-d edge exists (completing the quadrilateral)
+                    if (hasEdge(c, d)) {
+                        const quad = [a, b, c, d];
+                        const sortedQuad = [...quad].sort((x, y) => x - y).join(',');
+                        
+                        if (!faceSignatures.has(sortedQuad)) {
+                            // Verify it's a proper quadrilateral (4 edges, not crossing)
+                            const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                               hasEdge(c, d) && hasEdge(d, a);
+                            
+                            if (hasAllEdges) {
+                                faceSignatures.add(sortedQuad);
+                                faces.push(quad);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 3: Triangle detection (ensure we catch all triangles)
+    for (let a = 0; a < n; a++) {
+        for (let bi = 0; bi < adj[a].length; bi++) {
+            const b = adj[a][bi];
+            if (b <= a) continue;
+            
+            for (let ci = bi + 1; ci < adj[a].length; ci++) {
+                const c = adj[a][ci];
+                if (c <= b) continue;
+                
+                // Check if b-c edge exists
+                if (hasEdge(b, c)) {
+                    const tri = [a, b, c];
+                    const sortedTri = tri.join(',');
+                    
+                    if (!faceSignatures.has(sortedTri)) {
+                        faceSignatures.add(sortedTri);
+                        faces.push(tri);
+                    }
+                }
+            }
+        }
+    }
+    
+    console.log(`Detected ${faces.length} faces (triangles + quads + edge-walking)`);
+    return faces;
+}
+
+/**
+ * Find a minimal face starting from a directed edge
+ */
+function findMinimalFace(start, next, adj, n) {
+    const face = [start, next];
+    let current = next;
+    let prev = start;
+    const maxSteps = n + 1;
+    
+    for (let step = 0; step < maxSteps; step++) {
+        const neighbors = adj[current];
+        if (neighbors.length < 2) return null;
+        
+        // Find the next vertex by taking the "left-most" turn
+        const prevIndex = neighbors.indexOf(prev);
+        if (prevIndex === -1) return null;
+        
+        // Next vertex is the one after prev in the sorted neighbor list
+        const nextIndex = (prevIndex + 1) % neighbors.length;
+        const nextVertex = neighbors[nextIndex];
+        
+        if (nextVertex === start) {
+            // Completed the face
+            return face;
+        }
+        
+        if (face.includes(nextVertex)) {
+            // Hit a vertex we've already visited (not the start) - invalid face
+            return null;
+        }
+        
+        face.push(nextVertex);
+        prev = current;
+        current = nextVertex;
+    }
+    
+    return null;
+}
+
+/**
+ * Create face meshes from detected faces
+ * Uses "Frosted Glass / Cyberpunk Gemstone" aesthetic with emissive glow
+ */
+export function createFaceMeshes(faces = null) {
+    // Clear existing face meshes
+    clearFaceMeshes();
+    
+    // Check if we have vertices
+    if (!state.vertexMeshes || state.vertexMeshes.length < 3) {
+        console.log('Not enough vertices for face detection');
+        return;
+    }
+    
+    if (!faces) {
+        faces = detectFaces();
+    }
+    
+    if (!faces || faces.length === 0) {
+        console.log('No faces detected');
+        return;
+    }
+    
+    console.log(`Creating ${faces.length} face meshes`);
+    
+    // Create meshes for each face
+    faces.forEach((face, faceIndex) => {
+        // Validate face
+        if (!face || !Array.isArray(face) || face.length < 3) return;
+        
+        // Validate all vertex indices
+        const validIndices = face.every(i => 
+            typeof i === 'number' && i >= 0 && i < state.vertexMeshes.length
+        );
+        if (!validIndices) {
+            console.warn(`Face ${faceIndex} has invalid vertex indices`);
+            return;
+        }
+        
+        const vertices = face.map(i => state.vertexMeshes[i].position.clone());
+        
+        if (vertices.length < 3) return;
+        
+        // Create geometry from face vertices
+        const geometry = createFaceGeometry(vertices);
+        if (!geometry) return;
+        
+        // Choose color from Jewel Tone palette
+        const color = getFaceColor(faceIndex);
+        const colorObj = new THREE.Color(color);
+        
+        // EMISSIVE GLOW material - color emits its own light
+        // This bypasses transparency/background blending issues entirely
+        const material = new THREE.MeshStandardMaterial({
+            color: colorObj,
+            
+            // HIGH emissive intensity - faces glow from within
+            emissive: colorObj,
+            emissiveIntensity: 0.6,  // Increased from 0.3 for stronger glow
+            
+            transparent: true,
+            opacity: state.faceOpacity,
+            side: THREE.DoubleSide,
+            
+            // Physical properties
+            metalness: 0.1,
+            roughness: 0.2,
+            
+            // Render settings
+            depthWrite: false
+        });
+        
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.userData.faceIndex = faceIndex;
+        mesh.userData.faceVertices = face.slice();  // Clone the array
+        mesh.userData.faceColor = color;
+        mesh.renderOrder = -1; // Render faces before edges
+        
+        state.graphGroup.add(mesh);
+        state.faceMeshes.push(mesh);
+    });
+    
+    // Create glowing edge lines for better visibility
+    if (state.faceMeshes.length > 0) {
+        createFaceEdges();
+    }
+    
+    // Update visibility state
+    state.facesVisible = true;
+    console.log(`Created ${state.faceMeshes.length} face objects`);
+}
+
+/**
+ * Create geometry for a single face
+ */
+function createFaceGeometry(vertices) {
+    if (vertices.length < 3) return null;
+    
+    // Calculate centroid
+    const centroid = new THREE.Vector3();
+    for (const v of vertices) {
+        centroid.add(v);
+    }
+    centroid.divideScalar(vertices.length);
+    
+    // Calculate face normal
+    const v0 = vertices[0];
+    const v1 = vertices[1];
+    const v2 = vertices[2];
+    const edge1 = new THREE.Vector3().subVectors(v1, v0);
+    const edge2 = new THREE.Vector3().subVectors(v2, v0);
+    const normal = new THREE.Vector3().crossVectors(edge1, edge2).normalize();
+    
+    // Create triangulated geometry (fan triangulation from centroid)
+    const geometry = new THREE.BufferGeometry();
+    const positions = [];
+    const normals = [];
+    
+    for (let i = 0; i < vertices.length; i++) {
+        const v0 = vertices[i];
+        const v1 = vertices[(i + 1) % vertices.length];
+        
+        // Triangle: centroid, v0, v1
+        positions.push(centroid.x, centroid.y, centroid.z);
+        positions.push(v0.x, v0.y, v0.z);
+        positions.push(v1.x, v1.y, v1.z);
+        
+        // All triangles share the same normal
+        for (let j = 0; j < 3; j++) {
+            normals.push(normal.x, normal.y, normal.z);
+        }
+    }
+    
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    
+    return geometry;
+}
+
+/**
+ * Create glowing edge lines on top of faces for better visibility
+ * Uses white/cyan "rim light" for cyberpunk aesthetic
+ */
+function createFaceEdges() {
+    if (!state.faceMeshes || state.faceMeshes.length === 0) return;
+    
+    // Glowing rim edge material - white with subtle transparency
+    const edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0xffffff,  // White rim light (or 0x00f2ff for cyan)
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.4  // Subtle rim highlight
+    });
+    
+    const processedEdges = new Set();
+    
+    // Store edges to add separately (don't modify array while iterating)
+    const edgesToAdd = [];
+    
+    for (const faceMesh of state.faceMeshes) {
+        const faceVertices = faceMesh.userData?.faceVertices;
+        
+        // Skip if no face vertices (e.g., edge lines or invalid meshes)
+        if (!faceVertices || !Array.isArray(faceVertices)) continue;
+        
+        for (let i = 0; i < faceVertices.length; i++) {
+            const a = faceVertices[i];
+            const b = faceVertices[(i + 1) % faceVertices.length];
+            const edgeKey = `${Math.min(a, b)}-${Math.max(a, b)}`;
+            
+            if (processedEdges.has(edgeKey)) continue;
+            processedEdges.add(edgeKey);
+            
+            // Validate vertex indices
+            if (a >= state.vertexMeshes.length || b >= state.vertexMeshes.length) continue;
+            
+            const posA = state.vertexMeshes[a].position;
+            const posB = state.vertexMeshes[b].position;
+            
+            const points = [posA.clone(), posB.clone()];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(geometry, edgeMaterial.clone());
+            line.userData.isFaceEdge = true;
+            line.renderOrder = 1; // Render after faces
+            
+            edgesToAdd.push(line);
+        }
+    }
+    
+    // Add edges to scene and tracking array
+    for (const line of edgesToAdd) {
+        state.graphGroup.add(line);
+        state.faceMeshes.push(line);
+    }
+}
+
+/**
+ * Clear all face meshes
+ */
+export function clearFaceMeshes() {
+    if (!state.faceMeshes) {
+        state.faceMeshes = [];
+        return;
+    }
+    
+    for (const mesh of state.faceMeshes) {
+        if (mesh) {
+            if (mesh.geometry) mesh.geometry.dispose();
+            if (mesh.material) mesh.material.dispose();
+            if (state.graphGroup) state.graphGroup.remove(mesh);
+        }
+    }
+    state.faceMeshes = [];
+}
+
+/**
+ * Toggle face visibility
+ */
+export function toggleFaces(visible) {
+    state.facesVisible = visible;
+    
+    if (visible) {
+        createFaceMeshes();
+    } else {
+        clearFaceMeshes();
+    }
+}
+
+/**
+ * Update face opacity
+ */
+export function setFaceOpacity(opacity) {
+    state.faceOpacity = opacity;
+    
+    for (const mesh of state.faceMeshes) {
+        if (mesh.material && !mesh.userData.isFaceEdge) {
+            mesh.material.opacity = opacity;
+        }
+    }
+}
+
+/**
+ * Update face positions after vertex movement
+ */
+export function updateFaceMeshes() {
+    if (!state.facesVisible || state.faceMeshes.length === 0) return;
+    
+    // Recreate face meshes with updated positions
+    const faces = state.faceMeshes
+        .filter(m => m.userData.faceVertices)
+        .map(m => m.userData.faceVertices);
+    
+    if (faces.length > 0) {
+        createFaceMeshes(faces);
+    }
 }
 
 // =====================================================
