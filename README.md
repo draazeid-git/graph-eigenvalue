@@ -52,23 +52,25 @@ The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application fo
 
 ## What's New in v35
 
-### 🏗️ Consolidated 5-Workspace UI
+### 🏗️ 7-Tab Interface
 
-The UI has been reorganized from 7 cluttered tabs into 5 purpose-driven workspaces:
+The UI is organized into 7 purpose-driven tabs:
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  🌌 Lab  │  🔨 Studio  │  λ Eigenspectrum  │  🌊 Dynamics  │  📚 Archives  │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  🔨 BUILD  │  ✏️ EDIT  │  🧪 SIMULATE  │  📊 ANALYZE  │  📐 BOUNDS  │  🔧 ADVANCED   │  📚 LIBRARY   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────── ─┘
 ```
 
-| Workspace | Purpose | Key Features |
-|-----------|---------|--------------|
-| **Lab** | Universe & Discovery | Search filters, Abel-Ruffini classification, 3D galaxy view |
-| **Studio** | Build & Edit | Templates, tool palette, algebraic operations (□, ⊗, ⊕) |
-| **Eigenspectrum** | Spectral Analysis | SFF polynomial, clickable eigenvalues, gap analysis |
-| **Dynamics** | Simulation & Physics | Integrators, eigenmode projection, phase diagrams |
-| **Archives** | Library & Export | Gallery view, JSON/HTML/LaTeX export |
+| Tab | Purpose | Key Features |
+|-----|---------|--------------|
+| **BUILD** | Graph Construction | 61+ templates, layout options, force-directed, Universe integration |
+| **EDIT**  | Manual Editing | Add/delete vertices & edges, drag mode, tool palette |
+| **SIMULATE** | Dynamics & Animation | Integrators (Rodrigues, Cayley, Trapezoidal), eigenmode animation, phase diagrams |
+| **ANALYZE** | Spectral Analysis | Graph info, SFF polynomial, clickable eigenvalues, eigenmode visualization |
+| **BOUNDS** | Zeid-Rosenberg Bounds | α parameter, eigenvalue bounds estimation |
+| **ADVANCED** | Graph Discovery | Analytic graph finder, search filters, graph products (□, ⊗, ⊕) |
+| **LIBRARY** | Save & Export | Gallery view, JSON/HTML/LaTeX export, import |
 
 ### ⚡ SpMV Optimization for Large Graphs
 
@@ -115,15 +117,15 @@ SpectralEngine.computeExactPolynomial(matrix)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         PRESENTATION LAYER                               │
+│                         PRESENTATION LAYER                              │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  index-v2.html          │  styles-v2.css        │  workspace-controller │
-│  (5-workspace layout)   │  (consolidated theme) │  (navigation logic)   │
+│  index.html             │  styles.css           │  7-Tab Interface      │
+│  (main application)     │  (styling & themes)   │  (BUILD → LIBRARY)    │
 └────────────┬────────────┴──────────┬────────────┴──────────┬────────────┘
              │                       │                       │
              ▼                       ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         APPLICATION LAYER                                │
+│                         APPLICATION LAYER                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  main.js               │  matrix-analysis-ui.js  │  graph-universe.js   │
 │  (orchestrator)        │  (eigenvalue UI)        │  (3D galaxy view)    │
@@ -131,22 +133,22 @@ SpectralEngine.computeExactPolynomial(matrix)
              │                       │                        │
              ▼                       ▼                        ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          COMPUTATION LAYER                               │
+│                          COMPUTATION LAYER                              │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  spectral-analysis.js          │  dynamics-animation.js                 │
-│  ├─ SpectralEngine             │  ├─ SparseMatrix (CSR)                 │
-│  │   ├─ computeExactPolynomial │  │   ├─ SpMV O(m)                      │
-│  │   ├─ identifyClosedForm     │  │   └─ fromDense/fromEdges            │
-│  │   └─ computeAnalyticEigenvector │  ├─ Eigenmode Animation            │
-│  └─ SpectralGapAnalyzer        │  └─ Rodrigues/Cayley Integrators       │
-├────────────────────────────────┴────────────────────────────────────────┤
+│  spectral-analysis.js             │  dynamics-animation.js              │
+│  ├─ SpectralEngine                │  ├─ SparseMatrix (CSR)              │
+│  │   ├─ computeExactPolynomial    │  │   ├─ SpMV O(m)                   │
+│  │   ├─ identifyClosedForm        │  │   └─ fromDense/fromEdges         │
+│  │   └─ computeAnalyticEigenvector│  ├─ Eigenmode Animation             │
+│  └─ SpectralGapAnalyzer           │  └─ Rodrigues/Cayley Integrators    │
+├───────────────────────────────────┴─────────────────────────────────────┤
 │  analytic-detection.js         │  zeid-rosenberg.js                     │
 │  (graph family identification) │  (eigenvalue formulas)                 │
 └─────────────────────────────────────────────────────────────────────────┘
              │                       │
              ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           DATA LAYER                                     │
+│                           DATA LAYER                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  graph-core.js         │  graph-library.js      │  graph-database.js    │
 │  (Three.js scene,      │  (localStorage         │  (in-memory cache)    │
@@ -159,60 +161,65 @@ SpectralEngine.computeExactPolynomial(matrix)
 | Module | Size | Responsibility |
 |--------|------|----------------|
 | `main.js` | ~320KB | Application orchestrator, event binding, UI integration |
-| `graph-core.js` | ~60KB | Three.js scene, vertex/edge rendering, force layout |
+| `graph-core.js` | ~60KB | Three.js scene, vertex/edge rendering, force layout, face detection |
 | `spectral-analysis.js` | ~75KB | **SpectralEngine**, **SpectralGapAnalyzer**, polynomial computation |
 | `dynamics-animation.js` | ~55KB | **SparseMatrix**, **Eigenmode Animation**, integrators |
 | `graph-universe.js` | ~135KB | 3D galaxy visualization, family clustering |
 | `analytic-detection.js` | ~40KB | Graph family identification, pattern matching |
 | `matrix-analysis-ui.js` | ~35KB | Eigenvalue display, clickable eigenmode triggers |
-| `workspace-controller.js` | ~12KB | Workspace navigation, keyboard shortcuts |
 
 ---
 
 ## Key Features
 
-### 🌌 Graph Universe (Lab Workspace)
-
-- **3D Galaxy Visualization** - Graph families displayed as stellar clusters
-- **13 Configurable Metrics** - Position galaxies by α, rationality, spectral radius, energy
-- **Abel-Ruffini Filters** - Filter by eigenvalue solvability (Trig, Radical, Algebraic)
-- **Test Graph Generation** - Verify mathematical accuracy with known families
-
-### 🔨 Graph Studio
+### 🔨 BUILD Tab - Graph Construction
 
 - **61+ Built-in Templates** - Path, Cycle, Star, Complete, Wheel, Hypercube, Petersen, and more
-- **Quick Template Grid** - 8-button palette for common graphs
+- **Configurable Parameters** - Set vertices (n), dimensions, and family-specific options
+- **Layout Options** - Circle, Sphere, Concentric arrangements
+- **Force-Directed Layout** - Auto-arrange with physics simulation
+- **Universe Integration** - Send graphs to 3D Galaxy view
+
+### ✏️ EDIT Tab - Manual Graph Editing
+
 - **Tool Palette** - Select, Add Vertex, Add Edge, Delete modes
-- **Algebraic Operations**:
-  - **G □ H** - Cartesian Product
-  - **G ⊗ H** - Tensor Product  
-  - **G ⊕ H** - Direct Sum
-  - **L(G)** - Line Graph
+- **Drag Mode** - Reposition vertices interactively
+- **Edge Management** - Click to add/remove connections
 
-### λ Eigenspectrum Analysis
-
-- **SFF Polynomial Engine** - Exact BigInt computation of characteristic polynomial
-- **12+ Pattern Types** - Integer, fraction, √k, 2cos(kπ/m), golden ratio, nested radicals
-- **Clickable Eigenvalues** - Click to trigger eigenmode animation
-- **Spectral Gap Analysis**:
-  - Adjacency Gap (λ₁ - λ₂)
-  - Normalized Gap
-  - Expansion Quality Rating
-  - Cheeger Bounds
-
-### 🌊 Dynamics Simulation
+### 🧪 SIMULATE Tab - Dynamics & Animation
 
 - **Three Integrators**:
   - **Rodrigues** - Exact matrix exponential
   - **Cayley** - Symplectic rational approximation
   - **Trapezoidal** - Predictor-corrector scheme
 - **SpMV Optimization** - O(m) instead of O(n²) for sparse graphs
-- **Eigenmode Projection** - Isolate specific mode oscillation pattern
 - **Phase Diagrams** - xᵢ vs xⱼ, velocity, power plots
 
-### 📚 Archives & Export
+### 📊 ANALYZE Tab - Spectral Analysis
 
-- **Gallery View** - Grid display with graph previews
+- **Graph Detection** - Automatic family identification (Cycle, Path, Star, etc.)
+- **Eigenvalue Formulas** - Closed-form expressions (e.g., λₖ = 2cos(2kπ/n) ± 1)
+- **Clickable Eigenvalues** - Click to trigger eigenmode animation
+- **12+ Pattern Types** - Integer, fraction, √k, 2cos(kπ/m), golden ratio, nested radicals
+
+### 📐 BOUNDS Tab - Zeid-Rosenberg Bounds
+
+- **α Parameter Control** - Adjust eigenvalue estimation
+- **Bound Visualization** - Compare theoretical bounds with actual spectrum
+
+### 🔧 ADVANCED Tab - Discovery & Products
+
+- **Analytic Graph Finder** - Search for graphs with closed-form eigenvalues
+- **3D Graph Universe** - Galaxy visualization of graph families
+- **Algebraic Operations**:
+  - **G □ H** - Cartesian Product
+  - **G ⊗ H** - Tensor Product  
+  - **G ⊕ H** - Direct Sum
+  - **L(G)** - Line Graph
+
+### 📚 LIBRARY Tab - Save & Export
+
+- **Table View** - Browse saved graphs with properties
 - **Export Formats**: JSON, Standalone HTML, LaTeX
 - **Import** - Load saved graph collections
 - **Persistent Storage** - localStorage-based library
@@ -228,10 +235,7 @@ SpectralEngine.computeExactPolynomial(matrix)
 unzip graph-project-v35.zip
 cd graph-project-v35
 
-# Open in browser (new UI)
-open index-v2.html
-
-# Or use classic UI
+# Open in browser
 open index.html
 ```
 
@@ -247,96 +251,114 @@ npx serve .
 # Open http://localhost:3000
 ```
 
+### Option 3: GitHub Pages (Live Demo)
+
+Visit: [https://draazeid-git.github.io/graph-eigenvalue/](https://draazeid-git.github.io/graph-eigenvalue/)
+
 ### System Requirements
 
 | Requirement | Minimum |
 |-------------|---------|
-| Browser | Chrome 80+, Firefox 75+, Safari 13+, Edge 80+ |
-| WebGL | Required for 3D rendering |
-| Screen | 1280×720 recommended |
-| Memory | 512MB for graphs up to n=500 |
+| Browser     | Chrome 80+, Firefox 75+, Safari 13+, Edge 80+ |
+| WebGL       | Required for 3D rendering                     |
+| Screen      | 1280×720 recommended                          |
+| Memory      | 512MB for graphs up to n=500                  |
 
 ---
 
 ## Quick Start Guide
 
-### 1. Exploring the Graph Universe (Lab)
+### 1. Building Graphs (BUILD)
 
 ```
-1. Press [1] or click "Lab" tab
-2. Click "🌌 Enter Universe" button
-3. Use filters to narrow graph families
-4. Click a galaxy to explore its graphs
-5. Double-click a graph to load it
-```
-
-### 2. Building Graphs (Studio)
-
-```
-1. Press [2] or click "Studio" tab
-2. Click a quick template (Path, Cycle, Star, etc.)
-3. Adjust parameters (n, dimensions)
+1. Click "BUILD" tab
+2. Set number of vertices
+3. Select a template from dropdown (Path, Cycle, Star, etc.)
 4. Click "Apply Template"
-5. Use tool palette for manual edits
+5. Use "▶ Start" force layout to auto-arrange
 ```
 
-### 3. Analyzing Eigenvalues (Eigenspectrum)
+### 2. Editing Graphs (EDIT)
 
 ```
-1. Press [3] or click "Eigenspectrum" tab
-2. View detected graph type and invariants
-3. Examine characteristic polynomial (SFF exact)
-4. Click any eigenvalue to animate its mode
-5. Expand "Spectral Gap Analysis" for expansion metrics
+1. Click "EDIT" tab
+2. Choose a tool: Select, Add Vertex, Add Edge, Delete
+3. Click on canvas to add/remove elements
+4. Drag vertices to reposition
+5. Use "Clear All" to start fresh
 ```
 
-### 4. Running Dynamics (Dynamics)
+### 3. Running Simulations (SIMULATE)
 
 ```
-1. Press [4] or click "Dynamics" tab
+1. Click "SIMULATE" tab to simulate power flow between nodes
 2. Select integrator (Rodrigues recommended)
-3. Click "▶ Start" to begin simulation
-4. Use eigenmode selector to isolate specific mode
+3. Click "▶ Start" to begin dynamics
+4. Adjust speed with slider
 5. Enable phase diagram for trajectory analysis
 ```
 
-### 5. Saving & Exporting (Archives)
+### 4. Analyzing Eigenvalues (ANALYZE)
 
 ```
-1. Press [5] or click "Archives" tab
+1. Click "ANALYZE" tab
+2. View detected graph type and invariants
+3. Examine eigenvalue formulas (e.g., λₖ = 2cos(2kπ/n) ± 1)
+4. Click any eigenvalue to animate its eigenmode
+5. Watch vertices oscillate according to eigenvector pattern
+```
+
+### 5. Exploring Bounds (BOUNDS)
+
+```
+1. Click "BOUNDS" tab
+2. Adjust α parameter
+3. View Zeid-Rosenberg eigenvalue bounds
+4. Compare bounds with actual eigenvalues
+```
+
+### 6. Advanced Features (ADVANCED)
+
+```
+1. Click "ADVANCED" tab
+2. Use "Find Analytic Graphs" to search for graphs with closed-form eigenvalues
+3. Apply graph products: G □ H (Cartesian), G ⊗ H (Tensor), G ⊕ H (Direct Sum)
+4. Explore the 3D Graph Universe
+```
+
+### 7. Saving & Exporting (LIBRARY)
+
+```
+1. Click "LIBRARY" tab
 2. Enter graph name, click "💾 Save to Library"
-3. Browse saved graphs in gallery
+3. Browse saved graphs in table view
 4. Export as JSON, HTML, or LaTeX
+5. Import previously saved graphs
 ```
 
 ---
 
-## Workspace Reference
+## Tab Reference
+
+### Mouse Controls
+
+| Control       | Action |
+|---------------|--------|
+| Left-drag     | Rotate view |
+| Right-drag    | Pan view    |
+| Scroll        | Zoom in/out |
+| Click vertex  | Select (behavior depends on current tool) |
+| Double-click  | Load graph (in Universe view) |
 
 ### Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `1` | Switch to Lab workspace |
-| `2` | Switch to Studio workspace |
-| `3` | Switch to Eigenspectrum workspace |
-| `4` | Switch to Dynamics workspace |
-| `5` | Switch to Archives workspace |
 | `Space` | Toggle dynamics simulation |
-| `R` | Reset dynamics |
-| `U` | Toggle Universe view |
-| `F` | Fit graph to view |
-| `?` | Show keyboard shortcuts help |
-
-### Mouse Controls
-
-| Control | Action |
-|---------|--------|
-| Left-drag | Rotate view |
-| Right-drag | Pan view |
-| Scroll | Zoom in/out |
-| Click vertex | Select (Studio: depends on tool) |
-| Double-click | Expand/collapse (Universe) |
+| `R`     | Reset dynamics |
+| `F`     | Fit graph to view |
+| `Esc`   | Deselect / Cancel |
+| `?`     | Show keyboard shortcuts help |
 
 ---
 
@@ -366,27 +388,27 @@ SpectralEngine.computeExactPolynomial(matrix)
 
 The SpectralEngine identifies 12+ closed-form patterns:
 
-| Pattern Type | Example | Formula |
-|--------------|---------|---------|
-| Integer | 3, -2, 0 | exact match |
-| Fraction | 3/2, -1/4 | p/q with q ≤ 12 |
-| Simple Radical | √2, √7 | √k for k ≤ 100 |
-| Compound Radical | (1+√5)/2 | (a±√b)/c |
-| Nested Radical | √(2+√2) | √(a±√b) |
-| Trigonometric | 2cos(π/5) | 2cos(kπ/m), 2sin(kπ/m) |
-| Wheel Type | 1+√7 | 1 + 2cos(kπ/m) |
-| Golden Ratio | φ, ψ | (1±√5)/2 |
+| Pattern Type     | Example   | Formula                |
+|------------------|-----------|------------------------|
+| Integer          | 3, -2, 0  | exact match            |
+| Fraction         | 3/2, -1/4 | p/q with q ≤ 12        |
+| Simple Radical   | √2, √7    | √k for k ≤ 100         |
+| Compound Radical | (1+√5)/2  | (a±√b)/c               |
+| Nested Radical   | √(2+√2)   | √(a±√b)                |
+| Trigonometric    | 2cos(π/5) | 2cos(kπ/m), 2sin(kπ/m) |
+| Wheel Type       | 1+√7      | 1 + 2cos(kπ/m)         |
+| Golden Ratio     | φ, ψ      | (1±√5)/2               |
 
 ### Spectral Gap Formulas
 
-| Graph Family | Gap Formula | Expansion |
-|--------------|-------------|-----------|
-| Complete Kₙ | n | Excellent |
-| Hypercube Qₐ | 2 (constant) | Excellent |
-| Petersen | 2 | Excellent |
-| Star Sₙ | √(n-1) | Good |
-| Cycle Cₙ | 4sin²(π/n) → 0 | Poor |
-| Path Pₙ | O(1/n²) → 0 | Poor |
+| Graph Family | Gap Formula    | Expansion |
+|--------------|----------------|-----------|
+| Complete Kₙ  | n              | Excellent |
+| Hypercube Qₐ | 2 (constant)   | Excellent |
+| Petersen     | 2              | Excellent |
+| Star Sₙ      | √(n-1)         | Good     |
+| Cycle Cₙ     | 4sin²(π/n) → 0 | Poor |
+| Path Pₙ      | O(1/n²) → 0    | Poor |
 
 ### Eigenmode Animation
 
@@ -486,7 +508,7 @@ The animated position of node *i* at time *t*:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  pᵢ(t) = pᵢ⁽⁰⁾ + xᵢ(t) × dispScale × r̂ᵢ                    │
+│  pᵢ(t) = pᵢ⁽⁰⁾ + xᵢ(t) × dispScale × r̂ᵢ                     │
 │           ↑        ↑         ↑          ↑                   │
 │        original  state    world     direction               │
 │        position  [-1,1]   units     (unit vec)              │
@@ -653,22 +675,21 @@ updateEigenvalueTable(eigenvalues, containerId);
 
 ```
 graph-project-v35/
-├── index.html              # Classic 7-tab UI
-├── index-v2.html           # NEW: Consolidated 5-workspace UI
-├── styles.css              # Classic styles
-├── styles-v2.css           # NEW: 5-workspace theme (~800 lines)
+├── index.html              # Main application (7-tab UI)
+├── styles.css              # Main stylesheet
 │
 ├── main.js                 # Application orchestrator (317KB)
-├── workspace-controller.js # NEW: Workspace navigation (12KB)
 │
 ├── graph-core.js           # Three.js scene, vertex/edge rendering (60KB)
+│                           #   - Face detection for polyhedra
+│                           #   - Force-directed layout
+│
 ├── graph-universe.js       # 3D galaxy visualization (133KB)
 │
 ├── spectral-analysis.js    # SpectralEngine, SpectralGapAnalyzer (75KB)
 │                           #   - SFF exact polynomial (BigInt)
 │                           #   - 12+ pattern detection
 │                           #   - Analytic eigenvector computation
-│                           #   - Spectral gap analysis
 │
 ├── dynamics-animation.js   # Simulation engine (55KB)
 │                           #   - SparseMatrix (CSR format)
@@ -709,14 +730,14 @@ graph-project-v35/
 
 ### Browser APIs Used
 
-| API | Purpose |
-|-----|---------|
-| WebGL 2.0 | 3D graphics rendering |
-| BigInt | Exact polynomial arithmetic |
-| localStorage | Persistent graph library |
-| FileReader | Import/export files |
-| ResizeObserver | Responsive layout |
-| requestAnimationFrame | Smooth animation |
+| API                   | Purpose                     |
+|-----------------------|-----------------------------|
+| WebGL 2.0             | 3D graphics rendering       |
+| BigInt                | Exact polynomial arithmetic |
+| localStorage          | Persistent graph library    |
+| FileReader            | Import/export files         |
+| ResizeObserver        | Responsive layout           |
+| requestAnimationFrame | Smooth animation            |
 
 ### Import Map
 
@@ -735,20 +756,21 @@ graph-project-v35/
 
 ## Version History
 
-### v35 (Current) - Major UI & Performance Update
+### v35 (Current) - Major Performance & Visualization Update
 
 **New Features:**
-- ✨ **5-Workspace UI** - Consolidated from 7 tabs (Lab, Studio, Eigenspectrum, Dynamics, Archives)
+- ✨ **7-Tab Interface** - BUILD, EDIT, SIMULATE, ANALYZE, BOUNDS, ADVANCED, LIBRARY
 - ⚡ **SpMV Optimization** - 76-100x speedup for sparse graph dynamics
-- 📊 **Spectral Gap Analyzer** - Expansion quality, Cheeger bounds, known formulas
-- 🎯 **Eigenmode Animation** - Click eigenvalue to visualize oscillation pattern
+- 🎯 **Eigenmode Animation** - Click eigenvalue to visualize oscillation pattern with vertex displacement
 - 🔢 **Enhanced SFF Engine** - BigInt exact polynomial computation
-- ⌨️ **Keyboard Shortcuts** - 1-5 for workspaces, Space for dynamics
+- 🎨 **Polyhedron Face Detection** - Automatic face rendering with minimal cycle detection
+- 📊 **Closed-Form Eigenvalue Display** - Formulas like λₖ = 2cos(2kπ/n) ± 1
 
 **Technical Improvements:**
 - SparseMatrix class with CSR format
 - Graph-aware denominators for pattern detection
 - Analytical eigenvector computation for cycles, paths, stars, complete graphs
+- Minimal cycle detection (triangles through octagons)
 - Improved tolerance handling (1e-9 default)
 
 ### v34
