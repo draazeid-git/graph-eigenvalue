@@ -290,20 +290,46 @@ export function tensorProduct(edgesG, nG, edgesH, nH) {
 export function computeProductEigenvalues(eigsG, eigsH, type = 'cartesian') {
     const result = [];
     
+    // Helper to get formula or value string
+    const getFormula = (e) => {
+        if (typeof e === 'object') {
+            if (e.formula) return e.formula;
+            if (e.form) return e.form;
+            if (e.value !== undefined) return String(e.value);
+            return '?';
+        }
+        return String(e);
+    };
+    
+    // Helper to get numeric value
+    const getValue = (e) => {
+        if (typeof e === 'object') {
+            return e.value ?? e.numeric ?? 0;
+        }
+        return typeof e === 'number' ? e : 0;
+    };
+    
     for (const λ of eigsG) {
         for (const μ of eigsH) {
+            const λVal = getValue(λ);
+            const μVal = getValue(μ);
+            const λForm = getFormula(λ);
+            const μForm = getFormula(μ);
+            
             if (type === 'cartesian') {
                 // Cartesian: λ + μ
                 result.push({
-                    value: λ.value + μ.value,
-                    formula: `(${λ.formula}) + (${μ.formula})`,
+                    value: λVal + μVal,
+                    formula: `(${λForm}) + (${μForm})`,
+                    form: `${λForm} + ${μForm}`,
                     fromProduct: true
                 });
             } else if (type === 'tensor') {
                 // Tensor: λ * μ
                 result.push({
-                    value: λ.value * μ.value,
-                    formula: `(${λ.formula}) × (${μ.formula})`,
+                    value: λVal * μVal,
+                    formula: `(${λForm}) × (${μForm})`,
+                    form: `${λForm} × ${μForm}`,
                     fromProduct: true
                 });
             }

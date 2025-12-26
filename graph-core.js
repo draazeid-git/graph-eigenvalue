@@ -1282,6 +1282,26 @@ export function detectFaces() {
     // Helper to check if edge exists
     const hasEdge = (a, b) => edgeSet.has(`${Math.min(a,b)}-${Math.max(a,b)}`);
     
+    // Helper to check if a cycle is minimal (no diagonal/shortcut edges)
+    // A minimal cycle has no edges between non-adjacent vertices
+    const isMinimalCycle = (cycle) => {
+        const len = cycle.length;
+        if (len <= 3) return true; // Triangles are always minimal
+        
+        for (let i = 0; i < len; i++) {
+            for (let j = i + 2; j < len; j++) {
+                // Skip the edge between first and last vertex (that's part of the cycle)
+                if (i === 0 && j === len - 1) continue;
+                
+                // If there's an edge between non-adjacent vertices, it's not minimal
+                if (hasEdge(cycle[i], cycle[j])) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    
     // Sort neighbors by 3D angle using local coordinate frame
     for (let i = 0; i < n; i++) {
         const pos = state.vertexMeshes[i].position;
@@ -1334,6 +1354,7 @@ export function detectFaces() {
     const faceSignatures = new Set();
     
     // Method 1: Edge-walking for triangles and small faces
+    // Increased max face size from 8 to 12 to catch larger cycles
     for (let start = 0; start < n; start++) {
         for (const firstNeighbor of adj[start]) {
             const edgeKey = `${Math.min(start, firstNeighbor)}-${Math.max(start, firstNeighbor)}-${start < firstNeighbor ? 'f' : 'r'}`;
@@ -1342,7 +1363,7 @@ export function detectFaces() {
             
             const face = findMinimalFace(start, firstNeighbor, adj, n);
             
-            if (face && face.length >= 3 && face.length <= 8) {
+            if (face && face.length >= 3 && face.length <= 12) {
                 for (let i = 0; i < face.length; i++) {
                     const curr = face[i];
                     const next = face[(i + 1) % face.length];
@@ -1378,11 +1399,11 @@ export function detectFaces() {
                         const sortedQuad = [...quad].sort((x, y) => x - y).join(',');
                         
                         if (!faceSignatures.has(sortedQuad)) {
-                            // Verify it's a proper quadrilateral (4 edges, not crossing)
+                            // Verify it's a proper quadrilateral (4 edges, no diagonals)
                             const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
                                                hasEdge(c, d) && hasEdge(d, a);
                             
-                            if (hasAllEdges) {
+                            if (hasAllEdges && isMinimalCycle(quad)) {
                                 faceSignatures.add(sortedQuad);
                                 faces.push(quad);
                             }
@@ -1417,8 +1438,219 @@ export function detectFaces() {
         }
     }
     
-    console.log(`Detected ${faces.length} faces (triangles + quads + edge-walking)`);
-    return faces;
+    // Method 4: Pentagon (5-cycle) detection
+    // Important for graphs like Petersen, Möbius-Kantor
+    for (let a = 0; a < n; a++) {
+        for (const b of adj[a]) {
+            if (b <= a) continue;
+            for (const c of adj[b]) {
+                if (c === a) continue;
+                for (const d of adj[c]) {
+                    if (d === b || d === a) continue;
+                    for (const e of adj[d]) {
+                        if (e === c || e === b) continue;
+                        // Check if e-a edge exists (completing the pentagon)
+                        if (hasEdge(e, a)) {
+                            const pent = [a, b, c, d, e];
+                            const sortedPent = [...pent].sort((x, y) => x - y).join(',');
+                            
+                            if (!faceSignatures.has(sortedPent)) {
+                                // Verify all edges exist and no diagonals
+                                const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                                   hasEdge(c, d) && hasEdge(d, e) && hasEdge(e, a);
+                                if (hasAllEdges && isMinimalCycle(pent)) {
+                                    faceSignatures.add(sortedPent);
+                                    faces.push(pent);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 5: Hexagon (6-cycle) detection
+    // Important for graphs like truncated polyhedra, fullerenes
+    for (let a = 0; a < n; a++) {
+        for (const b of adj[a]) {
+            if (b <= a) continue;
+            for (const c of adj[b]) {
+                if (c === a) continue;
+                for (const d of adj[c]) {
+                    if (d === b || d === a) continue;
+                    for (const e of adj[d]) {
+                        if (e === c || e === b || e === a) continue;
+                        for (const f of adj[e]) {
+                            if (f === d || f === c || f === b) continue;
+                            // Check if f-a edge exists (completing the hexagon)
+                            if (hasEdge(f, a)) {
+                                const hex = [a, b, c, d, e, f];
+                                const sortedHex = [...hex].sort((x, y) => x - y).join(',');
+                                
+                                if (!faceSignatures.has(sortedHex)) {
+                                    // Verify all edges exist and no diagonals
+                                    const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                                       hasEdge(c, d) && hasEdge(d, e) && 
+                                                       hasEdge(e, f) && hasEdge(f, a);
+                                    if (hasAllEdges && isMinimalCycle(hex)) {
+                                        faceSignatures.add(sortedHex);
+                                        faces.push(hex);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Method 6: Octagon (8-cycle) detection
+    // Important for Möbius-Kantor graph which has 8-gon faces
+    // Only run for smaller graphs (n <= 30) due to O(n * d^7) complexity
+    if (n <= 30) {
+        for (let a = 0; a < n; a++) {
+            for (const b of adj[a]) {
+                if (b <= a) continue;
+                for (const c of adj[b]) {
+                    if (c === a) continue;
+                    for (const d of adj[c]) {
+                        if (d === b || d === a) continue;
+                        for (const e of adj[d]) {
+                            if (e === c || e === b || e === a) continue;
+                            for (const f of adj[e]) {
+                                if (f === d || f === c || f === b || f === a) continue;
+                                for (const g of adj[f]) {
+                                    if (g === e || g === d || g === c || g === b) continue;
+                                    for (const h of adj[g]) {
+                                        if (h === f || h === e || h === d || h === c || h === b) continue;
+                                        // Check if h-a edge exists (completing the octagon)
+                                        if (hasEdge(h, a)) {
+                                            const oct = [a, b, c, d, e, f, g, h];
+                                            const sortedOct = [...oct].sort((x, y) => x - y).join(',');
+                                        
+                                            if (!faceSignatures.has(sortedOct)) {
+                                                // Verify all edges exist and no diagonals
+                                                const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                                                   hasEdge(c, d) && hasEdge(d, e) && 
+                                                                   hasEdge(e, f) && hasEdge(f, g) &&
+                                                                   hasEdge(g, h) && hasEdge(h, a);
+                                                if (hasAllEdges && isMinimalCycle(oct)) {
+                                                    faceSignatures.add(sortedOct);
+                                                    faces.push(oct);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }  // End of n <= 30 check for octagon detection
+    
+    // Filter out smaller faces that are subsets of larger faces
+    // This prevents triangles from appearing inside pentagons/hexagons/etc.
+    const filteredFaces = filterRedundantFaces(faces);
+    
+    console.log(`Detected ${filteredFaces.length} faces (filtered from ${faces.length} candidates)`);
+    return filteredFaces;
+}
+
+/**
+ * Filter out faces that are subsets of larger faces
+ * A face A is redundant if all its vertices are contained in a larger face B
+ */
+function filterRedundantFaces(faces) {
+    if (faces.length <= 1) return faces;
+    
+    // Sort faces by size (largest first) for efficient filtering
+    const sortedFaces = [...faces].sort((a, b) => b.length - a.length);
+    
+    const kept = [];
+    const vertexSets = []; // Cache vertex sets for kept faces
+    
+    for (const face of sortedFaces) {
+        const faceSet = new Set(face);
+        
+        // Check if this face is a subset of any already-kept larger face
+        let isRedundant = false;
+        
+        for (let i = 0; i < kept.length; i++) {
+            const largerFace = kept[i];
+            const largerSet = vertexSets[i];
+            
+            // Only check if the larger face is actually larger
+            if (largerFace.length > face.length) {
+                // Check if all vertices of this face are in the larger face
+                let allContained = true;
+                for (const v of face) {
+                    if (!largerSet.has(v)) {
+                        allContained = false;
+                        break;
+                    }
+                }
+                
+                if (allContained) {
+                    isRedundant = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!isRedundant) {
+            kept.push(face);
+            vertexSets.push(faceSet);
+        }
+    }
+    
+    return kept;
+}
+
+/**
+ * Check if a set of 3D points are approximately coplanar
+ * Uses the normal vector method: compute normal from first 3 points,
+ * then check if remaining points have small distance to that plane
+ */
+function isCoplanar(positions, tolerance = 0.15) {
+    if (positions.length <= 3) return true;
+    
+    // Get first three points to define the plane
+    const p0 = positions[0];
+    const p1 = positions[1];
+    const p2 = positions[2];
+    
+    // Compute two edge vectors
+    const v1 = new THREE.Vector3(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+    const v2 = new THREE.Vector3(p2.x - p0.x, p2.y - p0.y, p2.z - p0.z);
+    
+    // Compute normal via cross product
+    const normal = new THREE.Vector3().crossVectors(v1, v2);
+    const normalLength = normal.length();
+    
+    // If normal is too small, points are collinear (degenerate)
+    if (normalLength < 0.001) return false;
+    
+    normal.divideScalar(normalLength); // Normalize
+    
+    // Plane equation: normal · (p - p0) = 0
+    // Check all other points
+    for (let i = 3; i < positions.length; i++) {
+        const pi = positions[i];
+        const toPoint = new THREE.Vector3(pi.x - p0.x, pi.y - p0.y, pi.z - p0.z);
+        const distance = Math.abs(normal.dot(toPoint));
+        
+        // Scale tolerance by the size of the face
+        const maxEdge = Math.max(v1.length(), v2.length(), 1);
+        if (distance > tolerance * maxEdge) {
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 /**
@@ -1463,8 +1695,10 @@ function findMinimalFace(start, next, adj, n) {
 /**
  * Create face meshes from detected faces
  * Uses "Frosted Glass / Cyberpunk Gemstone" aesthetic with emissive glow
+ * @param {Array} faces - Array of face vertex indices (optional, will detect if null)
+ * @param {Array} colors - Array of hex colors for each face (optional, will assign if null)
  */
-export function createFaceMeshes(faces = null) {
+export function createFaceMeshes(faces = null, colors = null) {
     // Clear existing face meshes
     clearFaceMeshes();
     
@@ -1483,7 +1717,10 @@ export function createFaceMeshes(faces = null) {
         return;
     }
     
-    console.log(`Creating ${faces.length} face meshes`);
+    // Only log during initial creation, not during animation updates
+    if (!colors) {
+        console.log(`Creating ${faces.length} face meshes`);
+    }
     
     // Create meshes for each face
     faces.forEach((face, faceIndex) => {
@@ -1507,8 +1744,8 @@ export function createFaceMeshes(faces = null) {
         const geometry = createFaceGeometry(vertices);
         if (!geometry) return;
         
-        // Choose color from Jewel Tone palette
-        const color = getFaceColor(faceIndex);
+        // Use provided color or choose from Jewel Tone palette
+        const color = (colors && colors[faceIndex]) ? colors[faceIndex] : getFaceColor(faceIndex);
         const colorObj = new THREE.Color(color);
         
         // EMISSIVE GLOW material - color emits its own light
@@ -1703,17 +1940,24 @@ export function setFaceOpacity(opacity) {
 
 /**
  * Update face positions after vertex movement
+ * Recreates face meshes with current vertex positions
  */
 export function updateFaceMeshes() {
     if (!state.facesVisible || state.faceMeshes.length === 0) return;
     
-    // Recreate face meshes with updated positions
-    const faces = state.faceMeshes
-        .filter(m => m.userData.faceVertices)
-        .map(m => m.userData.faceVertices);
+    // Collect face vertex indices AND colors before clearing
+    const faces = [];
+    const colors = [];
+    for (const mesh of state.faceMeshes) {
+        if (mesh.userData.faceVertices && !mesh.userData.isFaceEdge) {
+            faces.push(mesh.userData.faceVertices.slice());
+            colors.push(mesh.userData.faceColor);
+        }
+    }
     
     if (faces.length > 0) {
-        createFaceMeshes(faces);
+        // Recreate all face meshes with current vertex positions, preserving colors
+        createFaceMeshes(faces, colors);
     }
 }
 

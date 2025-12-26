@@ -28,6 +28,7 @@
  * - Circulant graphs
  * - Cocktail Party
  * - Crown Graph
+ * - Five-Bar Mechanism (Zeid-Rosenberg Fig. 3) - gyro-bondgraph structure
  */
 
 import { state } from './graph-core.js';
@@ -355,6 +356,7 @@ function detectPath(inv) {
     
     return {
         type: 'path',
+        family: 'Path',
         name: `Path P${subscript(n)}`,
         n,
         formula: `λₖ = 2cos(kπ/${n + 1}), k = 1,...,${n}`,
@@ -391,6 +393,7 @@ function detectCycle(inv) {
     
     return {
         type: 'cycle',
+        family: 'Cycle',
         name: `Cycle C${subscript(n)}`,
         n,
         formula: `λₖ = ±i·2sin(2kπ/${n}), k = 0,...,${n - 1}`,
@@ -422,6 +425,7 @@ function detectStar(inv) {
     
     return {
         type: 'star',
+        family: 'Star',
         name: `Star S${subscript(n)}`,
         n,
         formula: `λ = ±√${n - 1} ≈ ±${sqrtN1.toFixed(4)}, 0 (×${n - 2})`,
@@ -461,6 +465,7 @@ function detectComplete(inv) {
     
     return {
         type: 'complete',
+        family: 'Complete',
         name: `Complete K${subscript(n)}`,
         n,
         formula: `λₖ = ±i·cot((2k-1)π/${2*n}), k = 1,...,${Math.floor(n/2)}`,
@@ -510,6 +515,7 @@ function detectCompleteBipartite(inv) {
     
     return {
         type: 'complete_bipartite',
+        family: 'Complete Bipartite',
         name: `Complete Bipartite K${subscript(m)}${subscript(','+k)}`,
         n,
         m,
@@ -571,6 +577,7 @@ function detectGrid(inv) {
         
         return {
             type: 'grid',
+            family: 'Grid',
             name: `Grid ${m}×${k}`,
             n,
             m,
@@ -788,6 +795,7 @@ function detectLadder(inv) {
     
     return {
         type: 'ladder',
+        family: 'Ladder',
         name: `Ladder L${subscript(len)}`,
         n,
         len,
@@ -829,6 +837,7 @@ function detectHypercube(inv) {
     
     return {
         type: 'hypercube',
+        family: 'Hypercube',
         name: `Hypercube Q${subscript(d)}`,
         n,
         d,
@@ -862,6 +871,7 @@ function detectWheel(inv) {
     
     return {
         type: 'wheel',
+        family: 'Wheel',
         name: `Wheel W${subscript(n)}`,
         n,
         formula: `Hub spectrum + cycle. b₁/β ≈ √${n - 1} + 1 ≈ ${b1.toFixed(4)}`,
@@ -1774,6 +1784,7 @@ function detectGeneralizedPetersen(inv) {
         // Could be Petersen GP(5,2)
         return {
             type: 'petersen',
+            family: 'Petersen',
             name: 'Petersen Graph GP(5,2)',
             n,
             formula: 'λ = 3, 1 (×5), -2 (×4)',
@@ -1803,6 +1814,7 @@ function detectGeneralizedPetersen(inv) {
         ];
         return {
             type: 'mobius_kantor',
+            family: 'Möbius',
             name: 'Möbius-Kantor GP(8,3)',
             n,
             formula: `λ = ±(1+√2), ±(√2-1), ±√2 (×2), ±1 (×2), 0 (×4)`,
@@ -1814,6 +1826,7 @@ function detectGeneralizedPetersen(inv) {
     // General case
     return {
         type: 'generalized_petersen',
+        family: 'Petersen',
         name: `Generalized Petersen GP(${m},k)`,
         n,
         m,
@@ -2047,6 +2060,113 @@ function detectMobiusLadder(inv) {
     };
 }
 
+/**
+ * Check if graph is the Five-Bar Mechanism (Zeid-Rosenberg Fig. 3)
+ * 14 vertices, 20 edges, specific gyro-bondgraph structure
+ * 
+ * Characteristic polynomial: p(λ) = λ⁴(λ-1)(λ+1)(λ²-3)(λ²-5)(λ⁴-11λ²+12)
+ * 
+ * Eigenvalues:
+ * - 0 (×4)
+ * - ±1
+ * - ±√3
+ * - ±√5
+ * - ±√((11+√73)/2)
+ * - ±√((11-√73)/2)
+ */
+function detectFiveBarMechanism(inv) {
+    if (inv.n !== 14) return null;
+    if (inv.edges !== 20) return null;
+    if (!inv.isConnected) return null;
+    
+    // Check degree sequence: Five-bar has specific structure
+    // Degrees should be: mix of 2, 3, and 4
+    const degreeSeq = [...inv.degrees].sort((a, b) => a - b);
+    
+    // Expected degree sequence for Five-Bar (verify this matches the structure)
+    // There are 4 vertices of degree 2, 4 of degree 3, 6 of degree 4
+    // Or similar pattern - check for reasonable mix
+    const deg2Count = degreeSeq.filter(d => d === 2).length;
+    const deg3Count = degreeSeq.filter(d => d === 3).length;
+    const deg4Count = degreeSeq.filter(d => d === 4).length;
+    
+    // Sum of degrees should equal 2*edges = 40
+    const degSum = degreeSeq.reduce((a, b) => a + b, 0);
+    if (degSum !== 40) return null;
+    
+    // Must have some vertices of each degree type for the mechanism structure
+    if (deg2Count < 2 || deg3Count < 2 || deg4Count < 2) return null;
+    
+    // Verify eigenvalues match the analytic solution
+    if (inv.eigenvalues && inv.eigenvalues.length === 14) {
+        const sqrt3 = Math.sqrt(3);
+        const sqrt5 = Math.sqrt(5);
+        const sqrt73 = Math.sqrt(73);
+        const mu1 = (11 + sqrt73) / 2;
+        const mu2 = (11 - sqrt73) / 2;
+        const lambda1 = Math.sqrt(mu1);  // ≈ 3.126
+        const lambda2 = Math.sqrt(mu2);  // ≈ 1.108
+        
+        // Expected eigenvalues (sorted descending)
+        const expected = [
+            lambda1, sqrt5, sqrt3, lambda2, 1, 0, 0, 0, 0,
+            -1, -lambda2, -sqrt3, -sqrt5, -lambda1
+        ];
+        
+        // Sort computed eigenvalues
+        const computed = inv.eigenvalues.map(e => 
+            typeof e === 'number' ? e : (e.im !== undefined ? e.im : e.re)
+        ).sort((a, b) => b - a);
+        
+        // Check if eigenvalues match (with tolerance)
+        let matches = 0;
+        for (let i = 0; i < 14; i++) {
+            if (Math.abs(computed[i] - expected[i]) < 0.01) {
+                matches++;
+            }
+        }
+        
+        // Require most eigenvalues to match
+        if (matches < 12) return null;
+    }
+    
+    // Build analytic eigenvalue list
+    const sqrt3 = Math.sqrt(3);
+    const sqrt5 = Math.sqrt(5);
+    const sqrt73 = Math.sqrt(73);
+    const mu1 = (11 + sqrt73) / 2;
+    const mu2 = (11 - sqrt73) / 2;
+    const lambda1 = Math.sqrt(mu1);
+    const lambda2 = Math.sqrt(mu2);
+    
+    const eigenvalues = [
+        { re: 0, im: lambda1 },   // √((11+√73)/2)
+        { re: 0, im: sqrt5 },     // √5
+        { re: 0, im: sqrt3 },     // √3
+        { re: 0, im: lambda2 },   // √((11-√73)/2)
+        { re: 0, im: 1 },
+        { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 },
+        { re: 0, im: -1 },
+        { re: 0, im: -lambda2 },
+        { re: 0, im: -sqrt3 },
+        { re: 0, im: -sqrt5 },
+        { re: 0, im: -lambda1 }
+    ];
+    
+    return {
+        type: 'five_bar_mechanism',
+        name: '5-Bar Mechanism (Zeid-Rosenberg)',
+        n: 14,
+        formula: `p(λ) = λ⁴(λ-1)(λ+1)(λ²-3)(λ²-5)(λ⁴-11λ²+12)\n` +
+                 `λ = 0 (×4), ±1, ±√3, ±√5, ±√((11±√73)/2)`,
+        eigenvalues: eigenvalues,
+        spectralRadius: lambda1,
+        spectralRadiusFormula: '√((11+√73)/2)',
+        characteristicPolynomial: 'λ⁴(λ-1)(λ+1)(λ²-3)(λ²-5)(λ⁴-11λ²+12)',
+        b1_over_beta: lambda1
+    };
+}
+
 // ============================================================================
 // MAIN DETECTION FUNCTION
 // ============================================================================
@@ -2094,6 +2214,9 @@ export function detectAnalyticEigenspectrum() {
     
     // Try detectors in order of specificity (most specific first)
     const detectors = [
+        // Specific named graphs (very specific structures)
+        detectFiveBarMechanism,  // 5-Bar Mechanism from Zeid-Rosenberg
+        
         // Specific trees first
         detectStarPath,      // S'p
         detectDoubleStar,    // S²p

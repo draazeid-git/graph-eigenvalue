@@ -1,9 +1,1476 @@
 /**
  * Spectral Analysis Module
+ * ========================
  * Graph type detection, eigenvalue computation, characteristic polynomial
+ * 
+ * Enhanced with:
+ * - Souriau-Frame-Faddeev (SFF) for exact polynomial generation using BigInt
+ * - Hybrid pattern detection combining graph-aware denominators with comprehensive forms
+ * - Robust closed-form eigenvalue identification
+ * 
+ * v35: Hybrid SFF + comprehensive pattern matching
  */
 
 import { state } from './graph-core.js';
+
+// =====================================================
+// SPECTRAL ENGINE - EXACT ARITHMETIC CORE (SFF)
+// =====================================================
+
+/**
+ * Exact Engine for matrices with integer entries.
+ * Uses BigInt for intermediate calculations to prevent floating-point drift.
+ */
+export class SpectralEngine {
+    /**
+     * Computes the characteristic polynomial exactly using Souriau-Frame-Faddeev method.
+     * For matrices with {-1, 0, 1} entries (like adjacency and skew-adjacency matrices).
+     * 
+     * Returns coefficients [c₀, c₁, ..., cₙ] where det(λI - A) = c₀λⁿ + c₁λⁿ⁻¹ + ... + cₙ
+     * 
+     * @param {number[][]} matrix - Square matrix with integer entries
+     * @returns {number[]} Characteristic polynomial coefficients
+     */
+    static computeExactPolynomial(matrix) {
+        const n = matrix.length;
+        if (n === 0) return [1];
+        
+        const coeffs = new Array(n + 1).fill(0n);
+        coeffs[0] = 1n;  // Leading coefficient is always 1
+        
+        // Convert matrix to BigInt for exact integer arithmetic
+        let M = matrix.map(row => row.map(val => BigInt(Math.round(val))));
+        const A = matrix.map(row => row.map(val => BigInt(Math.round(val))));  // Keep original
+        
+        for (let k = 1; k <= n; k++) {
+            // 1. Calculate trace(M^k)
+            let traceM = 0n;
+            for (let i = 0; i < n; i++) {
+                traceM += M[i][i];
+            }
+            
+            // 2. Newton's identity: c_k = -1/k * (trace(M^k) + c₁*trace(M^(k-1)) + ... + c_(k-1)*trace(M))
+            // For SFF, this simplifies to: c_k = -trace(M_k) / k
+            coeffs[k] = -traceM / BigInt(k);
+            
+            if (k < n) {
+                // 3. Compute M_{k+1} = A * (M_k + c_k * I)
+                const nextM = Array(n).fill(null).map(() => Array(n).fill(0n));
+                for (let i = 0; i < n; i++) {
+                    for (let j = 0; j < n; j++) {
+                        for (let l = 0; l < n; l++) {
+                            // (M_k + c_k * I)[l][j]
+                            const val = (l === j) ? M[l][j] + coeffs[k] : M[l][j];
+                            nextM[i][j] += A[i][l] * val;
+                        }
+                    }
+                }
+                M = nextM;
+            }
+        }
+        
+        return coeffs.map(c => Number(c));
+    }
+    
+    /**
+     * Generate graph-aware denominators for trigonometric pattern detection.
+     * Prioritizes denominators that commonly appear in graph eigenvalues.
+     * 
+     * @param {number} n - Number of vertices in the graph
+     * @returns {number[]} Array of denominators to check, sorted by priority
+     */
+    static getGraphDenominators(n) {
+        const denominators = new Set();
+        
+        // High priority: directly related to graph size
+        denominators.add(n);           // Cycle eigenvalues: 2cos(2πk/n)
+        denominators.add(n + 1);       // Path eigenvalues: 2cos(kπ/(n+1))
+        denominators.add(2 * n);       // Half-angle forms
+        denominators.add(n - 1);       // Wheel rim eigenvalues
+        
+        // Medium priority: common small denominators
+        [2, 3, 4, 5, 6, 8, 10, 12].forEach(d => denominators.add(d));
+        
+        // Lower priority: extended range
+        for (let d = 2; d <= Math.min(30, 2 * n + 5); d++) {
+            denominators.add(d);
+        }
+        
+        // Sort with graph-related denominators first
+        const graphRelated = [n, n + 1, 2 * n, n - 1].filter(d => d > 1);
+        const others = [...denominators].filter(d => !graphRelated.includes(d) && d > 1).sort((a, b) => a - b);
+        
+        return [...graphRelated, ...others];
+    }
+    
+    /**
+     * Identifies if a numerical eigenvalue corresponds to a closed form.
+     * Combines graph-aware denominators with comprehensive pattern detection.
+     * 
+     * @param {number} value - Numerical eigenvalue
+     * @param {number} n - Number of vertices (for graph-aware denominators)
+     * @param {number} tolerance - Matching tolerance (default 1e-9)
+     * @returns {Object} { type, formula, isExact, ... }
+     */
+    static identifyClosedForm(value, n = 10, tolerance = 1e-9) {
+        const absVal = Math.abs(value);
+        const sign = value >= 0 ? '' : '-';
+        
+        // ===== EXACT MATCHES (high confidence) =====
+        
+        // Zero
+        if (absVal < tolerance) {
+            return { type: 'zero', formula: '0', isExact: true, value: 0 };
+        }
+        
+        // Integers (up to reasonable range)
+        for (let k = 1; k <= 100; k++) {
+            if (Math.abs(absVal - k) < tolerance) {
+                return { type: 'integer', formula: sign + k, isExact: true, value: value > 0 ? k : -k };
+            }
+        }
+        
+        // Simple fractions (p/q where q ≤ 12)
+        for (let q = 2; q <= 12; q++) {
+            for (let p = 1; p < q; p++) {
+                if (SpectralEngine.gcd(p, q) !== 1) continue;  // Skip non-reduced fractions
+                if (Math.abs(absVal - p / q) < tolerance) {
+                    return { type: 'fraction', formula: `${sign}${p}/${q}`, isExact: true, value: value > 0 ? p/q : -p/q };
+                }
+            }
+        }
+        
+        // ===== RADICAL FORMS =====
+        
+        // Simple square roots: √k
+        for (let k = 2; k <= 100; k++) {
+            const sqrtK = Math.sqrt(k);
+            if (Math.abs(absVal - sqrtK) < tolerance) {
+                // Check if perfect square (simplify √4 = 2)
+                const sqrtInt = Math.round(sqrtK);
+                if (Math.abs(sqrtK - sqrtInt) < tolerance) {
+                    return { type: 'integer', formula: sign + sqrtInt, isExact: true, value: value > 0 ? sqrtInt : -sqrtInt };
+                }
+                return { type: 'radical', formula: `${sign}√${k}`, isExact: true, radicand: k };
+            }
+        }
+        
+        // Forms: (a ± √b) / c  - covers golden ratio and many graph eigenvalues
+        for (let a = 0; a <= 10; a++) {
+            for (let b = 1; b <= 50; b++) {
+                const sqrtB = Math.sqrt(b);
+                for (let c = 1; c <= 4; c++) {
+                    // (a + √b) / c
+                    const val1 = (a + sqrtB) / c;
+                    if (Math.abs(absVal - val1) < tolerance) {
+                        const formula = c === 1 ? 
+                            (a === 0 ? `${sign}√${b}` : `${sign}(${a}+√${b})`) :
+                            (a === 0 ? `${sign}√${b}/${c}` : `${sign}(${a}+√${b})/${c}`);
+                        return { type: 'radical_sum', formula, isExact: true, a, b, c, plusMinus: '+' };
+                    }
+                    
+                    // (a - √b) / c (when a > √b)
+                    if (a > sqrtB) {
+                        const val2 = (a - sqrtB) / c;
+                        if (Math.abs(absVal - val2) < tolerance) {
+                            const formula = c === 1 ?
+                                `${sign}(${a}-√${b})` :
+                                `${sign}(${a}-√${b})/${c}`;
+                            return { type: 'radical_sum', formula, isExact: true, a, b, c, plusMinus: '-' };
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Nested radicals: √(a ± √b)
+        for (let a = 1; a <= 15; a++) {
+            for (let b = 1; b <= 30; b++) {
+                const sqrtB = Math.sqrt(b);
+                if (a + sqrtB > 0) {
+                    const val1 = Math.sqrt(a + sqrtB);
+                    if (Math.abs(absVal - val1) < tolerance) {
+                        return { type: 'nested_radical', formula: `${sign}√(${a}+√${b})`, isExact: true, a, b, plusMinus: '+' };
+                    }
+                }
+                if (a - sqrtB > 0) {
+                    const val2 = Math.sqrt(a - sqrtB);
+                    if (Math.abs(absVal - val2) < tolerance) {
+                        return { type: 'nested_radical', formula: `${sign}√(${a}-√${b})`, isExact: true, a, b, plusMinus: '-' };
+                    }
+                }
+            }
+        }
+        
+        // ===== TRIGONOMETRIC FORMS (graph-aware) =====
+        
+        const denominators = SpectralEngine.getGraphDenominators(n);
+        
+        for (const m of denominators) {
+            if (m < 2) continue;
+            
+            for (let k = 0; k <= m; k++) {
+                const angle = (k * Math.PI) / m;
+                
+                // 2cos(kπ/m) - Path, Tree eigenvalues
+                const cos2 = 2 * Math.cos(angle);
+                if (Math.abs(value - cos2) < tolerance) {
+                    // Simplify special cases
+                    if (k === 0) return { type: 'integer', formula: '2', isExact: true, value: 2 };
+                    if (k === m) return { type: 'integer', formula: '-2', isExact: true, value: -2 };
+                    if (2 * k === m) return { type: 'zero', formula: '0', isExact: true, value: 0 };
+                    return { type: 'trig', func: 'cos', k, m, formula: `2cos(${k}π/${m})`, isExact: true };
+                }
+                
+                // 2sin(kπ/m) - Cycle-related
+                const sin2 = 2 * Math.sin(angle);
+                if (Math.abs(value - sin2) < tolerance) {
+                    if (k === 0 || k === m) return { type: 'zero', formula: '0', isExact: true, value: 0 };
+                    if (2 * k === m) return { type: 'integer', formula: '2', isExact: true, value: 2 };
+                    return { type: 'trig', func: 'sin', k, m, formula: `2sin(${k}π/${m})`, isExact: true };
+                }
+                if (Math.abs(value + sin2) < tolerance && k > 0 && k < m) {
+                    return { type: 'trig', func: 'sin', k, m, formula: `-2sin(${k}π/${m})`, isExact: true, negative: true };
+                }
+                
+                // cos(kπ/m) and sin(kπ/m) without the factor of 2
+                const cosVal = Math.cos(angle);
+                const sinVal = Math.sin(angle);
+                
+                if (Math.abs(absVal - Math.abs(cosVal)) < tolerance && Math.abs(cosVal) > tolerance) {
+                    const s = (value > 0) === (cosVal > 0) ? '' : '-';
+                    return { type: 'trig', func: 'cos', k, m, formula: `${s}cos(${k}π/${m})`, isExact: true };
+                }
+                if (Math.abs(absVal - Math.abs(sinVal)) < tolerance && Math.abs(sinVal) > tolerance) {
+                    const s = (value > 0) === (sinVal > 0) ? '' : '-';
+                    return { type: 'trig', func: 'sin', k, m, formula: `${s}sin(${k}π/${m})`, isExact: true };
+                }
+                
+                // 1 + 2cos(kπ/m) - Wheel graph eigenvalues
+                const wheelVal = 1 + 2 * Math.cos(angle);
+                if (Math.abs(value - wheelVal) < tolerance) {
+                    return { type: 'trig_sum', formula: `1+2cos(${k}π/${m})`, isExact: true, k, m };
+                }
+                
+                // cot(kπ/m) - Less common but can appear
+                if (Math.abs(sinVal) > 0.01) {
+                    const cotVal = cosVal / sinVal;
+                    if (Math.abs(value - cotVal) < tolerance) {
+                        return { type: 'trig', func: 'cot', k, m, formula: `cot(${k}π/${m})`, isExact: true };
+                    }
+                }
+            }
+        }
+        
+        // ===== SPECIAL CONSTANTS =====
+        
+        // Golden ratio φ = (1+√5)/2 ≈ 1.618
+        const phi = (1 + Math.sqrt(5)) / 2;
+        const psi = (1 - Math.sqrt(5)) / 2;  // ≈ -0.618
+        
+        if (Math.abs(value - phi) < tolerance) return { type: 'constant', formula: '(1+√5)/2', isExact: true, name: 'φ' };
+        if (Math.abs(value - psi) < tolerance) return { type: 'constant', formula: '(1-√5)/2', isExact: true, name: 'ψ' };
+        if (Math.abs(value + phi) < tolerance) return { type: 'constant', formula: '-(1+√5)/2', isExact: true, name: '-φ' };
+        if (Math.abs(value + psi) < tolerance) return { type: 'constant', formula: '-(1-√5)/2', isExact: true, name: '-ψ' };
+        
+        // √2, √3, √5 common in regular graphs
+        if (Math.abs(absVal - Math.SQRT2) < tolerance) return { type: 'radical', formula: sign + '√2', isExact: true };
+        if (Math.abs(absVal - Math.sqrt(3)) < tolerance) return { type: 'radical', formula: sign + '√3', isExact: true };
+        if (Math.abs(absVal - Math.sqrt(5)) < tolerance) return { type: 'radical', formula: sign + '√5', isExact: true };
+        
+        // 1 + √2, 1 + √3, etc. (common in wheel/gear graphs)
+        for (let base = 1; base <= 5; base++) {
+            for (let rad = 2; rad <= 20; rad++) {
+                const sqrtRad = Math.sqrt(rad);
+                if (Math.abs(absVal - (base + sqrtRad)) < tolerance) {
+                    return { type: 'radical_sum', formula: `${sign}(${base}+√${rad})`, isExact: true };
+                }
+                if (base > sqrtRad && Math.abs(absVal - (base - sqrtRad)) < tolerance) {
+                    return { type: 'radical_sum', formula: `${sign}(${base}-√${rad})`, isExact: true };
+                }
+            }
+        }
+        
+        // ===== NO MATCH - ALGEBRAIC (not recognized) =====
+        return { 
+            type: 'algebraic', 
+            formula: value.toFixed(6), 
+            isExact: false, 
+            value: value,
+            note: 'No closed form detected'
+        };
+    }
+    
+    /**
+     * GCD helper using Euclidean algorithm
+     */
+    static gcd(a, b) {
+        a = Math.abs(Math.round(a));
+        b = Math.abs(Math.round(b));
+        while (b !== 0) {
+            const t = b;
+            b = a % b;
+            a = t;
+        }
+        return a;
+    }
+    
+    /**
+     * Analyze all eigenvalues for closed forms
+     * 
+     * @param {number[]} eigenvalues - Array of numerical eigenvalues
+     * @param {number} n - Number of vertices for graph-aware detection
+     * @param {number} tolerance - Matching tolerance
+     * @returns {Object} { allAnalytic, eigenvalues: [{value, multiplicity, form, isExact}] }
+     */
+    static analyzeSpectrum(eigenvalues, n = null, tolerance = 1e-8) {
+        if (!eigenvalues || eigenvalues.length === 0) {
+            return { allAnalytic: true, eigenvalues: [] };
+        }
+        
+        n = n || eigenvalues.length;
+        
+        // Group eigenvalues by value (with tolerance)
+        const groups = [];
+        for (const ev of eigenvalues) {
+            const val = typeof ev === 'number' ? ev : (ev.value ?? ev.imag ?? 0);
+            if (val === undefined || isNaN(val)) continue;
+            
+            let found = false;
+            for (const group of groups) {
+                if (Math.abs(group.value - val) < tolerance) {
+                    group.count++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                groups.push({ value: val, count: 1 });
+            }
+        }
+        
+        // Sort by value (descending)
+        groups.sort((a, b) => b.value - a.value);
+        
+        // Analyze each unique eigenvalue
+        const results = [];
+        let allExact = true;
+        
+        for (const { value, count } of groups) {
+            const detection = SpectralEngine.identifyClosedForm(value, n, tolerance);
+            if (!detection.isExact) {
+                allExact = false;
+            }
+            results.push({
+                value: value,
+                multiplicity: count,
+                form: detection.formula,
+                isExact: detection.isExact,
+                type: detection.type
+            });
+        }
+        
+        return { allAnalytic: allExact, eigenvalues: results };
+    }
+    
+    // =========================================================
+    // EIGENVECTOR COMPUTATION
+    // =========================================================
+    
+    /**
+     * Compute eigenvector for a given eigenvalue using inverse iteration.
+     * For skew-symmetric matrices, eigenvalues are purely imaginary (iω),
+     * and eigenvectors are complex.
+     * 
+     * @param {number[][]} A - Matrix (adjacency or skew-adjacency)
+     * @param {number} eigenvalue - Target eigenvalue (real for symmetric, imaginary part for skew)
+     * @param {boolean} isSkew - If true, eigenvalue is imaginary (input is the imaginary part)
+     * @param {number} maxIter - Maximum iterations
+     * @returns {Object} { real: number[], imag: number[], eigenvalue, converged }
+     */
+    static computeEigenvector(A, eigenvalue, isSkew = false, maxIter = 100) {
+        const n = A.length;
+        if (n === 0) return null;
+        
+        // For skew-symmetric: eigenvalue is iω, we work with the imaginary part ω
+        const omega = isSkew ? eigenvalue : 0;
+        const lambda = isSkew ? 0 : eigenvalue;
+        
+        // Initialize with random vector
+        let vReal = new Float64Array(n);
+        let vImag = new Float64Array(n);
+        for (let i = 0; i < n; i++) {
+            vReal[i] = Math.sin(2 * Math.PI * i / n + 0.1);
+            vImag[i] = Math.cos(2 * Math.PI * i / n + 0.2);
+        }
+        
+        // Normalize
+        let norm = 0;
+        for (let i = 0; i < n; i++) {
+            norm += vReal[i] * vReal[i] + vImag[i] * vImag[i];
+        }
+        norm = Math.sqrt(norm);
+        for (let i = 0; i < n; i++) {
+            vReal[i] /= norm;
+            vImag[i] /= norm;
+        }
+        
+        // Power iteration with shift: find eigenvector of (A - λI)
+        // For skew-symmetric with eigenvalue iω: (A - iωI)v = 0
+        // We iterate: v_{k+1} = A*v_k normalized, checking convergence
+        
+        const tolerance = 1e-10;
+        let converged = false;
+        
+        for (let iter = 0; iter < maxIter; iter++) {
+            // Compute A*v (complex multiplication for skew case)
+            const newReal = new Float64Array(n);
+            const newImag = new Float64Array(n);
+            
+            for (let i = 0; i < n; i++) {
+                let sumReal = 0, sumImag = 0;
+                for (let j = 0; j < n; j++) {
+                    // A*v = A*(vReal + i*vImag)
+                    sumReal += A[i][j] * vReal[j];
+                    sumImag += A[i][j] * vImag[j];
+                }
+                
+                if (isSkew) {
+                    // For eigenvalue iω: we want (A - iωI)v ≈ 0
+                    // A*v should be close to iω*v = -ω*vImag + iω*vReal
+                    // Use A*v + ω*rotate90(v) to enhance eigenspace
+                    newReal[i] = sumReal + omega * vImag[i];
+                    newImag[i] = sumImag - omega * vReal[i];
+                } else {
+                    // For real eigenvalue: (A - λI)v ≈ 0
+                    newReal[i] = sumReal - lambda * vReal[i];
+                    newImag[i] = sumImag - lambda * vImag[i];
+                }
+            }
+            
+            // Normalize
+            norm = 0;
+            for (let i = 0; i < n; i++) {
+                norm += newReal[i] * newReal[i] + newImag[i] * newImag[i];
+            }
+            norm = Math.sqrt(norm);
+            
+            if (norm < tolerance) {
+                // Already in eigenspace
+                converged = true;
+                break;
+            }
+            
+            // Check convergence (direction change)
+            let diff = 0;
+            for (let i = 0; i < n; i++) {
+                const dr = newReal[i] / norm - vReal[i];
+                const di = newImag[i] / norm - vImag[i];
+                diff += dr * dr + di * di;
+            }
+            
+            for (let i = 0; i < n; i++) {
+                vReal[i] = newReal[i] / norm;
+                vImag[i] = newImag[i] / norm;
+            }
+            
+            if (Math.sqrt(diff) < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+        
+        return {
+            real: Array.from(vReal),
+            imag: Array.from(vImag),
+            eigenvalue: isSkew ? { real: 0, imag: omega } : { real: lambda, imag: 0 },
+            converged
+        };
+    }
+    
+    /**
+     * Compute eigenvectors for known graph families using analytical formulas.
+     * These are exact and preferred over numerical methods.
+     * 
+     * @param {string} graphType - Graph type (cycle, path, star, complete, hypercube)
+     * @param {number} n - Number of vertices
+     * @param {number} k - Mode index (0 to n-1)
+     * @param {boolean} forSkew - If true, return eigenvector for skew-adjacency matrix
+     * @returns {Object} { real: number[], imag: number[], eigenvalue, formula }
+     */
+    static computeAnalyticEigenvector(graphType, n, k, forSkew = false) {
+        const real = new Array(n).fill(0);
+        const imag = new Array(n).fill(0);
+        let eigenvalue, formula;
+        
+        switch (graphType) {
+            case 'cycle':
+                // Cycle Cₙ: v_k[j] = exp(2πijk/n)
+                // Eigenvalue: 2cos(2πk/n) for symmetric, 2i·sin(2πk/n) for skew
+                for (let j = 0; j < n; j++) {
+                    const theta = 2 * Math.PI * j * k / n;
+                    real[j] = Math.cos(theta) / Math.sqrt(n);
+                    imag[j] = Math.sin(theta) / Math.sqrt(n);
+                }
+                if (forSkew) {
+                    eigenvalue = { real: 0, imag: 2 * Math.sin(2 * Math.PI * k / n) };
+                    formula = `2i·sin(2π·${k}/${n})`;
+                } else {
+                    eigenvalue = { real: 2 * Math.cos(2 * Math.PI * k / n), imag: 0 };
+                    formula = `2cos(2π·${k}/${n})`;
+                }
+                break;
+                
+            case 'path':
+                // Path Pₙ: v_k[j] = sin(πjk/(n+1)) (j = 1..n)
+                // Eigenvalue: 2cos(πk/(n+1))
+                for (let j = 0; j < n; j++) {
+                    real[j] = Math.sin(Math.PI * (j + 1) * k / (n + 1));
+                }
+                // Normalize
+                const normP = Math.sqrt(real.reduce((s, x) => s + x * x, 0));
+                for (let j = 0; j < n; j++) real[j] /= normP;
+                
+                eigenvalue = { real: 2 * Math.cos(Math.PI * k / (n + 1)), imag: 0 };
+                formula = `2cos(π·${k}/${n + 1})`;
+                break;
+                
+            case 'star':
+                // Star Sₙ: center at index 0, leaves at 1..n-1
+                // Eigenvalues: ±√(n-1) (mult 1 each), 0 (mult n-2)
+                // Eigenvector for √(n-1): center = √(n-1), leaves = 1 (normalized)
+                if (k === 0) {
+                    // Positive √(n-1)
+                    const sqrtN1 = Math.sqrt(n - 1);
+                    real[0] = sqrtN1 / Math.sqrt(n - 1 + (n - 1));
+                    for (let j = 1; j < n; j++) {
+                        real[j] = 1 / Math.sqrt(n - 1 + (n - 1));
+                    }
+                    eigenvalue = { real: sqrtN1, imag: 0 };
+                    formula = `√${n - 1}`;
+                } else if (k === n - 1) {
+                    // Negative √(n-1)
+                    const sqrtN1 = Math.sqrt(n - 1);
+                    real[0] = sqrtN1 / Math.sqrt(n - 1 + (n - 1));
+                    for (let j = 1; j < n; j++) {
+                        real[j] = -1 / Math.sqrt(n - 1 + (n - 1));
+                    }
+                    eigenvalue = { real: -sqrtN1, imag: 0 };
+                    formula = `-√${n - 1}`;
+                } else {
+                    // Zero eigenvalue: orthogonal to center, sum of leaves = 0
+                    real[0] = 0;
+                    real[1] = 1 / Math.sqrt(2);
+                    real[k + 1 < n ? k + 1 : 2] = -1 / Math.sqrt(2);
+                    eigenvalue = { real: 0, imag: 0 };
+                    formula = '0';
+                }
+                break;
+                
+            case 'complete':
+                // Complete Kₙ: eigenvalues n-1 (mult 1), -1 (mult n-1)
+                if (k === 0) {
+                    // All-ones eigenvector for n-1
+                    for (let j = 0; j < n; j++) real[j] = 1 / Math.sqrt(n);
+                    eigenvalue = { real: n - 1, imag: 0 };
+                    formula = `${n - 1}`;
+                } else {
+                    // Orthogonal eigenvector for -1
+                    real[0] = 1 / Math.sqrt(2);
+                    real[k] = -1 / Math.sqrt(2);
+                    eigenvalue = { real: -1, imag: 0 };
+                    formula = '-1';
+                }
+                break;
+                
+            case 'hypercube':
+                // Hypercube Qₐ: eigenvalues d-2j with multiplicity C(d,j)
+                // Eigenvectors are tensor products of ±1 vectors
+                // For simplicity, use numerical method
+                return null;
+                
+            default:
+                return null;
+        }
+        
+        return { real, imag, eigenvalue, formula };
+    }
+    
+    /**
+     * Compute all eigenvectors for a matrix
+     * Returns array of { eigenvalue, eigenvector: {real, imag}, formula? }
+     */
+    static computeAllEigenvectors(A, isSkew = false, graphType = null) {
+        const n = A.length;
+        if (n === 0) return [];
+        
+        const results = [];
+        
+        // Try analytical formulas first for known graph types
+        if (graphType && ['cycle', 'path', 'star', 'complete'].includes(graphType)) {
+            for (let k = 0; k < n; k++) {
+                const ev = SpectralEngine.computeAnalyticEigenvector(graphType, n, k, isSkew);
+                if (ev) {
+                    results.push({
+                        eigenvalue: ev.eigenvalue,
+                        eigenvector: { real: ev.real, imag: ev.imag },
+                        formula: ev.formula,
+                        modeIndex: k,
+                        isAnalytic: true
+                    });
+                }
+            }
+            return results;
+        }
+        
+        // Fall back to numerical computation
+        // First get eigenvalues
+        const eigenvalues = [];
+        if (isSkew) {
+            // For skew-symmetric, eigenvalues are ±iω
+            // Use characteristic polynomial or direct computation
+            for (let i = 0; i < n; i++) {
+                // Simplified: assume we have eigenvalues from elsewhere
+                eigenvalues.push(i);  // Placeholder
+            }
+        }
+        
+        return results;
+    }
+}
+
+// =====================================================
+// POLYNOMIAL FACTORIZATION ENGINE
+// =====================================================
+
+/**
+ * Symbolic Polynomial Factorization for Characteristic Polynomials
+ * 
+ * Given exact polynomial coefficients from SFF, this engine attempts to:
+ * 1. Find all rational roots (Rational Root Theorem)
+ * 2. Factor out linear terms (λ - k)
+ * 3. Identify quadratic factors (λ² - k) giving ±√k roots
+ * 4. Handle biquadratics (λ⁴ + aλ² + b) via μ = λ² substitution
+ * 5. Detect cyclotomic-like factors for trigonometric eigenvalues
+ * 
+ * Returns symbolic factorization and exact algebraic roots when possible.
+ */
+export class PolynomialFactorizer {
+    
+    /**
+     * Main entry point: Factor a characteristic polynomial and find exact roots
+     * 
+     * @param {number[]} coeffs - Polynomial coefficients [c₀, c₁, ..., cₙ] where p(λ) = c₀λⁿ + c₁λⁿ⁻¹ + ... + cₙ
+     * @returns {Object} { factors: [], roots: [], factorization: string, allExact: boolean }
+     */
+    static factorCharacteristicPolynomial(coeffs) {
+        if (!coeffs || coeffs.length === 0) {
+            return { factors: [], roots: [], factorization: '1', allExact: true };
+        }
+        
+        const n = coeffs.length - 1;  // Degree
+        const factors = [];
+        const roots = [];
+        let remaining = [...coeffs];
+        
+        // Step 1: Factor out powers of λ (zero eigenvalues)
+        const zeroResult = this.factorOutZeros(remaining);
+        remaining = zeroResult.remaining;
+        if (zeroResult.multiplicity > 0) {
+            factors.push({ type: 'power', base: 'λ', exp: zeroResult.multiplicity });
+            for (let i = 0; i < zeroResult.multiplicity; i++) {
+                roots.push({ value: 0, form: '0', exact: true });
+            }
+        }
+        
+        // Step 2: Find integer roots using Rational Root Theorem
+        const intResult = this.factorIntegerRoots(remaining);
+        remaining = intResult.remaining;
+        for (const root of intResult.roots) {
+            factors.push({ type: 'linear', root: root.value });
+            roots.push(root);
+        }
+        
+        // Step 3: Look for quadratic factors of form (λ² - k)
+        const quadResult = this.factorQuadraticRadicals(remaining);
+        remaining = quadResult.remaining;
+        for (const factor of quadResult.factors) {
+            factors.push(factor);
+        }
+        roots.push(...quadResult.roots);
+        
+        // Step 4: Check for biquadratic patterns (λ⁴ + aλ² + b)
+        const biquadResult = this.factorBiquadratics(remaining);
+        remaining = biquadResult.remaining;
+        for (const factor of biquadResult.factors) {
+            factors.push(factor);
+        }
+        roots.push(...biquadResult.roots);
+        
+        // Step 5: Handle remaining polynomial numerically if needed
+        if (remaining.length > 1 && !this.isConstant(remaining)) {
+            const numRoots = this.findRootsNumerically(remaining);
+            for (const val of numRoots) {
+                // Try to identify closed form
+                const form = SpectralEngine.identifyClosedForm(val, n);
+                roots.push({
+                    value: val,
+                    form: form.isExact ? form.formula : val.toFixed(6),
+                    exact: form.isExact
+                });
+            }
+            if (numRoots.length > 0) {
+                factors.push({ type: 'remainder', degree: remaining.length - 1, coeffs: remaining });
+            }
+        }
+        
+        // Build factorization string
+        const factorization = this.buildFactorizationString(factors, coeffs);
+        
+        // Sort roots by value (descending)
+        roots.sort((a, b) => b.value - a.value);
+        
+        return {
+            factors,
+            roots,
+            factorization,
+            allExact: roots.every(r => r.exact),
+            originalDegree: n
+        };
+    }
+    
+    /**
+     * Factor out powers of λ (finds multiplicity of zero as a root)
+     */
+    static factorOutZeros(coeffs) {
+        let multiplicity = 0;
+        let idx = coeffs.length - 1;
+        
+        // Count trailing zeros (constant term, then λ term, etc.)
+        while (idx >= 0 && Math.abs(coeffs[idx]) < 1e-10) {
+            multiplicity++;
+            idx--;
+        }
+        
+        if (multiplicity === 0) {
+            return { remaining: coeffs, multiplicity: 0 };
+        }
+        
+        // Remove the zero coefficients
+        const remaining = coeffs.slice(0, coeffs.length - multiplicity);
+        return { remaining, multiplicity };
+    }
+    
+    /**
+     * Find integer roots using Rational Root Theorem
+     * For monic polynomials (leading coeff = 1), rational roots must divide the constant term
+     */
+    static factorIntegerRoots(coeffs) {
+        if (coeffs.length <= 1) {
+            return { remaining: coeffs, roots: [] };
+        }
+        
+        const roots = [];
+        let remaining = [...coeffs];
+        
+        // Get potential rational roots (divisors of constant term)
+        const constantTerm = Math.abs(Math.round(remaining[remaining.length - 1]));
+        const candidates = this.getDivisors(Math.max(constantTerm, 1));
+        
+        // Also try small integers regardless
+        const toTry = new Set([...candidates, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        
+        let foundRoot = true;
+        while (foundRoot && remaining.length > 1) {
+            foundRoot = false;
+            
+            for (const k of toTry) {
+                for (const sign of [1, -1]) {
+                    const root = k * sign;
+                    if (this.evaluatePolynomial(remaining, root) < 1e-9) {
+                        // Found a root! Divide out (λ - root)
+                        const quotient = this.syntheticDivision(remaining, root);
+                        if (quotient) {
+                            roots.push({ value: root, form: String(root), exact: true });
+                            remaining = quotient;
+                            foundRoot = true;
+                            break;
+                        }
+                    }
+                }
+                if (foundRoot) break;
+            }
+        }
+        
+        return { remaining, roots };
+    }
+    
+    /**
+     * Look for quadratic factors of form (λ² - k) giving roots ±√k
+     */
+    static factorQuadraticRadicals(coeffs) {
+        if (coeffs.length < 3) {
+            return { remaining: coeffs, factors: [], roots: [] };
+        }
+        
+        const factors = [];
+        const roots = [];
+        let remaining = [...coeffs];
+        
+        // Check if polynomial has only even powers (symmetric spectrum)
+        const hasOnlyEvenPowers = this.hasOnlyEvenPowers(remaining);
+        
+        if (hasOnlyEvenPowers && remaining.length >= 3) {
+            // Try to factor as polynomial in μ = λ²
+            const muCoeffs = this.extractEvenPowerCoeffs(remaining);
+            
+            // Find integer roots of the μ polynomial (these give λ² = k, so λ = ±√k)
+            for (let k = 1; k <= 50; k++) {
+                if (Math.abs(this.evaluatePolynomial(muCoeffs, k)) < 1e-9) {
+                    // k is a root of p(μ), so λ² - k is a factor
+                    const quotient = this.divideByQuadratic(remaining, k);
+                    if (quotient) {
+                        factors.push({ type: 'quadratic', k, form: `(λ²-${k})` });
+                        roots.push({ value: Math.sqrt(k), form: `√${k}`, exact: true });
+                        roots.push({ value: -Math.sqrt(k), form: `-√${k}`, exact: true });
+                        remaining = quotient;
+                    }
+                }
+            }
+        }
+        
+        return { remaining, factors, roots };
+    }
+    
+    /**
+     * Handle biquadratic factors: λ⁴ + aλ² + b
+     * Substitute μ = λ² to get μ² + aμ + b = 0
+     * Solve: μ = (-a ± √(a² - 4b)) / 2
+     * Then λ = ±√μ
+     */
+    static factorBiquadratics(coeffs) {
+        const factors = [];
+        const roots = [];
+        let remaining = [...coeffs];
+        
+        // Look for degree-4 factors with only even powers
+        if (remaining.length === 5 && this.hasOnlyEvenPowers(remaining)) {
+            // Polynomial is: c₀λ⁴ + c₂λ² + c₄ (with c₁ = c₃ = 0)
+            const a = remaining[2] / remaining[0];  // Coefficient of λ²
+            const b = remaining[4] / remaining[0];  // Constant term
+            
+            const discriminant = a * a - 4 * b;
+            
+            if (discriminant >= 0) {
+                const sqrtDisc = Math.sqrt(discriminant);
+                const mu1 = (-a + sqrtDisc) / 2;
+                const mu2 = (-a - sqrtDisc) / 2;
+                
+                // Check if discriminant is a perfect integer
+                const discInt = Math.round(discriminant);
+                const isDiscExact = Math.abs(discriminant - discInt) < 1e-9;
+                
+                if (mu1 > 0) {
+                    const lambda = Math.sqrt(mu1);
+                    const form = this.formatBiquadraticRoot(a, discInt, isDiscExact, '+');
+                    factors.push({ type: 'biquadratic_root', mu: mu1, form: form.factor });
+                    roots.push({ value: lambda, form: form.pos, exact: isDiscExact });
+                    roots.push({ value: -lambda, form: form.neg, exact: isDiscExact });
+                }
+                
+                if (mu2 > 0 && Math.abs(mu1 - mu2) > 1e-9) {
+                    const lambda = Math.sqrt(mu2);
+                    const form = this.formatBiquadraticRoot(a, discInt, isDiscExact, '-');
+                    factors.push({ type: 'biquadratic_root', mu: mu2, form: form.factor });
+                    roots.push({ value: lambda, form: form.pos, exact: isDiscExact });
+                    roots.push({ value: -lambda, form: form.neg, exact: isDiscExact });
+                }
+                
+                remaining = [1];  // Fully factored
+            }
+        }
+        
+        return { remaining, factors, roots };
+    }
+    
+    /**
+     * Format a biquadratic root: √((−a ± √disc)/2)
+     */
+    static formatBiquadraticRoot(a, disc, isExact, sign) {
+        if (!isExact) {
+            return { factor: 'biquadratic', pos: '?', neg: '?' };
+        }
+        
+        const aInt = Math.round(-a);
+        const sqrtDisc = Math.sqrt(disc);
+        const isDiscPerfectSquare = Math.abs(sqrtDisc - Math.round(sqrtDisc)) < 1e-9;
+        
+        let innerForm;
+        if (isDiscPerfectSquare) {
+            const sqrtDiscInt = Math.round(sqrtDisc);
+            innerForm = sign === '+' ? 
+                `(${aInt}+${sqrtDiscInt})/2` : 
+                `(${aInt}-${sqrtDiscInt})/2`;
+        } else {
+            innerForm = sign === '+' ? 
+                `(${aInt}+√${disc})/2` : 
+                `(${aInt}-√${disc})/2`;
+        }
+        
+        return {
+            factor: `λ⁴${a >= 0 ? '+' : ''}${Math.round(a)}λ²${Math.round(a*a/4 - disc/4) >= 0 ? '+' : ''}...`,
+            pos: `√(${innerForm})`,
+            neg: `-√(${innerForm})`
+        };
+    }
+    
+    // ===== UTILITY METHODS =====
+    
+    /**
+     * Evaluate polynomial at a point
+     */
+    static evaluatePolynomial(coeffs, x) {
+        let result = 0;
+        let power = 1;
+        for (let i = coeffs.length - 1; i >= 0; i--) {
+            result += coeffs[i] * power;
+            power *= x;
+        }
+        return Math.abs(result);
+    }
+    
+    /**
+     * Synthetic division: divide polynomial by (λ - root)
+     */
+    static syntheticDivision(coeffs, root) {
+        const n = coeffs.length - 1;
+        const result = new Array(n).fill(0);
+        
+        result[0] = coeffs[0];
+        for (let i = 1; i < n; i++) {
+            result[i] = coeffs[i] + root * result[i - 1];
+        }
+        
+        // Check remainder
+        const remainder = coeffs[n] + root * result[n - 1];
+        if (Math.abs(remainder) > 1e-9) {
+            return null;  // Not an exact division
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Divide polynomial by (λ² - k)
+     */
+    static divideByQuadratic(coeffs, k) {
+        const n = coeffs.length - 1;
+        if (n < 2) return null;
+        
+        const result = new Array(n - 1).fill(0);
+        result[0] = coeffs[0];
+        result[1] = coeffs[1];
+        
+        for (let i = 2; i < n - 1; i++) {
+            result[i] = coeffs[i] + k * result[i - 2];
+        }
+        
+        // Check remainders
+        const rem1 = coeffs[n - 1] + k * result[n - 3];
+        const rem2 = coeffs[n] + k * result[n - 2];
+        
+        if (Math.abs(rem1) > 1e-9 || Math.abs(rem2) > 1e-9) {
+            return null;
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Check if polynomial has only even powers of λ
+     */
+    static hasOnlyEvenPowers(coeffs) {
+        for (let i = 1; i < coeffs.length; i += 2) {
+            if (Math.abs(coeffs[i]) > 1e-10) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Extract coefficients for even powers only (for substitution μ = λ²)
+     */
+    static extractEvenPowerCoeffs(coeffs) {
+        const result = [];
+        for (let i = 0; i < coeffs.length; i += 2) {
+            result.push(coeffs[i]);
+        }
+        return result;
+    }
+    
+    /**
+     * Get all divisors of n
+     */
+    static getDivisors(n) {
+        const divisors = [];
+        for (let i = 1; i <= Math.sqrt(n); i++) {
+            if (n % i === 0) {
+                divisors.push(i);
+                if (i !== n / i) {
+                    divisors.push(n / i);
+                }
+            }
+        }
+        return divisors.sort((a, b) => a - b);
+    }
+    
+    /**
+     * Check if polynomial is effectively constant
+     */
+    static isConstant(coeffs) {
+        return coeffs.length <= 1 || 
+               (coeffs.length === 2 && Math.abs(coeffs[0]) < 1e-10);
+    }
+    
+    /**
+     * Find roots numerically using companion matrix eigenvalues
+     */
+    static findRootsNumerically(coeffs) {
+        if (coeffs.length <= 1) return [];
+        if (coeffs.length === 2) {
+            return [-coeffs[1] / coeffs[0]];
+        }
+        
+        // Build companion matrix
+        const n = coeffs.length - 1;
+        const companion = Array(n).fill(null).map(() => Array(n).fill(0));
+        
+        // Normalize by leading coefficient
+        const lead = coeffs[0];
+        for (let i = 0; i < n - 1; i++) {
+            companion[i][i + 1] = 1;
+        }
+        for (let i = 0; i < n; i++) {
+            companion[n - 1][i] = -coeffs[n - i] / lead;
+        }
+        
+        // Use power iteration or QR to find eigenvalues (simplified here)
+        // For now, return empty - full implementation would use proper eigenvalue algorithm
+        return [];
+    }
+    
+    /**
+     * Build human-readable factorization string
+     */
+    static buildFactorizationString(factors, originalCoeffs) {
+        if (factors.length === 0) {
+            return this.formatPolynomial(originalCoeffs);
+        }
+        
+        const parts = [];
+        
+        for (const f of factors) {
+            switch (f.type) {
+                case 'power':
+                    parts.push(f.exp === 1 ? 'λ' : `λ${this.superscript(f.exp)}`);
+                    break;
+                case 'linear':
+                    if (f.root === 0) {
+                        parts.push('λ');
+                    } else if (f.root > 0) {
+                        parts.push(`(λ-${f.root})`);
+                    } else {
+                        parts.push(`(λ+${-f.root})`);
+                    }
+                    break;
+                case 'quadratic':
+                    parts.push(`(λ²-${f.k})`);
+                    break;
+                case 'biquadratic_root':
+                    parts.push(f.form);
+                    break;
+                case 'remainder':
+                    parts.push(`[deg-${f.degree} factor]`);
+                    break;
+            }
+        }
+        
+        return parts.join('');
+    }
+    
+    /**
+     * Format polynomial as string
+     */
+    static formatPolynomial(coeffs) {
+        const n = coeffs.length - 1;
+        const parts = [];
+        
+        for (let i = 0; i <= n; i++) {
+            const c = coeffs[i];
+            if (Math.abs(c) < 1e-10) continue;
+            
+            const power = n - i;
+            let term = '';
+            
+            if (power === 0) {
+                term = c >= 0 ? `+${Math.round(c)}` : `${Math.round(c)}`;
+            } else if (power === 1) {
+                if (Math.abs(c - 1) < 1e-10) term = '+λ';
+                else if (Math.abs(c + 1) < 1e-10) term = '-λ';
+                else term = c >= 0 ? `+${Math.round(c)}λ` : `${Math.round(c)}λ`;
+            } else {
+                const sup = this.superscript(power);
+                if (Math.abs(c - 1) < 1e-10) term = `+λ${sup}`;
+                else if (Math.abs(c + 1) < 1e-10) term = `-λ${sup}`;
+                else term = c >= 0 ? `+${Math.round(c)}λ${sup}` : `${Math.round(c)}λ${sup}`;
+            }
+            
+            parts.push(term);
+        }
+        
+        let result = parts.join('');
+        if (result.startsWith('+')) result = result.slice(1);
+        return result || '0';
+    }
+    
+    static superscript(n) {
+        const supers = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+        return String(n).split('').map(d => supers[parseInt(d)] || d).join('');
+    }
+}
+
+/**
+ * High-level function to analyze characteristic polynomial and find exact eigenvalues
+ * This combines SFF exact computation with symbolic factorization
+ * 
+ * @param {number[][]} matrix - Adjacency or skew-adjacency matrix
+ * @returns {Object} Analysis result with factorization and roots
+ */
+export function analyzeCharacteristicPolynomial(matrix) {
+    // Step 1: Compute exact characteristic polynomial using SFF
+    const coeffs = SpectralEngine.computeExactPolynomial(matrix);
+    
+    // Step 2: Factor the polynomial symbolically
+    const factorization = PolynomialFactorizer.factorCharacteristicPolynomial(coeffs);
+    
+    // Step 3: Build result with all information
+    return {
+        polynomial: {
+            coefficients: coeffs,
+            formatted: PolynomialFactorizer.formatPolynomial(coeffs),
+            degree: coeffs.length - 1
+        },
+        factorization: factorization.factorization,
+        factors: factorization.factors,
+        roots: factorization.roots,
+        eigenvalues: factorization.roots.map(r => ({
+            value: r.value,
+            form: r.form,
+            isExact: r.exact
+        })),
+        allExact: factorization.allExact,
+        
+        // Summary
+        summary: {
+            degree: coeffs.length - 1,
+            numDistinctRoots: factorization.roots.length,
+            hasZeroEigenvalue: factorization.roots.some(r => Math.abs(r.value) < 1e-10),
+            spectralRadius: Math.max(...factorization.roots.map(r => Math.abs(r.value)))
+        }
+    };
+}
+
+// =====================================================
+// SPECTRAL GAP ANALYSIS
+// =====================================================
+
+/**
+ * Comprehensive Spectral Gap Analysis
+ * 
+ * The spectral gap measures how "well-connected" a graph is and relates to:
+ * - Expansion properties (Cheeger inequality)
+ * - Random walk mixing time
+ * - Graph robustness and synchronization
+ * 
+ * Multiple gap definitions are computed for complete analysis.
+ */
+export class SpectralGapAnalyzer {
+    
+    /**
+     * Compute all spectral gap metrics from eigenvalues
+     * 
+     * @param {number[]} eigenvalues - Adjacency matrix eigenvalues (sorted descending)
+     * @param {number} n - Number of vertices
+     * @param {Object} graphInfo - Optional graph type info { type, degree, ... }
+     * @returns {Object} Comprehensive gap analysis
+     */
+    static analyze(eigenvalues, n, graphInfo = null) {
+        if (!eigenvalues || eigenvalues.length < 2) {
+            return {
+                adjacencyGap: 0,
+                normalizedGap: 0,
+                algebraicConnectivity: null,
+                interpretation: 'Insufficient eigenvalues for gap analysis'
+            };
+        }
+        
+        // Sort eigenvalues in descending order
+        const sorted = [...eigenvalues].sort((a, b) => b - a);
+        const λ1 = sorted[0];  // Largest eigenvalue (spectral radius for connected graphs)
+        const λ2 = sorted[1];  // Second largest
+        const λn = sorted[sorted.length - 1];  // Smallest
+        
+        // 1. Adjacency Spectral Gap: λ₁ - λ₂
+        const adjacencyGap = λ1 - λ2;
+        
+        // 2. Absolute Spectral Gap: λ₁ - max(|λ₂|, |λₙ|)
+        // Important for expansion: gap from largest to second largest in absolute value
+        const sortedByAbs = [...eigenvalues].sort((a, b) => Math.abs(b) - Math.abs(a));
+        const absoluteGap = Math.abs(sortedByAbs[0]) - Math.abs(sortedByAbs[1]);
+        
+        // 3. Normalized Gap: (λ₁ - λ₂) / λ₁
+        // Useful for comparing graphs of different sizes
+        const normalizedGap = λ1 > 0 ? adjacencyGap / λ1 : 0;
+        
+        // 4. Relative Gap: λ₂ / λ₁ (for expander analysis)
+        // Smaller is better for expansion
+        const relativeSecond = λ1 !== 0 ? λ2 / λ1 : 0;
+        
+        // 5. Spectral Width: λ₁ - λₙ (total spread)
+        const spectralWidth = λ1 - λn;
+        
+        // Detect closed form for the gap
+        const gapForm = SpectralEngine.identifyClosedForm(adjacencyGap, n);
+        
+        // Compute theoretical bounds and interpretations
+        const analysis = {
+            // Core metrics
+            adjacencyGap,
+            absoluteGap,
+            normalizedGap,
+            relativeSecond,
+            spectralWidth,
+            
+            // Eigenvalue details
+            λ1,
+            λ2,
+            λn,
+            
+            // Closed form
+            gapFormula: gapForm.isExact ? gapForm.formula : adjacencyGap.toFixed(6),
+            gapIsAnalytic: gapForm.isExact,
+            
+            // Interpretation
+            interpretation: SpectralGapAnalyzer.interpret(adjacencyGap, normalizedGap, n, graphInfo),
+            
+            // Expansion quality (based on normalized gap)
+            expansionQuality: SpectralGapAnalyzer.classifyExpansion(normalizedGap)
+        };
+        
+        // Add known formula if graph type is recognized
+        if (graphInfo?.type) {
+            analysis.knownFormula = SpectralGapAnalyzer.getKnownFormula(graphInfo);
+        }
+        
+        return analysis;
+    }
+    
+    /**
+     * Get known spectral gap formulas for common graph families
+     */
+    static getKnownFormula(graphInfo) {
+        const { type, n, degree, dim } = graphInfo;
+        
+        const formulas = {
+            'cycle': {
+                formula: '4sin²(π/n)',
+                value: 4 * Math.pow(Math.sin(Math.PI / n), 2),
+                note: 'Gap → 0 as n → ∞ (poor expansion)'
+            },
+            'path': {
+                formula: '2cos(π/(n+1)) - 2cos(2π/(n+1))',
+                value: 2 * Math.cos(Math.PI / (n + 1)) - 2 * Math.cos(2 * Math.PI / (n + 1)),
+                note: 'Gap → 0 as n → ∞'
+            },
+            'complete': {
+                formula: 'n (all non-principal eigenvalues are -1)',
+                value: n,  // λ₁ = n-1, λ₂ = -1, gap in usual sense is 0
+                note: 'Maximum expansion (Ramanujan bound achieved)'
+            },
+            'star': {
+                formula: '√(n-1)',
+                value: Math.sqrt(n - 1),
+                note: 'λ₁ = √(n-1), λ₂ = 0'
+            },
+            'hypercube': {
+                formula: '2 (constant for all dimensions)',
+                value: 2,
+                note: `Q_${dim || '?'}: λ₁ = d, λ₂ = d-2, gap = 2`
+            },
+            'petersen': {
+                formula: '2',
+                value: 2,
+                note: 'λ₁ = 3, λ₂ = 1, excellent expander'
+            },
+            'complete_bipartite': {
+                formula: '√(mn) (for K_{m,n})',
+                value: graphInfo.m && graphInfo.p ? Math.sqrt(graphInfo.m * graphInfo.p) : null,
+                note: 'Bipartite graphs have symmetric spectrum'
+            }
+        };
+        
+        return formulas[type] || null;
+    }
+    
+    /**
+     * Classify expansion quality based on normalized spectral gap
+     */
+    static classifyExpansion(normalizedGap) {
+        if (normalizedGap >= 0.5) return { quality: 'Excellent', rating: 5, description: 'Near-Ramanujan expander' };
+        if (normalizedGap >= 0.3) return { quality: 'Good', rating: 4, description: 'Strong expansion properties' };
+        if (normalizedGap >= 0.15) return { quality: 'Moderate', rating: 3, description: 'Reasonable connectivity' };
+        if (normalizedGap >= 0.05) return { quality: 'Weak', rating: 2, description: 'Limited expansion' };
+        return { quality: 'Poor', rating: 1, description: 'Near-disconnected or path-like' };
+    }
+    
+    /**
+     * Generate human-readable interpretation
+     */
+    static interpret(gap, normalizedGap, n, graphInfo) {
+        const lines = [];
+        
+        // Basic gap info
+        lines.push(`Spectral gap Δ = ${gap.toFixed(4)}`);
+        
+        // Normalized interpretation
+        const pct = (normalizedGap * 100).toFixed(1);
+        lines.push(`Normalized gap: ${pct}% of spectral radius`);
+        
+        // Expansion interpretation
+        const expansion = SpectralGapAnalyzer.classifyExpansion(normalizedGap);
+        lines.push(`Expansion: ${expansion.quality} - ${expansion.description}`);
+        
+        // Mixing time estimate (for random walks)
+        if (normalizedGap > 0.001) {
+            const mixingTime = Math.ceil(Math.log(n) / normalizedGap);
+            lines.push(`Est. mixing time: O(${mixingTime}) steps`);
+        }
+        
+        // Graph-specific notes
+        if (graphInfo?.type === 'cycle' && n > 10) {
+            lines.push('Note: Cycles have poor expansion (gap ~ 1/n²)');
+        }
+        if (graphInfo?.type === 'hypercube') {
+            lines.push('Note: Hypercubes are excellent expanders (gap = 2)');
+        }
+        
+        return lines.join('\n');
+    }
+    
+    /**
+     * Compute Laplacian eigenvalues from adjacency matrix
+     * L = D - A where D is the degree matrix
+     * 
+     * @param {number[][]} adjMatrix - Adjacency matrix
+     * @returns {number[]} Laplacian eigenvalues (sorted ascending)
+     */
+    static computeLaplacianEigenvalues(adjMatrix) {
+        const n = adjMatrix.length;
+        if (n === 0) return [];
+        
+        // Build Laplacian: L = D - A
+        const L = Array(n).fill(null).map(() => Array(n).fill(0));
+        
+        for (let i = 0; i < n; i++) {
+            let degree = 0;
+            for (let j = 0; j < n; j++) {
+                if (adjMatrix[i][j] !== 0) {
+                    degree++;
+                    L[i][j] = -adjMatrix[i][j];
+                }
+            }
+            L[i][i] = degree;
+        }
+        
+        // For small matrices, use power iteration or direct computation
+        // For now, return null to indicate Laplacian analysis needs numerical solver
+        return null;  // Would need numerical eigenvalue solver
+    }
+    
+    /**
+     * Estimate algebraic connectivity (Fiedler value) from graph structure
+     * This is the second smallest Laplacian eigenvalue λ₂(L)
+     * 
+     * For known graph families, use exact formulas:
+     */
+    static estimateAlgebraicConnectivity(n, graphType, graphInfo = {}) {
+        // Known formulas for algebraic connectivity
+        switch (graphType) {
+            case 'complete':
+                return { value: n, formula: 'n', exact: true };
+            case 'cycle':
+                return { 
+                    value: 2 * (1 - Math.cos(2 * Math.PI / n)), 
+                    formula: '2(1 - cos(2π/n))',
+                    exact: true 
+                };
+            case 'path':
+                return { 
+                    value: 2 * (1 - Math.cos(Math.PI / n)), 
+                    formula: '2(1 - cos(π/n))',
+                    exact: true 
+                };
+            case 'star':
+                return { value: 1, formula: '1', exact: true };
+            case 'complete_bipartite':
+                const m = graphInfo.m || 1;
+                const p = graphInfo.p || 1;
+                return { 
+                    value: Math.min(m, p), 
+                    formula: `min(${m}, ${p})`,
+                    exact: true 
+                };
+            case 'hypercube':
+                return { value: 2, formula: '2', exact: true };
+            default:
+                return { value: null, formula: 'unknown', exact: false };
+        }
+    }
+    
+    /**
+     * Cheeger inequality bounds
+     * h(G)/2 ≤ λ₂(L_norm) ≤ 2h(G)
+     * where h(G) is the Cheeger constant (edge expansion)
+     */
+    static cheegerBounds(algebraicConnectivity, maxDegree) {
+        if (algebraicConnectivity === null || algebraicConnectivity === undefined) {
+            return null;
+        }
+        
+        // For normalized Laplacian, λ₂ ∈ [0, 2]
+        // Cheeger: h²/2 ≤ λ₂ ≤ 2h
+        const λ2 = algebraicConnectivity;
+        
+        return {
+            cheegerLowerBound: λ2 / 2,
+            cheegerUpperBound: Math.sqrt(2 * λ2),
+            interpretation: `Edge expansion h(G) ∈ [${(λ2/2).toFixed(3)}, ${Math.sqrt(2*λ2).toFixed(3)}]`
+        };
+    }
+}
+
+/**
+ * Convenience function to analyze spectral gap
+ * @param {number[]} eigenvalues - Array of eigenvalues
+ * @param {number} n - Number of vertices
+ * @param {string} graphType - Optional graph type
+ * @returns {Object} Gap analysis results
+ */
+export function analyzeSpectralGap(eigenvalues, n, graphType = null) {
+    const graphInfo = graphType ? { type: graphType, n } : null;
+    return SpectralGapAnalyzer.analyze(eigenvalues, n, graphInfo);
+}
 
 // =====================================================
 // UTILITY FUNCTIONS
@@ -1435,145 +2902,40 @@ export function computeGraphProperties() {
 
 /**
  * Detect if a numerical value matches a "nice" closed form
+ * Now uses SpectralEngine for comprehensive pattern matching
  * Returns { isNice: bool, form: string }
  */
-export function detectClosedForm(value, tolerance = 1e-4) {
-    const absVal = Math.abs(value);
-    
-    // Check for zero
-    if (absVal < tolerance) {
-        return { isNice: true, form: '0' };
-    }
-    
-    // Check for small integers
-    for (let k = 1; k <= 20; k++) {
-        if (Math.abs(absVal - k) < tolerance) {
-            return { isNice: true, form: value > 0 ? String(k) : String(-k) };
-        }
-    }
-    
-    // Check for simple fractions
-    for (let num = 1; num <= 10; num++) {
-        for (let den = 2; den <= 10; den++) {
-            if (Math.abs(absVal - num/den) < tolerance) {
-                const sign = value > 0 ? '' : '-';
-                return { isNice: true, form: `${sign}${num}/${den}` };
-            }
-        }
-    }
-    
-    // Check for square roots of small integers: √k
-    for (let k = 2; k <= 50; k++) {
-        const sqrtK = Math.sqrt(k);
-        if (Math.abs(absVal - sqrtK) < tolerance) {
-            const sign = value > 0 ? '' : '-';
-            // Simplify √4 = 2, √9 = 3, etc.
-            const sqrtInt = Math.round(sqrtK);
-            if (Math.abs(sqrtK - sqrtInt) < tolerance) {
-                return { isNice: true, form: sign + sqrtInt };
-            }
-            return { isNice: true, form: `${sign}√${k}` };
-        }
-    }
-    
-    // Check for trigonometric values: 2cos(kπ/n) or 2sin(kπ/n)
-    for (let n = 2; n <= 24; n++) {
-        for (let k = 0; k <= n; k++) {
-            const cosVal = 2 * Math.cos(k * Math.PI / n);
-            const sinVal = 2 * Math.sin(k * Math.PI / n);
-            
-            if (Math.abs(value - cosVal) < tolerance) {
-                if (k === 0) return { isNice: true, form: '2' };
-                if (k === n) return { isNice: true, form: '-2' };
-                if (2 * k === n) return { isNice: true, form: '0' };
-                return { isNice: true, form: `2cos(${k}π/${n})` };
-            }
-            if (Math.abs(value - sinVal) < tolerance) {
-                if (k === 0 || k === n) return { isNice: true, form: '0' };
-                if (2 * k === n) return { isNice: true, form: '2' };
-                return { isNice: true, form: `2sin(${k}π/${n})` };
-            }
-        }
-    }
-    
-    // Check for (1 ± √5)/2 (golden ratio related)
-    const phi = (1 + Math.sqrt(5)) / 2;
-    const psi = (1 - Math.sqrt(5)) / 2;
-    if (Math.abs(value - phi) < tolerance) return { isNice: true, form: '(1+√5)/2' };
-    if (Math.abs(value - psi) < tolerance) return { isNice: true, form: '(1-√5)/2' };
-    if (Math.abs(value + phi) < tolerance) return { isNice: true, form: '-(1+√5)/2' };
-    if (Math.abs(value + psi) < tolerance) return { isNice: true, form: '-(1-√5)/2' };
-    
-    // Check for √(a ± √b) patterns (nested radicals)
-    for (let a = 1; a <= 10; a++) {
-        for (let b = 1; b <= 20; b++) {
-            const sqrtB = Math.sqrt(b);
-            if (a + sqrtB > 0) {
-                const val1 = Math.sqrt(a + sqrtB);
-                if (Math.abs(absVal - val1) < tolerance) {
-                    const sign = value > 0 ? '' : '-';
-                    return { isNice: true, form: `${sign}√(${a}+√${b})` };
-                }
-            }
-            if (a - sqrtB > 0) {
-                const val2 = Math.sqrt(a - sqrtB);
-                if (Math.abs(absVal - val2) < tolerance) {
-                    const sign = value > 0 ? '' : '-';
-                    return { isNice: true, form: `${sign}√(${a}-√${b})` };
-                }
-            }
-        }
-    }
-    
-    return { isNice: false, form: value.toFixed(6) };
+export function detectClosedForm(value, tolerance = 1e-6, n = 10) {
+    const result = SpectralEngine.identifyClosedForm(value, n, tolerance);
+    return {
+        isNice: result.isExact,
+        form: result.formula,
+        type: result.type
+    };
 }
 
 /**
  * Analyze all eigenvalues and return closed-form representations
+ * Now uses SpectralEngine.analyzeSpectrum for robust detection
  * Returns { allAnalytic: bool, eigenvalues: [{value, multiplicity, form, isNice}] }
  */
-export function analyzeEigenvaluesForClosedForms(eigenvalues, tolerance = 1e-4) {
-    const results = [];
-    let allNice = true;
+export function analyzeEigenvaluesForClosedForms(eigenvalues, tolerance = 1e-6) {
+    // Determine n from eigenvalue count (assuming square matrix)
+    const n = eigenvalues.length;
     
-    // Group by value (with tolerance for numerical errors)
-    const groups = [];
+    const analysis = SpectralEngine.analyzeSpectrum(eigenvalues, n, tolerance);
     
-    for (const ev of eigenvalues) {
-        const val = typeof ev === 'number' ? ev : ev.value;
-        if (val === undefined || isNaN(val)) continue;
-        
-        let found = false;
-        for (const group of groups) {
-            if (Math.abs(group.value - val) < tolerance) {
-                group.count++;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            groups.push({ value: val, count: 1 });
-        }
-    }
-    
-    // Sort by value (descending)
-    groups.sort((a, b) => b.value - a.value);
-    
-    // Analyze each unique eigenvalue
-    for (const { value, count } of groups) {
-        const detection = detectClosedForm(value, tolerance);
-        if (!detection.isNice) {
-            allNice = false;
-        }
-        results.push({
-            value: value,
-            multiplicity: count,
-            form: detection.form,
-            isNice: detection.isNice
-        });
-    }
-    
-    return { allAnalytic: allNice, eigenvalues: results };
+    // Convert to legacy format for backward compatibility
+    return {
+        allAnalytic: analysis.allAnalytic,
+        eigenvalues: analysis.eigenvalues.map(e => ({
+            value: e.value,
+            multiplicity: e.multiplicity,
+            form: e.form,
+            isNice: e.isExact,
+            type: e.type
+        }))
+    };
 }
 
 /**

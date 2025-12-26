@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zeid-Rosenberg Eigenvalue Explorer</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles-v2.css">
+    <link rel="icon" href="data:,">
+</head>
+<body class="workspace-lab">
+
+    <!-- Main 3D Viewport -->
+    <div id="container"></div>
+    
+    <!-- Universe View Container (for Lab workspace) -->
+    <div id="universe-container" style="display: none;"></div>
+
+    <!-- Mobile Toggle Button -->
+    <button id="mobile-menu-toggle" title="Toggle Menu">
+        <span class="toggle-icon">☰</span>
+    </button>
+
+    <!-- ============================================================
+         WORKSPACE NAVIGATION (Top Bar)
+         ============================================================ -->
+    <nav id="workspace-nav">
+        <div class="nav-brand">
+            <span class="brand-icon">◈</span>
+            <span class="brand-text">Zeid-Rosenberg Explorer</span>
+        </div>
+        <div class="workspace-tabs">
+            <button class="workspace-tab active" data-workspace="lab" title="Universe & Discovery">
+                <span class="ws-icon">🌌</span>
+                <span class="ws-label">Lab</span>
+            </button>
+            <button class="workspace-tab" data-workspace="studio" title="Build & Edit">
+                <span class="ws-icon">🔨</span>
+                <span class="ws-label">Studio</span>
+            </button>
+            <button class="workspace-tab" data-workspace="spectrum" title="Spectral Analysis">
+                <span class="ws-icon">λ</span>
+                <span class="ws-label">Eigenspectrum</span>
+            </button>
+            <button class="workspace-tab" data-workspace="dynamics" title="Simulation & Physics">
+                <span class="ws-icon">🌊</span>
+                <span class="ws-label">Dynamics</span>
+            </button>
+            <button class="workspace-tab" data-workspace="archives" title="Library & Export">
+                <span class="ws-icon">📚</span>
+                <span class="ws-label">Archives</span>
+            </button>
+        </div>
+        <div class="nav-status">
+            <span id="nav-graph-info">No graph</span>
+            <span id="nav-analytic-badge" class="analytic-badge hidden">Analytic</span>
+        </div>
+    </nav>
+
+    <!-- ============================================================
+         SIDEBAR PANEL (Context-sensitive to workspace)
+         ============================================================ -->
+    <div id="sidebar-panel">
+        <div id="sidebar-resize-handle"></div>
+
+        <!-- ==================== LAB WORKSPACE ==================== -->
+        <div id="ws-lab" class="workspace-content active">
+            <div class="workspace-header">
+                <h3>🌌 Discovery Lab</h3>
+                <p class="ws-description">Explore the universe of analytic graphs</p>
+            </div>
+
+            <div class="control-group">
+                <h4>Search Parameters</h4>
+                <div class="input-row">
+                    <label>Vertices:</label>
+                    <input id="search-n-min" type="number" value="3" min="3" max="50" style="width:50px">
+                    <span>to</span>
+                    <input id="search-n-max" type="number" value="20" min="3" max="100" style="width:50px">
+                </div>
+                <div class="filter-chips">
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-connected" checked>
+                        <span class="chip">Connected</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-regular">
+                        <span class="chip">Regular</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-bipartite">
+                        <span class="chip">Bipartite</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h4>Abel-Ruffini Filters</h4>
+                <p class="hint">Filter by eigenvalue type solvability</p>
+                <div class="filter-chips">
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-trig" checked>
+                        <span class="chip trig">Trigonometric</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-radical" checked>
+                        <span class="chip radical">Radical</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-algebraic" checked>
+                        <span class="chip algebraic">Algebraic</span>
+                    </label>
+                    <label class="chip-label">
+                        <input type="checkbox" id="filter-integer">
+                        <span class="chip integer">Integer Only</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h4>Universe View</h4>
+                <div class="button-row">
+                    <button id="toggle-universe-btn" class="primary">🌌 Enter Universe</button>
+                </div>
+                <div class="input-row">
+                    <label>X-Axis:</label>
+                    <select id="universe-x-axis">
+                        <option value="spectralRadius">Spectral Radius</option>
+                        <option value="spectralGap">Spectral Gap</option>
+                        <option value="density">Density</option>
+                        <option value="n">Vertices</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Y-Axis:</label>
+                    <select id="universe-y-axis">
+                        <option value="energy">Energy</option>
+                        <option value="spectralGap">Spectral Gap</option>
+                        <option value="rationality">Rationality</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Z-Axis:</label>
+                    <select id="universe-z-axis">
+                        <option value="n">Vertices</option>
+                        <option value="edgeCount">Edges</option>
+                        <option value="alpha">Alpha</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h4>Search Results</h4>
+                <div id="lab-results-container" class="results-list">
+                    <p class="hint">Enter Universe to browse graph families</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== STUDIO WORKSPACE ==================== -->
+        <div id="ws-studio" class="workspace-content">
+            <div class="workspace-header">
+                <h3>🔨 Graph Studio</h3>
+                <p class="ws-description">Build and edit graph structures</p>
+            </div>
+
+            <!-- Quick Templates Section -->
+            <div class="control-group">
+                <h4>Quick Templates</h4>
+                <div class="template-grid">
+                    <button class="template-btn" data-template="path" title="Path Graph Pₙ">
+                        <span class="template-icon">─●─●─</span>
+                        <span>Path</span>
+                    </button>
+                    <button class="template-btn" data-template="cycle" title="Cycle Graph Cₙ">
+                        <span class="template-icon">◯</span>
+                        <span>Cycle</span>
+                    </button>
+                    <button class="template-btn" data-template="star" title="Star Graph Sₙ">
+                        <span class="template-icon">✳</span>
+                        <span>Star</span>
+                    </button>
+                    <button class="template-btn" data-template="complete" title="Complete Graph Kₙ">
+                        <span class="template-icon">◆</span>
+                        <span>Complete</span>
+                    </button>
+                    <button class="template-btn" data-template="wheel" title="Wheel Graph Wₙ">
+                        <span class="template-icon">⊛</span>
+                        <span>Wheel</span>
+                    </button>
+                    <button class="template-btn" data-template="hypercube" title="Hypercube Qₐ">
+                        <span class="template-icon">⬡</span>
+                        <span>Hypercube</span>
+                    </button>
+                    <button class="template-btn" data-template="petersen" title="Petersen Graph">
+                        <span class="template-icon">⭐</span>
+                        <span>Petersen</span>
+                    </button>
+                    <button class="template-btn" data-template="grid" title="Grid Graph">
+                        <span class="template-icon">▦</span>
+                        <span>Grid</span>
+                    </button>
+                </div>
+                
+                <!-- Full Template Dropdown -->
+                <select id="template-select" class="full-width">
+                    <option value="custom">Custom (manual edges)</option>
+                    <optgroup label="Basic Graphs">
+                        <option value="path">Path Graph (Pₙ)</option>
+                        <option value="cycle">Cycle Graph (Cₙ)</option>
+                        <option value="star">Star Graph (Sₙ)</option>
+                        <option value="complete">Complete Graph (Kₙ)</option>
+                    </optgroup>
+                    <optgroup label="Regular Graphs">
+                        <option value="wheel">Wheel Graph (Wₙ)</option>
+                        <option value="prism">Prism Graph</option>
+                        <option value="antiprism">Antiprism Graph</option>
+                        <option value="petersen">Petersen Graph</option>
+                        <option value="hypercube">Hypercube Qₐ</option>
+                    </optgroup>
+                    <optgroup label="Bipartite Graphs">
+                        <option value="bipartite">Complete Bipartite (Kₘ,ₙ)</option>
+                        <option value="crown">Crown Graph</option>
+                    </optgroup>
+                    <optgroup label="Grids & Lattices">
+                        <option value="grid">2D Grid (m×n)</option>
+                        <option value="ladder">Ladder Graph</option>
+                        <option value="torus">Torus Grid</option>
+                        <option value="cuboid">3D Cuboid</option>
+                    </optgroup>
+                    <optgroup label="Trees">
+                        <option value="binary-tree">Binary Tree</option>
+                        <option value="k-ary-tree">k-ary Tree</option>
+                        <option value="caterpillar">Caterpillar</option>
+                        <option value="spider">Spider Graph</option>
+                    </optgroup>
+                    <optgroup label="Famous Graphs">
+                        <option value="octahedron">Octahedron</option>
+                        <option value="icosahedron">Icosahedron</option>
+                        <option value="dodecahedron">Dodecahedron</option>
+                        <option value="heawood">Heawood</option>
+                        <option value="pappus">Pappus</option>
+                    </optgroup>
+                </select>
+
+                <!-- Template Parameters -->
+                <div id="template-params" class="sub-options">
+                    <div class="input-row">
+                        <label>n:</label>
+                        <input id="num-vertices" type="number" value="8" min="2" max="100">
+                    </div>
+                    <div id="param-grid" class="input-row" style="display:none;">
+                        <label>Rows:</label>
+                        <input id="grid-rows" type="number" value="3" min="2" max="10">
+                        <label>Cols:</label>
+                        <input id="grid-cols" type="number" value="4" min="2" max="10">
+                    </div>
+                    <div id="param-hypercube" class="input-row" style="display:none;">
+                        <label>Dimension:</label>
+                        <input id="hypercube-dim" type="number" value="3" min="2" max="6">
+                    </div>
+                </div>
+                
+                <button id="apply-template-btn" class="success full-width">Apply Template</button>
+            </div>
+
+            <!-- Manual Edit Tools -->
+            <div class="control-group">
+                <h4>Edit Tools</h4>
+                <div class="tool-palette">
+                    <button class="tool-btn" id="tool-select" title="Select/Move vertices">
+                        <span>⊙</span> Select
+                    </button>
+                    <button class="tool-btn" id="tool-add-vertex" title="Add vertex">
+                        <span>＋</span> Add Vertex
+                    </button>
+                    <button class="tool-btn" id="tool-add-edge" title="Add edge (click two vertices)">
+                        <span>↔</span> Add Edge
+                    </button>
+                    <button class="tool-btn" id="tool-delete" title="Delete vertex/edge">
+                        <span>✕</span> Delete
+                    </button>
+                </div>
+                <div class="button-row">
+                    <button id="clear-edges-btn" class="danger small">Clear Edges</button>
+                    <button id="clear-all-btn" class="danger small">Clear All</button>
+                </div>
+            </div>
+
+            <!-- Graph Operations -->
+            <div class="control-group collapsible">
+                <h4 class="collapsible-header">
+                    <span>Algebraic Operations</span>
+                    <span class="collapse-icon">▼</span>
+                </h4>
+                <div class="collapsible-content">
+                    <p class="hint">Combine graphs using algebraic products</p>
+                    <div class="operation-row">
+                        <span class="op-label">G □ H</span>
+                        <span class="op-name">Cartesian Product</span>
+                        <button id="cartesian-product-btn" class="small">Build</button>
+                    </div>
+                    <div class="operation-row">
+                        <span class="op-label">G ⊗ H</span>
+                        <span class="op-name">Tensor Product</span>
+                        <button id="tensor-product-btn" class="small">Build</button>
+                    </div>
+                    <div class="operation-row">
+                        <span class="op-label">G ⊕ H</span>
+                        <span class="op-name">Direct Sum</span>
+                        <button id="direct-sum-btn" class="small">Build</button>
+                    </div>
+                    <div class="operation-row">
+                        <span class="op-label">L(G)</span>
+                        <span class="op-name">Line Graph</span>
+                        <button id="line-graph-btn" class="small">Build</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Layout Tools -->
+            <div class="control-group collapsible">
+                <h4 class="collapsible-header">
+                    <span>Layout</span>
+                    <span class="collapse-icon">▼</span>
+                </h4>
+                <div class="collapsible-content">
+                    <div class="input-row">
+                        <label>Radius:</label>
+                        <input id="layout-radius" type="number" value="40" min="10" max="100">
+                    </div>
+                    <select id="layout-type">
+                        <option value="circle">Circle (2D)</option>
+                        <option value="sphere">Sphere (3D)</option>
+                        <option value="concentric-2">2 Concentric Circles</option>
+                        <option value="force">Force-Directed</option>
+                    </select>
+                    <div class="button-row">
+                        <button id="apply-layout-btn" class="small">Apply Layout</button>
+                        <button id="force-layout-btn" class="small success">▶ Force</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== EIGENSPECTRUM WORKSPACE ==================== -->
+        <div id="ws-spectrum" class="workspace-content">
+            <div class="workspace-header">
+                <h3>λ Eigenspectrum</h3>
+                <p class="ws-description">Spectral analysis powered by SFF engine</p>
+            </div>
+
+            <!-- Graph Detection Badge -->
+            <div class="control-group detection-panel">
+                <div id="graph-detection-result" class="detection-badge">
+                    <span class="detection-icon">◉</span>
+                    <span class="detection-name">Unknown Graph</span>
+                    <span class="detection-confidence"></span>
+                </div>
+                <div id="graph-invariants" class="invariants-grid">
+                    <div class="invariant"><span class="inv-label">n</span><span id="inv-n" class="inv-value">-</span></div>
+                    <div class="invariant"><span class="inv-label">m</span><span id="inv-m" class="inv-value">-</span></div>
+                    <div class="invariant"><span class="inv-label">ρ</span><span id="inv-rho" class="inv-value">-</span></div>
+                    <div class="invariant"><span class="inv-label">Δ</span><span id="inv-gap" class="inv-value">-</span></div>
+                </div>
+            </div>
+
+            <!-- Characteristic Polynomial -->
+            <div class="control-group">
+                <h4>Characteristic Polynomial</h4>
+                <p class="hint">Computed via Souriau-Frame-Faddeev (exact BigInt)</p>
+                <div id="char-poly-display" class="polynomial-display">
+                    <span class="poly-placeholder">P(λ) = ...</span>
+                </div>
+            </div>
+
+            <!-- Eigenvalue Table -->
+            <div class="control-group">
+                <h4>Eigenvalues (Symmetric A + Aᵀ)</h4>
+                <p class="hint">Click to animate eigenmode</p>
+                <div id="eigenvalue-table" class="eigenvalue-list">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Skew-Symmetric Eigenvalues -->
+            <div class="control-group">
+                <h4>Eigenvalues (Skew A - Aᵀ)</h4>
+                <p class="hint">Purely imaginary ±iω</p>
+                <div id="skew-eigenvalue-table" class="eigenvalue-list">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Spectral Gap Analysis -->
+            <div class="control-group collapsible">
+                <h4 class="collapsible-header">
+                    <span>Spectral Gap Analysis</span>
+                    <span class="collapse-icon">▼</span>
+                </h4>
+                <div class="collapsible-content">
+                    <div class="gap-analysis">
+                        <div class="gap-metric">
+                            <span class="gap-label">Adjacency Gap (λ₁-λ₂)</span>
+                            <span id="adj-gap-value" class="gap-value">-</span>
+                            <span id="adj-gap-formula" class="gap-formula"></span>
+                        </div>
+                        <div class="gap-metric">
+                            <span class="gap-label">Normalized Gap</span>
+                            <span id="norm-gap-value" class="gap-value">-</span>
+                        </div>
+                        <div class="gap-metric">
+                            <span class="gap-label">Expansion Quality</span>
+                            <span id="expansion-quality" class="gap-value">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Complex Plane Visualization -->
+            <div class="control-group">
+                <h4>Complex Plane</h4>
+                <canvas id="complex-plane-canvas" width="280" height="200"></canvas>
+                <div class="legend-row">
+                    <span class="legend-item"><span class="dot blue"></span> Symmetric</span>
+                    <span class="legend-item"><span class="dot pink"></span> Skew</span>
+                </div>
+            </div>
+
+            <!-- Eigenvalue Bounds -->
+            <div class="control-group collapsible">
+                <h4 class="collapsible-header">
+                    <span>Theoretical Bounds</span>
+                    <span class="collapse-icon">▼</span>
+                </h4>
+                <div class="collapsible-content">
+                    <div id="bounds-display" class="bounds-list">
+                        <div class="bound-item">
+                            <span class="bound-name">Zeid-Rosenberg</span>
+                            <span id="zr-bound" class="bound-value">-</span>
+                        </div>
+                        <div class="bound-item">
+                            <span class="bound-name">Degree Bound</span>
+                            <span id="degree-bound" class="bound-value">-</span>
+                        </div>
+                        <div class="bound-item">
+                            <span class="bound-name">Ramanujan</span>
+                            <span id="ramanujan-bound" class="bound-value">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== DYNAMICS WORKSPACE ==================== -->
+        <div id="ws-dynamics" class="workspace-content">
+            <div class="workspace-header">
+                <h3>🌊 Dynamics</h3>
+                <p class="ws-description">Simulate ẋ = Ax energy flow</p>
+            </div>
+
+            <!-- Simulation Controls -->
+            <div class="control-group">
+                <h4>Simulation</h4>
+                <div class="button-row">
+                    <button id="start-dynamics-btn" class="success">▶ Start</button>
+                    <button id="stop-dynamics-btn" class="danger" style="display:none;">⏹ Stop</button>
+                    <button id="reset-dynamics-btn" class="small">↺ Reset</button>
+                </div>
+                
+                <div class="sim-settings">
+                    <div class="input-row">
+                        <label>Integrator:</label>
+                        <select id="integrator-select">
+                            <option value="rodrigues">Rodrigues (exact exp)</option>
+                            <option value="cayley">Cayley (symplectic)</option>
+                            <option value="trapezoidal">Trapezoidal</option>
+                        </select>
+                    </div>
+                    <div class="input-row">
+                        <label>Time Step:</label>
+                        <select id="timestep-select">
+                            <option value="1e-6">10⁻⁶ (coarse)</option>
+                            <option value="1e-7" selected>10⁻⁷ (default)</option>
+                            <option value="1e-8">10⁻⁸ (fine)</option>
+                        </select>
+                    </div>
+                    <div class="input-row">
+                        <label>Speed:</label>
+                        <input id="dynamics-speed" type="range" min="1" max="20" value="10">
+                        <span id="dynamics-speed-label">1.0x</span>
+                    </div>
+                </div>
+
+                <!-- Live Stats -->
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Time</span>
+                        <span id="dynamics-time" class="stat-value blue">0.00s</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Max |x|</span>
+                        <span id="dynamics-max-state" class="stat-value orange">0.00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Energy</span>
+                        <span id="dynamics-energy" class="stat-value green">--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Max Flow</span>
+                        <span id="dynamics-max-flow" class="stat-value pink">0.00</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Animation Mode -->
+            <div class="control-group">
+                <h4>Visualization</h4>
+                <div class="mode-toggle">
+                    <button class="mode-btn active" data-mode="displacement">Displacement</button>
+                    <button class="mode-btn" data-mode="power">Power Flow</button>
+                </div>
+                <div class="input-row">
+                    <label>Arrow Scale:</label>
+                    <input id="arrow-scale" type="range" min="5" max="80" value="30">
+                </div>
+            </div>
+
+            <!-- Eigenmode Projection (NEW) -->
+            <div class="control-group eigenmode-panel">
+                <h4>🎯 Eigenmode Projection</h4>
+                <p class="hint">Select eigenvalue to isolate specific mode</p>
+                <div id="eigenmode-selector" class="eigenmode-grid">
+                    <!-- Populated from Eigenspectrum data -->
+                    <p class="placeholder">Build a graph to see modes</p>
+                </div>
+                <div id="active-eigenmode-info" class="eigenmode-info hidden">
+                    <span class="mode-label">Active Mode:</span>
+                    <span id="eigenmode-formula" class="mode-formula">-</span>
+                    <span id="eigenmode-period" class="mode-period">T = -</span>
+                </div>
+            </div>
+
+            <!-- Phase Diagram -->
+            <div class="control-group">
+                <h4>📈 Phase Diagram</h4>
+                <div class="input-row">
+                    <label>Plot:</label>
+                    <select id="phase-mode-select">
+                        <option value="displacement">xᵢ vs xⱼ</option>
+                        <option value="velocity">xᵢ vs ẋⱼ</option>
+                        <option value="node-power">xᵢ vs Power</option>
+                    </select>
+                </div>
+                <div class="input-row">
+                    <label>Nodes:</label>
+                    <select id="phase-node-i" class="small-select"></select>
+                    <span>vs</span>
+                    <select id="phase-node-j" class="small-select"></select>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="phase-enabled-checkbox">
+                    <span>Show Phase Plot</span>
+                </label>
+                <canvas id="phase-canvas" width="280" height="200" style="display:none;"></canvas>
+            </div>
+        </div>
+
+        <!-- ==================== ARCHIVES WORKSPACE ==================== -->
+        <div id="ws-archives" class="workspace-content">
+            <div class="workspace-header">
+                <h3>📚 Archives</h3>
+                <p class="ws-description">Graph library and export</p>
+            </div>
+
+            <!-- Save Current Graph -->
+            <div class="control-group">
+                <h4>Save Current Graph</h4>
+                <div class="input-row">
+                    <input id="save-name" type="text" placeholder="Graph name..." class="full-width">
+                </div>
+                <button id="save-graph-btn" class="success full-width">💾 Save to Library</button>
+            </div>
+
+            <!-- Gallery View -->
+            <div class="control-group">
+                <h4>Library</h4>
+                <div class="gallery-controls">
+                    <input id="library-search" type="text" placeholder="Search...">
+                    <select id="library-sort">
+                        <option value="name">Name</option>
+                        <option value="n">Vertices</option>
+                        <option value="date">Date</option>
+                    </select>
+                </div>
+                <div id="library-gallery" class="gallery-grid">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Import/Export -->
+            <div class="control-group">
+                <h4>Import / Export</h4>
+                <div class="button-row">
+                    <button id="export-json-btn" class="small">📤 Export JSON</button>
+                    <button id="import-json-btn" class="small">📥 Import JSON</button>
+                </div>
+                <div class="button-row">
+                    <button id="export-html-btn" class="small purple">🌐 Export HTML</button>
+                    <button id="export-latex-btn" class="small">📄 Export LaTeX</button>
+                </div>
+                <input type="file" id="import-file-input" accept=".json" style="display:none;">
+            </div>
+
+            <!-- Batch Operations -->
+            <div class="control-group collapsible">
+                <h4 class="collapsible-header">
+                    <span>Batch Operations</span>
+                    <span class="collapse-icon">▼</span>
+                </h4>
+                <div class="collapsible-content">
+                    <button id="export-all-btn" class="small full-width">Export All Graphs</button>
+                    <button id="clear-library-btn" class="danger small full-width">Clear Library</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         BOTTOM TRAY (Context-sensitive info panel)
+         ============================================================ -->
+    <div id="bottom-tray" class="collapsed">
+        <div id="tray-toggle" title="Toggle info panel">
+            <span class="toggle-arrow">▲</span>
+        </div>
+        <div id="tray-content">
+            <!-- Lab: Search Results -->
+            <div id="tray-lab" class="tray-panel active">
+                <h4>Search Results</h4>
+                <div id="search-results-list" class="results-scroll">
+                    <p class="placeholder">Enter Universe to discover analytic graphs</p>
+                </div>
+            </div>
+            
+            <!-- Studio: Quick Stats -->
+            <div id="tray-studio" class="tray-panel">
+                <div class="quick-stats">
+                    <span class="qs-item"><strong id="qs-vertices">0</strong> vertices</span>
+                    <span class="qs-item"><strong id="qs-edges">0</strong> edges</span>
+                    <span class="qs-item">Type: <strong id="qs-type">-</strong></span>
+                    <span class="qs-item">ρ(A): <strong id="qs-rho">-</strong></span>
+                </div>
+            </div>
+            
+            <!-- Spectrum: Formula Display -->
+            <div id="tray-spectrum" class="tray-panel">
+                <div class="formula-banner">
+                    <span class="formula-label">Eigenvalue Formula:</span>
+                    <span id="formula-display" class="formula-text">-</span>
+                </div>
+            </div>
+            
+            <!-- Dynamics: Live Metrics -->
+            <div id="tray-dynamics" class="tray-panel">
+                <div class="live-metrics">
+                    <span class="metric">t = <strong id="live-time">0.00</strong>s</span>
+                    <span class="metric">|x|∞ = <strong id="live-max">0.00</strong></span>
+                    <span class="metric">E = <strong id="live-energy">-</strong></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         MODALS (Analysis Detail, Help, etc.)
+         ============================================================ -->
+    
+    <!-- Matrix Analysis Modal (accessible from Eigenspectrum) -->
+    <div id="matrix-modal" class="modal hidden">
+        <div id="matrix-content" class="modal-content">
+            <div id="modal-header" class="modal-header">
+                <h3>📊 Full Matrix Analysis</h3>
+                <button id="close-modal-btn" class="modal-close">✕</button>
+            </div>
+            <div id="modal-body" class="modal-body">
+                <!-- Detailed analysis content -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Enhanced Visualization Window -->
+    <div id="enhanced-viz-modal" class="modal hidden">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h3>📊 Enhanced Visualization</h3>
+                <button class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <canvas id="enhanced-viz-canvas" width="800" height="600"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Help -->
+    <div id="help-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⌨️ Keyboard Shortcuts</h3>
+                <button class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-group">
+                    <h4>Navigation</h4>
+                    <div class="shortcut"><kbd>1</kbd> Lab workspace</div>
+                    <div class="shortcut"><kbd>2</kbd> Studio workspace</div>
+                    <div class="shortcut"><kbd>3</kbd> Eigenspectrum workspace</div>
+                    <div class="shortcut"><kbd>4</kbd> Dynamics workspace</div>
+                    <div class="shortcut"><kbd>5</kbd> Archives workspace</div>
+                </div>
+                <div class="shortcut-group">
+                    <h4>Actions</h4>
+                    <div class="shortcut"><kbd>Space</kbd> Toggle dynamics</div>
+                    <div class="shortcut"><kbd>R</kbd> Reset dynamics</div>
+                    <div class="shortcut"><kbd>U</kbd> Toggle Universe view</div>
+                    <div class="shortcut"><kbd>S</kbd> Save graph</div>
+                    <div class="shortcut"><kbd>?</kbd> Show this help</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden Compatibility Elements -->
+    <div style="display:none;">
+        <input type="checkbox" id="add-mode-checkbox">
+        <input type="checkbox" id="delete-mode-checkbox">
+        <input type="checkbox" id="drag-mode-checkbox">
+        <select id="animation-mode-select">
+            <option value="displacement">Displacement</option>
+            <option value="power">Power</option>
+        </select>
+        <input id="arrow-min-length" type="range" value="8">
+        <div id="phase-hint"></div>
+        <div id="phase-axis-labels"></div>
+        <span id="phase-x-label"></span>
+        <span id="phase-y-label"></span>
+        <span id="phase-mode-hint"></span>
+        <button id="stop-force-btn"></button>
+        <input id="force-speed" type="range" value="5">
+        <input id="force-3d-checkbox" type="checkbox">
+    </div>
+
+    <!-- Scripts -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module" src="main.js"></script>
+    <script type="module" src="workspace-controller.js"></script>
+</body>
+</html>

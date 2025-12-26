@@ -10,6 +10,9 @@
 <body>
 
     <div id="container"></div>
+    
+    <!-- Universe View Container (hidden by default) -->
+    <div id="universe-container" style="display: none;"></div>
 
     <!-- Mobile Toggle Button -->
     <button id="mobile-menu-toggle" title="Toggle Menu">
@@ -157,7 +160,7 @@
                         <option value="general-ladder">General Ladder/Truss (m×n)</option>
                         <option value="cuboid">3D Cuboid (m×n×k)</option>
                         <option value="torus">Torus Grid</option>
-                        <option value="five-bar">Five-Bar Mechanism (Fig.3)</option>
+                        <option value="five-bar">Five-Bar Mechanism (Fig.3, 14 nodes)</option>
                         <option value="ladder">Simple Ladder (Lₙ)</option>
                         <option value="circular-ladder">Circular Ladder</option>
                         <option value="mobius-ladder">Möbius Ladder</option>
@@ -186,11 +189,52 @@
                         <option value="icosahedron">Icosahedron (n=12)</option>
                         <option value="dodecahedron">Dodecahedron (n=20)</option>
                         <option value="cuboctahedron">Cuboctahedron (n=12)</option>
+                        <option value="heawood">Heawood (n=14)</option>
+                        <option value="pappus">Pappus (n=18)</option>
+                        <option value="desargues">Desargues (n=20)</option>
+                        <option value="mobius-kantor">Möbius-Kantor (n=16)</option>
+                        <option value="clebsch">Clebsch (n=16)</option>
+                        <option value="shrikhande">Shrikhande (n=16)</option>
+                        <option value="tutte-coxeter">Tutte-Coxeter (n=30)</option>
+                        <option value="franklin">Franklin (n=12)</option>
+                        <option value="mcgee">McGee (n=24)</option>
+                        <option value="nauru">Nauru (n=24)</option>
+                    </optgroup>
+                    <optgroup label="Wheel Variants">
+                        <option value="helm">Helm Graph Hₙ</option>
+                        <option value="gear">Gear Graph Gₙ</option>
+                        <option value="sun">Sun/Sunlet Graph</option>
+                        <option value="friendship">Friendship/Windmill Fₙ</option>
+                        <option value="web">Web Graph Wbₙ</option>
+                    </optgroup>
+                    <optgroup label="Parameterized Families">
+                        <option value="gen-petersen">Generalized Petersen GP(n,k)</option>
+                        <option value="book">Book Graph Bₙ</option>
+                        <option value="lollipop">Lollipop Graph</option>
+                        <option value="barbell">Barbell Graph</option>
+                        <option value="pan">Pan/Tadpole Graph</option>
+                        <option value="kneser">Kneser Graph K(n,k)</option>
+                        <option value="rook">Rook Graph Kₘ□Kₙ</option>
+                        <option value="stacked-prism">Stacked Prism Yₙ</option>
                     </optgroup>
                 </select>
                 
+                <!-- Template Preview Panel -->
+                <div id="template-preview-panel" class="template-preview">
+                    <canvas id="template-preview-canvas" width="160" height="120"></canvas>
+                    <div id="template-preview-info">
+                        <div id="preview-name">Select a template</div>
+                        <div id="preview-stats"></div>
+                        <div id="preview-formula"></div>
+                    </div>
+                </div>
+                
                 <!-- Configurable Parameters (shown based on template selection) -->
                 <div id="template-params" class="sub-options" style="display: none;">
+                    <div id="param-n" class="input-row" style="display: none;">
+                        <label>Vertices (n):</label>
+                        <input id="template-n" type="number" value="8" min="3" max="100">
+                    </div>
                     <div id="param-depth" class="input-row" style="display: none;">
                         <label>Depth (d):</label>
                         <input id="tree-depth" type="number" value="3" min="1" max="6">
@@ -221,6 +265,30 @@
                         <label>Dimension:</label>
                         <input id="hypercube-dim" type="number" value="3" min="2" max="6">
                     </div>
+                    <div id="param-gen-petersen" class="input-row" style="display: none;">
+                        <label>n (outer):</label>
+                        <input id="gp-n" type="number" value="5" min="3" max="20">
+                        <label>k (jump):</label>
+                        <input id="gp-k" type="number" value="2" min="1" max="9">
+                    </div>
+                    <div id="param-lollipop" class="input-row" style="display: none;">
+                        <label>Clique (m):</label>
+                        <input id="lollipop-m" type="number" value="4" min="3" max="10">
+                        <label>Path (n):</label>
+                        <input id="lollipop-n" type="number" value="3" min="1" max="10">
+                    </div>
+                    <div id="param-kneser" class="input-row" style="display: none;">
+                        <label>n:</label>
+                        <input id="kneser-n" type="number" value="5" min="3" max="10">
+                        <label>k:</label>
+                        <input id="kneser-k" type="number" value="2" min="1" max="4">
+                    </div>
+                    <div id="param-rook" class="input-row" style="display: none;">
+                        <label>Rows (m):</label>
+                        <input id="rook-m" type="number" value="3" min="2" max="6">
+                        <label>Cols (n):</label>
+                        <input id="rook-n" type="number" value="3" min="2" max="6">
+                    </div>
                 </div>
                 
                 <label class="checkbox-label">
@@ -228,6 +296,70 @@
                     <span>Skew-symmetric (unidirectional)</span>
                 </label>
                 <button id="apply-template-btn" class="purple">Apply Template</button>
+            </div>
+            
+            <!-- Universe Integration -->
+            <div class="control-group">
+                <h4>🌌 Universe Integration</h4>
+                <p class="hint">Send current graph to Universe for visualization and comparison.</p>
+                <div class="input-row">
+                    <label>Graph Name:</label>
+                    <input id="universe-graph-name" type="text" placeholder="My Graph" style="flex: 1;">
+                </div>
+                <button id="send-to-universe-btn" class="info" style="width: 100%; margin-top: 8px;">
+                    🚀 Send to Universe
+                </button>
+                <button id="save-to-library-btn" class="secondary" style="width: 100%; margin-top: 4px;">
+                    💾 Save to Library
+                </button>
+                <hr style="margin: 12px 0; border-color: var(--border-color);">
+                <p class="hint"><strong>Test Mode:</strong> Generate known graph families to verify Universe positioning.</p>
+                
+                <div class="test-graph-controls" style="margin: 8px 0; padding: 8px; background: rgba(128,0,255,0.1); border-radius: 4px;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-path" checked> Path
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-cycle" checked> Cycle
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-star" checked> Star
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-complete" checked> Complete
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-wheel" checked> Wheel
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-petersen" checked> Petersen
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-bipartite" checked> K(m,n)
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-hypercube" checked> Hypercube
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-fivebar"> 5-Bar
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center; font-size: 11px;">
+                        <span>n:</span>
+                        <input type="number" id="test-n-min" value="4" min="3" max="20" style="width: 45px;">
+                        <span>to</span>
+                        <input type="number" id="test-n-max" value="10" min="3" max="30" style="width: 45px;">
+                    </div>
+                </div>
+                
+                <button id="test-universe-btn" class="purple" style="width: 100%; margin-top: 4px;">
+                    🧪 Generate Test Graphs
+                </button>
             </div>
         </div>
 
@@ -455,9 +587,12 @@
                 <div id="analytic-formula-display" class="formula-display">
                     <span class="hint">Generate a graph to see eigenvalues</span>
                 </div>
-                <details class="collapsible">
-                    <summary>Numerical Values</summary>
+                <details class="collapsible" open>
+                    <summary>Numerical Values <span class="eigenmode-play-hint">(click to animate)</span></summary>
                     <div id="eigenvalues-display" class="eigenvalues-list"></div>
+                    <button id="reset-eigenmode-btn" class="action-btn secondary" style="margin-top: 8px; width: 100%;">
+                        ⏹ Reset Graph Shape
+                    </button>
                 </details>
             </div>
             
@@ -502,7 +637,8 @@
             
             <div class="control-group">
                 <details class="collapsible">
-                    <summary><h4 style="display:inline;">Characteristic Polynomial</h4> <button id="copy-charpoly-btn" class="copy-btn" title="Copy to clipboard">📋</button></summary>
+                    <summary><h4 style="display:inline;">Characteristic Polynomial</h4></summary>
+                    <div style="margin-bottom: 8px;"><button id="copy-charpoly-btn" class="copy-btn" title="Copy to clipboard">📋 Copy</button></div>
                     <div id="char-polynomial-display" class="polynomial-display"></div>
                 </details>
             </div>
@@ -856,6 +992,16 @@
                 <h4>📚 Analytic Graph Library</h4>
                 <p class="hint">Persistent storage for graphs with closed-form eigenvalues</p>
                 
+                <!-- VIEW TOGGLE -->
+                <div class="view-toggle-container">
+                    <button id="library-view-table" class="view-toggle-btn active" title="Table View">
+                        <span class="view-icon">📋</span> Table
+                    </button>
+                    <button id="library-view-universe" class="view-toggle-btn" title="Universe View (3D)">
+                        <span class="view-icon">🌌</span> Universe
+                    </button>
+                </div>
+                
                 <div id="library-stats" class="library-stats">
                     <div class="stat-mini">
                         <span class="stat-mini-value" id="lib-total">0</span>
@@ -895,6 +1041,28 @@
                         <option value="name-asc">Name A-Z</option>
                     </select>
                 </div>
+            </div>
+            
+            <!-- UNIVERSE NAVIGATION (shown only in universe view) -->
+            <div id="universe-nav-controls" class="control-group" style="display: none;">
+                <h4>🚀 Universe Navigation</h4>
+                <div class="input-row">
+                    <label>Jump to Galaxy:</label>
+                    <select id="universe-galaxy-jump">
+                        <option value="">-- Select --</option>
+                    </select>
+                </div>
+                <div class="button-row" style="margin-top: 8px;">
+                    <button id="universe-reset-view" class="secondary small">Reset View</button>
+                    <button id="universe-zoom-fit" class="info small">Fit All</button>
+                </div>
+                <p class="hint" style="margin-top: 10px;">
+                    <strong>Mouse Controls:</strong><br>
+                    • Drag to rotate view<br>
+                    • Scroll to zoom in/out<br>
+                    • Right-drag to pan<br>
+                    • Double-click node to load graph
+                </p>
             </div>
             
             <div class="control-group library-table-container">

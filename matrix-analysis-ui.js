@@ -9,7 +9,8 @@ import {
     computeCharacteristicPolynomial, formatPolynomial,
     computeEigenvaluesNumerical, computeSkewSymmetricEigenvalues,
     detectTrigEigenvalues, formatTrigForm, subscript,
-    detectClosedForm, analyzeEigenvaluesForClosedForms
+    detectClosedForm, analyzeEigenvaluesForClosedForms,
+    SpectralEngine, PolynomialFactorizer, analyzeCharacteristicPolynomial
 } from './spectral-analysis.js';
 
 // Import the new robust analytic detection module
@@ -18,6 +19,13 @@ import {
     verifyDetection,
     computeGraphInvariants
 } from './analytic-detection.js';
+
+// Import dynamics control for eigenmode animation
+import {
+    startEigenmodeAnimation,
+    stopEigenmodeAnimation,
+    isEigenmodeActive
+} from './dynamics-animation.js';
 
 // =====================================================
 // DOM ELEMENT REFERENCES
@@ -49,6 +57,88 @@ export function clearAnalyticCache() {
     cachedAnalyticResult = null;
     cachedSymmetricEigs = null;
     cachedSkewEigs = null;
+}
+
+// =====================================================
+// EIGENMODE ANIMATION HANDLER
+// =====================================================
+
+/**
+ * Handle click on eigenvalue to start eigenmode animation
+ */
+function handleEigenvalueClick(event) {
+    const el = event.currentTarget;
+    const index = parseInt(el.dataset.index);
+    const value = parseFloat(el.dataset.value);
+    const type = el.dataset.type;  // 'symmetric' or 'skew'
+    
+    const n = state.vertexMeshes.length;
+    if (n === 0) return;
+    
+    console.log(`Eigenmode clicked: index=${index}, value=${value}, type=${type}`);
+    
+    // IMPORTANT: Reset graph to original state before starting new eigenmode
+    stopEigenmodeAnimation();
+    
+    // Detect graph type for analytical eigenvector computation
+    const graphInfo = detectGraphType();
+    const graphType = graphInfo?.type || null;
+    
+    // Try to compute eigenvector analytically first
+    let eigenvector = null;
+    let formula = null;
+    
+    if (graphType && ['cycle', 'path', 'star', 'complete'].includes(graphType)) {
+        // Use analytical formula
+        const analyticEv = SpectralEngine.computeAnalyticEigenvector(
+            graphType, n, index, type === 'skew'
+        );
+        if (analyticEv) {
+            eigenvector = { real: analyticEv.real, imag: analyticEv.imag };
+            formula = analyticEv.formula;
+            console.log(`Using analytical eigenvector for ${graphType}: ${formula}`);
+        }
+    }
+    
+    // Fall back to numerical computation if needed
+    if (!eigenvector) {
+        const A = type === 'skew' ? state.adjacencyMatrix : state.symmetricAdjMatrix;
+        const evResult = SpectralEngine.computeEigenvector(A, value, type === 'skew');
+        if (evResult && evResult.converged) {
+            eigenvector = { real: evResult.real, imag: evResult.imag };
+            formula = value.toFixed(4);
+            console.log(`Using numerical eigenvector (converged: ${evResult.converged})`);
+        } else {
+            // Generate a simple standing wave pattern as fallback
+            eigenvector = { real: new Array(n), imag: new Array(n) };
+            for (let i = 0; i < n; i++) {
+                eigenvector.real[i] = Math.cos(2 * Math.PI * index * i / n);
+                eigenvector.imag[i] = Math.sin(2 * Math.PI * index * i / n);
+            }
+            formula = `mode ${index + 1}`;
+            console.log('Using fallback wave pattern');
+        }
+    }
+    
+    // Construct eigenmode data
+    const eigenmode = {
+        eigenvalue: type === 'skew' ? 
+            { real: 0, imag: value } : 
+            { real: value, imag: 0 },
+        eigenvector: eigenvector,
+        formula: formula,
+        modeIndex: index,
+        graphType: graphType
+    };
+    
+    // Highlight selected eigenvalue
+    document.querySelectorAll('.eigenvalue-clickable').forEach(item => {
+        item.classList.remove('eigenvalue-active');
+    });
+    el.classList.add('eigenvalue-active');
+    
+    // Start eigenmode animation
+    startEigenmodeAnimation(eigenmode);
 }
 
 // =====================================================
@@ -227,23 +317,41 @@ function updateAnalysisDisplays(graphInfo, props) {
         }
     }
     
-    // Numerical eigenvalues
+    // Store eigenvalues for eigenmode animation
+    cachedSymmetricEigs = numEigs;
+    cachedSkewEigs = skewEigs;
+    
+    // Numerical eigenvalues - make clickable for eigenmode animation
     const eigenvaluesDisplay = document.getElementById('eigenvalues-display');
     if (eigenvaluesDisplay) {
-        let eigHtml = '';
+        let eigHtml = '<div class="eigenmode-hint">Click eigenvalue to animate mode</div>';
         numEigs.forEach((ev, i) => {
-            eigHtml += `<div class="eigenvalue-item">λ${subscript(i+1)} = <span class="real-part">${ev.toFixed(6)}</span></div>`;
+            eigHtml += `<div class="eigenvalue-item eigenvalue-clickable" data-index="${i}" data-value="${ev}" data-type="symmetric" title="Click to animate this eigenmode">` +
+                       `λ${subscript(i+1)} = <span class="real-part">${ev.toFixed(6)}</span>` +
+                       `<span class="eigenmode-icon">▶</span></div>`;
         });
         eigenvaluesDisplay.innerHTML = eigHtml || '<span class="hint">No eigenvalues</span>';
+        
+        // Add click handlers
+        eigenvaluesDisplay.querySelectorAll('.eigenvalue-clickable').forEach(el => {
+            el.addEventListener('click', handleEigenvalueClick);
+        });
     }
     
     const skewEigenvaluesDisplay = document.getElementById('skew-eigenvalues-display');
     if (skewEigenvaluesDisplay) {
-        let skewHtml = '';
+        let skewHtml = '<div class="eigenmode-hint">Click eigenvalue to animate mode</div>';
         skewEigs.forEach((ev, i) => {
-            skewHtml += `<div class="eigenvalue-item">λ${subscript(i+1)} = <span class="imag-part">${ev.imag >= 0 ? '+' : ''}${ev.imag.toFixed(6)}i</span></div>`;
+            skewHtml += `<div class="eigenvalue-item eigenvalue-clickable" data-index="${i}" data-value="${ev.imag}" data-type="skew" title="Click to animate this eigenmode">` +
+                        `λ${subscript(i+1)} = <span class="imag-part">${ev.imag >= 0 ? '+' : ''}${ev.imag.toFixed(6)}i</span>` +
+                        `<span class="eigenmode-icon">▶</span></div>`;
         });
         skewEigenvaluesDisplay.innerHTML = skewHtml || '<span class="hint">No eigenvalues</span>';
+        
+        // Add click handlers
+        skewEigenvaluesDisplay.querySelectorAll('.eigenvalue-clickable').forEach(el => {
+            el.addEventListener('click', handleEigenvalueClick);
+        });
     }
     
     // Polynomial
@@ -323,15 +431,39 @@ export function showAnalysis() {
     // Characteristic polynomial
     const charPolyDisplay = document.getElementById('char-polynomial-display');
     if (charPolyDisplay) {
+        // Try polynomial factorization for additional insight
+        let factorizationHtml = '';
+        try {
+            const polyAnalysis = analyzeCharacteristicPolynomial(state.symmetricAdjMatrix);
+            if (polyAnalysis.factorization && polyAnalysis.factors.length > 0) {
+                factorizationHtml = `<div class="factorization" style="margin-top:8px;font-size:0.9em;color:#888;">
+                    <b>Factorization:</b> p(λ) = ${polyAnalysis.factorization}
+                </div>`;
+            }
+        } catch (e) {
+            console.warn('Polynomial factorization failed:', e);
+        }
+        
         charPolyDisplay.innerHTML = `
             <div class="polynomial-box">
                 <div class="polynomial">${formatPolynomial(charPoly)}</div>
+                ${factorizationHtml}
             </div>`;
     }
     
     // Compute numerical eigenvalues once for use in multiple sections
     const numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
     const symAnalysis = analyzeEigenvaluesForClosedForms(numEigs);
+    
+    // Try polynomial factorization for unknown graphs
+    let polyFactorResult = null;
+    if (analyticResult.type === 'unknown' || analyticResult.type === 'empty') {
+        try {
+            polyFactorResult = analyzeCharacteristicPolynomial(state.symmetricAdjMatrix);
+        } catch (e) {
+            console.warn('Polynomial factorization failed:', e);
+        }
+    }
     
     // Analytic eigenvalue formula (symmetric) - Use new detection first
     const analyticFormulaDisplay = document.getElementById('analytic-formula-display');
@@ -342,6 +474,30 @@ export function showAnalysis() {
         } else if (graphInfo.formula && graphInfo.type !== 'unknown') {
             // Fall back to old detection
             analyticFormulaDisplay.innerHTML = `<div class="formula-box"><div class="formula">${graphInfo.formula}</div></div>`;
+        } else if (polyFactorResult && polyFactorResult.allExact && polyFactorResult.roots.length > 0) {
+            // Polynomial factorization found exact roots!
+            const formulaParts = polyFactorResult.roots.map(r => {
+                // Count multiplicity
+                const matches = polyFactorResult.roots.filter(r2 => Math.abs(r2.value - r.value) < 1e-9);
+                return r.form;
+            });
+            // Deduplicate and add multiplicities
+            const rootCounts = new Map();
+            for (const r of polyFactorResult.roots) {
+                const key = r.form;
+                rootCounts.set(key, (rootCounts.get(key) || 0) + 1);
+            }
+            const uniqueParts = [];
+            for (const [form, count] of rootCounts) {
+                const mult = count > 1 ? ` (×${count})` : '';
+                uniqueParts.push(`${form}${mult}`);
+            }
+            analyticFormulaDisplay.innerHTML = `<div class="formula-box factored">
+                <div class="formula" style="color:#4fc3f7;">λ: ${uniqueParts.join(', ')}</div>
+                <div class="formula-note" style="font-size:0.85em;color:#888;margin-top:4px;">
+                    <b>p(λ) = ${polyFactorResult.factorization}</b>
+                </div>
+            </div>`;
         } else if (symAnalysis.allAnalytic) {
             // Unknown family but has closed-form eigenvalues - show them
             const formulaParts = symAnalysis.eigenvalues.map(e => {
@@ -357,6 +513,10 @@ export function showAnalysis() {
     // Skew-symmetric eigenvalues for formula section
     const skewEigs = computeSkewSymmetricEigenvalues(state.adjacencyMatrix);
     const skewImagParts = skewEigs.map(e => Math.abs(e.imag));
+    
+    // Cache eigenvalues for eigenmode animation
+    cachedSymmetricEigs = numEigs;
+    cachedSkewEigs = skewEigs;
     
     // Group skew eigenvalues properly (conjugate pairs)
     const skewGroups = new Map();
@@ -441,31 +601,43 @@ export function showAnalysis() {
         }
     }
     
-    // Skew-symmetric eigenvalues (numerical) - reuse skewEigs computed earlier
+    // Skew-symmetric eigenvalues (numerical) - make clickable for eigenmode animation
     const skewEigenvaluesDisplay = document.getElementById('skew-eigenvalues-display');
     if (skewEigenvaluesDisplay) {
-        let skewEigHtml = '';
+        let skewEigHtml = '<div class="eigenmode-hint">Click eigenvalue to animate mode</div>';
         skewEigs.forEach((ev, i) => {
             skewEigHtml += `
-                <div class="eigenvalue-item">
+                <div class="eigenvalue-item eigenvalue-clickable" data-index="${i}" data-value="${ev.imag}" data-type="skew" title="Click to animate this eigenmode">
                     λ${subscript(i+1)} = <span class="real-part">0</span> 
                     <span class="imag-part">${ev.imag >= 0 ? '+' : '-'} ${Math.abs(ev.imag).toFixed(6)}i</span>
+                    <span class="eigenmode-icon">▶</span>
                 </div>`;
         });
         skewEigenvaluesDisplay.innerHTML = skewEigHtml || '<p>No eigenvalues</p>';
+        
+        // Add click handlers
+        skewEigenvaluesDisplay.querySelectorAll('.eigenvalue-clickable').forEach(el => {
+            el.addEventListener('click', handleEigenvalueClick);
+        });
     }
     
-    // Symmetric eigenvalues (numerical) - reuse numEigs computed earlier
+    // Symmetric eigenvalues (numerical) - make clickable for eigenmode animation
     const eigenvaluesDisplay = document.getElementById('eigenvalues-display');
     if (eigenvaluesDisplay) {
-        let eigHtml = '';
+        let eigHtml = '<div class="eigenmode-hint">Click eigenvalue to animate mode</div>';
         numEigs.forEach((ev, i) => {
             eigHtml += `
-                <div class="eigenvalue-item">
+                <div class="eigenvalue-item eigenvalue-clickable" data-index="${i}" data-value="${ev}" data-type="symmetric" title="Click to animate this eigenmode">
                     λ${subscript(i+1)} = <span class="real-part">${ev.toFixed(6)}</span>
+                    <span class="eigenmode-icon">▶</span>
                 </div>`;
         });
         eigenvaluesDisplay.innerHTML = eigHtml || '<p>No eigenvalues</p>';
+        
+        // Add click handlers
+        eigenvaluesDisplay.querySelectorAll('.eigenvalue-clickable').forEach(el => {
+            el.addEventListener('click', handleEigenvalueClick);
+        });
     }
     
     // Analytic eigenvalues (symmetric) - reuse symAnalysis computed earlier

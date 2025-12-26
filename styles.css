@@ -1138,6 +1138,28 @@ button.small {
     color: #ffcc80;
 }
 
+.formula-box.factored {
+    border-left-color: #4fc3f7;
+    background: linear-gradient(90deg, rgba(79, 195, 247, 0.1) 0%, var(--bg-primary) 100%);
+}
+
+.formula-box.factored .formula {
+    color: #4fc3f7;
+}
+
+.formula-box .formula-note {
+    font-family: 'Cambria Math', 'Times New Roman', serif;
+    font-size: 12px;
+    color: #90a4ae;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+.factorization {
+    font-family: 'Cambria Math', 'Times New Roman', serif;
+}
+
 /* =====================================================
    EIGENVALUE PLOT (New in v17)
    ===================================================== */
@@ -2340,4 +2362,558 @@ button.info.small:hover {
     .stat-mini-value {
         font-size: 1.5em;
     }
+}
+
+/* =====================================================
+   GRAPH UNIVERSE VIEW TOGGLE STYLES
+   ===================================================== */
+
+/* View Toggle Buttons */
+.view-toggle-container {
+    display: flex;
+    gap: 4px;
+    margin: 12px 0;
+    background: var(--bg-main);
+    padding: 4px;
+    border-radius: 8px;
+}
+
+.view-toggle-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.view-toggle-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.view-toggle-btn.active {
+    background: linear-gradient(135deg, var(--accent-blue), #3a7bd5);
+    color: white;
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+}
+
+.view-toggle-btn .view-icon {
+    font-size: 14px;
+}
+
+/* Universe Container */
+#universe-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 50;
+    background: #020205;
+}
+
+/* Universe HUD */
+#universe-hud {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: #0f0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 15px 20px;
+    border: 1px solid #0f0;
+    border-radius: 8px;
+    pointer-events: auto;
+    z-index: 100;
+    text-shadow: 0 0 5px #0f0;
+    min-width: 200px;
+}
+
+#universe-hud .hud-drag-handle {
+    cursor: move;
+    padding: 2px 0 8px 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(0, 255, 0, 0.3);
+    font-size: 11px;
+    color: #0a0;
+    user-select: none;
+}
+
+#universe-hud.flying {
+    border-color: #0ff;
+    color: #0ff;
+    text-shadow: 0 0 5px #0ff;
+}
+
+#universe-hud .hud-row {
+    margin-bottom: 6px;
+}
+
+#universe-hud .hud-hint {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(0, 255, 0, 0.3);
+    font-size: 11px;
+    color: #888;
+    text-shadow: none;
+}
+
+/* Universe Info Panel */
+#universe-info-panel {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 300px;
+    background: rgba(10, 10, 26, 0.95);
+    border: 1px solid var(--accent-blue);
+    border-radius: 12px;
+    overflow: hidden;
+    z-index: 200;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+}
+
+#universe-info-panel .info-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    background: linear-gradient(135deg, rgba(74, 158, 255, 0.2), rgba(74, 158, 255, 0.05));
+    border-bottom: 1px solid var(--border-color);
+    cursor: move;
+    user-select: none;
+}
+
+#universe-info-panel .info-header span {
+    font-weight: 600;
+    color: var(--accent-blue);
+    font-size: 14px;
+}
+
+#universe-info-panel #info-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 5px;
+    line-height: 1;
+}
+
+#universe-info-panel #info-close-btn:hover {
+    color: var(--danger-red);
+}
+
+#universe-info-panel .info-body {
+    padding: 15px;
+}
+
+#universe-info-panel #info-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 12px;
+}
+
+#universe-info-panel #info-metrics {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    padding: 8px;
+    background: rgba(74, 158, 255, 0.1);
+    border-radius: 6px;
+}
+
+#universe-info-panel #info-metrics .metric {
+    display: block;
+    font-family: 'Courier New', monospace;
+    color: var(--accent-green);
+    margin: 2px 0;
+}
+
+#universe-info-panel #info-stats {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+#universe-info-panel .eigenvalues {
+    font-family: 'Courier New', monospace;
+    color: var(--accent-green);
+    font-size: 11px;
+}
+
+#universe-info-panel .info-actions {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+#universe-info-panel .load-build-btn {
+    width: 100%;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, #2a5a8a 0%, #1a3a5a 100%);
+    border: 1px solid var(--accent-blue);
+    border-radius: 6px;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#universe-info-panel .load-build-btn:hover {
+    background: linear-gradient(135deg, #3a7aba 0%, #2a5a8a 100%);
+    border-color: #4facfe;
+    box-shadow: 0 2px 10px rgba(79, 172, 254, 0.3);
+    transform: translateY(-1px);
+}
+
+#universe-info-panel .load-build-btn:active {
+    transform: translateY(0);
+}
+
+#universe-info-panel .toggle-expand-btn {
+    width: 100%;
+    padding: 6px 10px;
+    margin-top: 6px;
+    background: linear-gradient(135deg, #5a2a8a 0%, #3a1a5a 100%);
+    border: 1px solid #9966ff;
+    border-radius: 6px;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+#universe-info-panel .toggle-expand-btn:hover {
+    background: linear-gradient(135deg, #7a4aba 0%, #5a3a8a 100%);
+    border-color: #bb99ff;
+    box-shadow: 0 2px 10px rgba(153, 102, 255, 0.3);
+}
+
+/* Universe Axis Control Panel */
+#universe-axis-panel {
+    position: absolute;
+    bottom: 100px;
+    right: 320px;
+    width: 200px;
+    background: rgba(10, 10, 26, 0.95);
+    border: 1px solid var(--accent-blue);
+    border-radius: 8px;
+    padding: 12px;
+    z-index: 200;
+    font-size: 12px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+#universe-axis-panel .axis-panel-header {
+    font-weight: 600;
+    color: var(--accent-blue);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 13px;
+    cursor: move;
+    user-select: none;
+}
+
+#universe-axis-panel .axis-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+}
+
+#universe-axis-panel .axis-row label {
+    width: 20px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+#universe-axis-panel .axis-row:nth-child(3) label { color: #ff6666; }
+#universe-axis-panel .axis-row:nth-child(4) label { color: #66ff66; }
+#universe-axis-panel .axis-row:nth-child(5) label { color: #6666ff; }
+
+#universe-axis-panel .preset-row label { color: #ffaa44; }
+
+#universe-axis-panel .axis-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 8px 0;
+}
+
+#universe-axis-panel select {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    padding: 4px 6px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+#universe-axis-panel select:hover {
+    border-color: var(--accent-blue);
+}
+
+#universe-axis-panel select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 5px rgba(74, 158, 255, 0.3);
+}
+
+#universe-axis-panel #axis-apply-btn {
+    width: 100%;
+    margin-top: 8px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, var(--accent-blue), #3a7ecc);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+#universe-axis-panel #axis-apply-btn:hover {
+    background: linear-gradient(135deg, #5aaeFF, var(--accent-blue));
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+}
+
+#universe-axis-panel #axis-apply-btn:active {
+    transform: translateY(0);
+}
+
+#universe-axis-panel .axis-desc {
+    background: rgba(0, 100, 150, 0.3);
+    border: 1px solid rgba(0, 200, 255, 0.3);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 8px 0;
+    font-size: 10px;
+    color: #aaddff;
+    line-height: 1.4;
+}
+
+#universe-axis-panel .axis-desc strong {
+    color: #00ffff;
+}
+
+#universe-axis-panel .axis-help {
+    text-align: center;
+    margin-top: 6px;
+    opacity: 0.6;
+}
+
+#universe-axis-panel .axis-help small {
+    font-size: 9px;
+    color: #88aacc;
+}
+
+/* Universe Navigation Controls */
+#universe-nav-controls {
+    background: linear-gradient(135deg, rgba(0, 255, 136, 0.05), rgba(0, 255, 255, 0.02));
+    border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+#universe-nav-controls h4 {
+    color: #0f8;
+}
+
+#universe-galaxy-jump {
+    width: 100%;
+}
+
+/* =====================================================
+   TEMPLATE PREVIEW PANEL
+   ===================================================== */
+
+.template-preview {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 10px;
+    margin: 10px 0;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+#template-preview-canvas {
+    background: var(--bg-primary);
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+#template-preview-info {
+    flex: 1;
+    min-width: 0;
+}
+
+#preview-name {
+    font-weight: 600;
+    color: var(--accent-blue);
+    font-size: 12px;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#preview-stats {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+#preview-stats span {
+    display: inline-block;
+    margin-right: 8px;
+}
+
+#preview-formula {
+    font-size: 10px;
+    color: var(--accent-green);
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Hide preview when custom selected */
+.template-preview.hidden {
+    display: none;
+}
+
+/* =====================================================
+   EIGENMODE ANIMATION UI
+   ===================================================== */
+
+/* Hint text above eigenvalue list */
+.eigenmode-hint {
+    font-size: 11px;
+    color: #4af;
+    margin-bottom: 6px;
+    font-style: italic;
+    padding: 4px 8px;
+    background: rgba(68, 170, 255, 0.1);
+    border-radius: 4px;
+}
+
+/* Inline hint in summary */
+.eigenmode-play-hint {
+    font-size: 10px;
+    color: #4af;
+    font-style: italic;
+    margin-left: 6px;
+    opacity: 0.8;
+}
+
+/* Make eigenvalues clickable */
+.eigenvalue-clickable {
+    cursor: pointer;
+    padding: 4px 8px;
+    margin: 2px 0;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-left: 3px solid transparent;
+}
+
+.eigenvalue-clickable:hover {
+    background: rgba(100, 200, 255, 0.25);
+    border-left-color: #4af;
+    transform: translateX(3px);
+}
+
+.eigenvalue-clickable:hover .eigenmode-icon {
+    opacity: 1;
+    color: #4af;
+}
+
+/* Play icon for eigenmode animation */
+.eigenmode-icon {
+    font-size: 12px;
+    opacity: 0.4;
+    color: #4af;
+    transition: all 0.2s ease;
+    margin-left: 8px;
+}
+
+/* Active/selected eigenvalue */
+.eigenvalue-active {
+    background: rgba(100, 255, 150, 0.3) !important;
+    border-left: 3px solid #4f8;
+}
+
+.eigenvalue-active .eigenmode-icon {
+    opacity: 1;
+    color: #4f8;
+    animation: pulse-icon 1s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+    0%, 100% { opacity: 0.5; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* Eigenmode info display in dynamics panel */
+.eigenmode-info {
+    background: rgba(80, 200, 120, 0.15);
+    border: 1px solid rgba(80, 200, 120, 0.4);
+    border-radius: 4px;
+    padding: 8px;
+    margin-top: 8px;
+    font-size: 11px;
+}
+
+.eigenmode-info .mode-formula {
+    font-family: 'Courier New', monospace;
+    color: #8f8;
+    font-weight: bold;
+}
+
+.eigenmode-info .mode-period {
+    color: #aaa;
+    margin-left: 10px;
+}
+
+/* Standing wave indicator */
+.standing-wave-indicator {
+    display: inline-block;
+    width: 40px;
+    height: 12px;
+    background: linear-gradient(90deg, 
+        rgba(255,100,100,0.8) 0%, 
+        rgba(100,100,255,0.8) 25%, 
+        rgba(255,100,100,0.8) 50%, 
+        rgba(100,100,255,0.8) 75%, 
+        rgba(255,100,100,0.8) 100%);
+    border-radius: 2px;
+    margin-left: 8px;
+    animation: wave-shift 2s linear infinite;
+}
+
+@keyframes wave-shift {
+    0% { background-position: 0 0; }
+    100% { background-position: 40px 0; }
 }

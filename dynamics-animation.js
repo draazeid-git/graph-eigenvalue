@@ -1,13 +1,17 @@
 /**
  * Dynamics Animation Module
  * Handles simulation integration, phase diagrams, and visual updates
+ * 
+ * v35: Added SparseMatrix class with SpMV for O(m) dynamics on sparse graphs
+ *      Enables n > 100 for Path, Cycle, Star, and other sparse graph families
  */
 
 import * as THREE from 'three';
 import { 
     state, VERTEX_RADIUS, 
     interpolateYellowBlue, interpolateRedGreen, 
-    interpolatePowerColor, updateVertexPowerRing 
+    interpolatePowerColor, updateVertexPowerRing,
+    updateFaceMeshes
 } from './graph-core.js';
 
 // Base vertex radius for scaling
@@ -15,6 +19,261 @@ const BASE_VERTEX_RADIUS = VERTEX_RADIUS;
 
 // Teaching mode: freeze nodes to show only edge exchange
 let freezeNodesMode = false;
+
+// =====================================================
+// SPARSE MATRIX CLASS (CSR Format)
+// =====================================================
+
+/**
+ * Compressed Sparse Row (CSR) matrix for efficient SpMV operations.
+ * For a graph with n vertices and m edges:
+ *   - Dense storage: O(n²)
+ *   - CSR storage: O(n + 2m) for symmetric adjacency
+ *   - Dense SpMV: O(n²)
+ *   - Sparse SpMV: O(m)
+ * 
+ * This enables dynamics simulation for n > 100 on sparse graphs.
+ */
+class SparseMatrix {
+    /**
+     * Create a sparse matrix from a dense matrix or edge list
+     * @param {number} n - Matrix dimension
+     */
+    constructor(n) {
+        this.n = n;
+        this.rowPtr = new Int32Array(n + 1);  // Row pointers
+        this.colIdx = null;  // Column indices (allocated on build)
+        this.values = null;  // Non-zero values (allocated on build)
+        this.nnz = 0;  // Number of non-zeros
+        this._density = 0;  // Fraction of non-zeros
+    }
+    
+    /**
+     * Build CSR representation from dense matrix
+     * @param {number[][]} dense - Dense matrix
+     * @returns {SparseMatrix} this (for chaining)
+     */
+    fromDense(dense) {
+        const n = this.n;
+        
+        // First pass: count non-zeros per row
+        let totalNnz = 0;
+        for (let i = 0; i < n; i++) {
+            let rowNnz = 0;
+            for (let j = 0; j < n; j++) {
+                if (dense[i][j] !== 0) rowNnz++;
+            }
+            this.rowPtr[i + 1] = this.rowPtr[i] + rowNnz;
+            totalNnz += rowNnz;
+        }
+        
+        this.nnz = totalNnz;
+        this._density = totalNnz / (n * n);
+        this.colIdx = new Int32Array(totalNnz);
+        this.values = new Float64Array(totalNnz);
+        
+        // Second pass: fill arrays
+        let idx = 0;
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (dense[i][j] !== 0) {
+                    this.colIdx[idx] = j;
+                    this.values[idx] = dense[i][j];
+                    idx++;
+                }
+            }
+        }
+        
+        return this;
+    }
+    
+    /**
+     * Build CSR representation from edge list (for adjacency matrix)
+     * @param {Array<[number, number]>} edges - Array of [i, j] edges
+     * @param {boolean} symmetric - If true, add both (i,j) and (j,i)
+     * @returns {SparseMatrix} this
+     */
+    fromEdges(edges, symmetric = true) {
+        const n = this.n;
+        
+        // Count edges per row
+        const rowCounts = new Int32Array(n);
+        for (const [i, j] of edges) {
+            if (i >= 0 && i < n && j >= 0 && j < n) {
+                rowCounts[i]++;
+                if (symmetric && i !== j) rowCounts[j]++;
+            }
+        }
+        
+        // Build row pointers
+        this.rowPtr[0] = 0;
+        for (let i = 0; i < n; i++) {
+            this.rowPtr[i + 1] = this.rowPtr[i] + rowCounts[i];
+        }
+        
+        this.nnz = this.rowPtr[n];
+        this._density = this.nnz / (n * n);
+        this.colIdx = new Int32Array(this.nnz);
+        this.values = new Float64Array(this.nnz);
+        
+        // Fill with 1s for adjacency, track position per row
+        const rowPos = new Int32Array(n);
+        for (let i = 0; i < n; i++) rowPos[i] = this.rowPtr[i];
+        
+        for (const [i, j] of edges) {
+            if (i >= 0 && i < n && j >= 0 && j < n) {
+                this.colIdx[rowPos[i]] = j;
+                this.values[rowPos[i]] = 1;
+                rowPos[i]++;
+                
+                if (symmetric && i !== j) {
+                    this.colIdx[rowPos[j]] = i;
+                    this.values[rowPos[j]] = 1;
+                    rowPos[j]++;
+                }
+            }
+        }
+        
+        // Sort column indices within each row (optional, but good for cache)
+        for (let i = 0; i < n; i++) {
+            const start = this.rowPtr[i];
+            const end = this.rowPtr[i + 1];
+            // Simple insertion sort (rows are usually small)
+            for (let j = start + 1; j < end; j++) {
+                const col = this.colIdx[j];
+                const val = this.values[j];
+                let k = j - 1;
+                while (k >= start && this.colIdx[k] > col) {
+                    this.colIdx[k + 1] = this.colIdx[k];
+                    this.values[k + 1] = this.values[k];
+                    k--;
+                }
+                this.colIdx[k + 1] = col;
+                this.values[k + 1] = val;
+            }
+        }
+        
+        return this;
+    }
+    
+    /**
+     * Sparse Matrix-Vector Multiplication: y = A * x
+     * Time complexity: O(nnz) instead of O(n²)
+     * 
+     * @param {Float64Array|number[]} x - Input vector
+     * @param {Float64Array} y - Output vector (optional, will be created if null)
+     * @returns {Float64Array} Result vector y = A*x
+     */
+    multiply(x, y = null) {
+        const n = this.n;
+        if (!y) y = new Float64Array(n);
+        
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            const rowStart = this.rowPtr[i];
+            const rowEnd = this.rowPtr[i + 1];
+            
+            for (let k = rowStart; k < rowEnd; k++) {
+                sum += this.values[k] * x[this.colIdx[k]];
+            }
+            y[i] = sum;
+        }
+        
+        return y;
+    }
+    
+    /**
+     * Compute y = A*x and derivatives for dynamics
+     * Uses in-place update for efficiency
+     * @param {Float64Array} x - State vector
+     * @param {Float64Array} dxdt - Derivative vector (output)
+     */
+    computeDerivative(x, dxdt) {
+        const n = this.n;
+        for (let i = 0; i < n; i++) {
+            let sum = 0;
+            const rowStart = this.rowPtr[i];
+            const rowEnd = this.rowPtr[i + 1];
+            
+            for (let k = rowStart; k < rowEnd; k++) {
+                sum += this.values[k] * x[this.colIdx[k]];
+            }
+            dxdt[i] = sum;
+        }
+    }
+    
+    /**
+     * Check if matrix is sparse enough to benefit from SpMV
+     * Rule of thumb: sparse methods win when density < ~10%
+     * @returns {boolean}
+     */
+    isSparse() {
+        return this._density < 0.1;
+    }
+    
+    /**
+     * Get density (fraction of non-zeros)
+     */
+    get density() {
+        return this._density;
+    }
+    
+    /**
+     * Get graph statistics for logging
+     */
+    getStats() {
+        const maxEdgesPerRow = Math.max(
+            ...Array.from({ length: this.n }, (_, i) => 
+                this.rowPtr[i + 1] - this.rowPtr[i]
+            )
+        );
+        const avgEdgesPerRow = this.nnz / this.n;
+        
+        return {
+            n: this.n,
+            nnz: this.nnz,
+            density: this._density,
+            maxDegree: maxEdgesPerRow,
+            avgDegree: avgEdgesPerRow,
+            isSparse: this.isSparse(),
+            memoryRatio: (this.nnz * 12) / (this.n * this.n * 8)  // CSR vs dense
+        };
+    }
+}
+
+// Sparse matrix cache
+let sparseAdjMatrix = null;
+let sparseMatrixValid = false;
+
+/**
+ * Get or build sparse adjacency matrix
+ * @returns {SparseMatrix|null}
+ */
+function getSparseMatrix() {
+    const n = state.adjacencyMatrix?.length || 0;
+    if (n === 0) return null;
+    
+    if (!sparseMatrixValid || !sparseAdjMatrix || sparseAdjMatrix.n !== n) {
+        sparseAdjMatrix = new SparseMatrix(n).fromDense(state.adjacencyMatrix);
+        sparseMatrixValid = true;
+        
+        const stats = sparseAdjMatrix.getStats();
+        console.log(`SparseMatrix built: n=${stats.n}, nnz=${stats.nnz}, ` +
+                    `density=${(stats.density*100).toFixed(1)}%, ` +
+                    `avgDegree=${stats.avgDegree.toFixed(1)}, ` +
+                    `using ${stats.isSparse ? 'SPARSE' : 'DENSE'} mode`);
+    }
+    
+    return sparseAdjMatrix;
+}
+
+/**
+ * Invalidate sparse matrix cache (call when graph changes)
+ */
+export function invalidateSparseMatrix() {
+    sparseMatrixValid = false;
+    sparseAdjMatrix = null;
+}
 
 // =====================================================
 // DYNAMICS STATE
@@ -28,6 +287,394 @@ let nodeDerivatives = [];
 
 // Callback for enhanced visualization updates
 let dynamicsUpdateCallback = null;
+
+// =====================================================
+// EIGENMODE ANIMATION STATE
+// =====================================================
+
+// Eigenmode animation: visualize a single eigenmode's oscillation pattern
+let eigenmodeActive = false;
+let eigenmodeData = null;  // { eigenvalue, eigenvector: {real, imag}, frequency, formula }
+let eigenmodePhase = 0;    // Current phase of oscillation
+
+// Store original vertex positions for eigenmode vertex displacement
+let originalVertexPositions = null;
+
+/**
+ * Start eigenmode animation for a specific eigenvalue/eigenvector pair.
+ * The animation shows x(t) = Re(e^{iωt} · v) where v is the eigenvector.
+ * Vertices physically oscillate and edges stretch/compress accordingly.
+ * 
+ * @param {Object} eigenmode - { eigenvalue: {real, imag}, eigenvector: {real, imag}, formula? }
+ */
+export function startEigenmodeAnimation(eigenmode) {
+    if (!eigenmode || !eigenmode.eigenvector) {
+        console.error('Invalid eigenmode data');
+        return;
+    }
+    
+    const n = state.vertexMeshes.length;
+    if (n === 0) return;
+    
+    // Stop any running dynamics first
+    stopDynamics();
+    
+    // Store original vertex positions for restoration later
+    originalVertexPositions = [];
+    for (let i = 0; i < n; i++) {
+        originalVertexPositions.push(state.vertexMeshes[i].position.clone());
+    }
+    
+    // Store eigenmode data
+    eigenmodeData = eigenmode;
+    eigenmodeActive = true;
+    eigenmodePhase = 0;
+    
+    // Initialize node states from eigenvector (real part at t=0)
+    nodeStates = new Float64Array(n);
+    nodeDerivatives = new Float64Array(n);
+    
+    // Normalize eigenvector for display
+    const vReal = eigenmode.eigenvector.real;
+    const vImag = eigenmode.eigenvector.imag;
+    let maxAmp = 0;
+    for (let i = 0; i < n; i++) {
+        const amp = Math.sqrt(vReal[i] * vReal[i] + (vImag[i] || 0) * (vImag[i] || 0));
+        if (amp > maxAmp) maxAmp = amp;
+    }
+    
+    // Scale for visibility - larger displacement for better visualization
+    const scale = maxAmp > 0 ? 1.0 / maxAmp : 1;
+    eigenmodeData.scale = scale;
+    eigenmodeData.maxAmplitude = maxAmp;
+    
+    // Displacement amplitude (in world units) - scales with graph size
+    const avgDist = computeAverageVertexDistance();
+    eigenmodeData.displacementScale = avgDist * 0.3;  // 30% of average vertex distance
+    
+    // Compute frequency from eigenvalue
+    // For skew-symmetric: eigenvalue is iω, frequency = |ω|
+    // For symmetric: eigenvalue is real, we use |λ| as frequency for visualization
+    const omega = eigenmode.eigenvalue.imag !== 0 ? 
+        Math.abs(eigenmode.eigenvalue.imag) : 
+        Math.abs(eigenmode.eigenvalue.real);
+    // Use minimum frequency for visibility
+    eigenmodeData.frequency = Math.max(omega, 0.5);
+    
+    // Log eigenmode info
+    const evStr = eigenmode.eigenvalue.imag !== 0 ?
+        `${eigenmode.eigenvalue.imag >= 0 ? '+' : ''}${eigenmode.eigenvalue.imag.toFixed(4)}i` :
+        eigenmode.eigenvalue.real.toFixed(4);
+    console.log(`Eigenmode animation started: λ = ${evStr}, ω = ${eigenmodeData.frequency.toFixed(4)}, formula = ${eigenmode.formula || 'numerical'}`);
+    console.log(`Vertex displacement mode: amplitude = ${eigenmodeData.displacementScale.toFixed(2)} units`);
+    
+    simulationTime = 0;
+    dynamicsRunning = true;
+    
+    if (startDynamicsBtn) startDynamicsBtn.style.display = 'none';
+    if (stopDynamicsBtn) stopDynamicsBtn.style.display = 'block';
+    
+    runEigenmodeAnimation();
+}
+
+/**
+ * Compute average distance between connected vertices
+ */
+function computeAverageVertexDistance() {
+    const n = state.vertexMeshes.length;
+    if (n < 2) return 10;
+    
+    let totalDist = 0;
+    let count = 0;
+    
+    for (const edge of state.edgeObjects) {
+        const p1 = state.vertexMeshes[edge.from].position;
+        const p2 = state.vertexMeshes[edge.to].position;
+        totalDist += p1.distanceTo(p2);
+        count++;
+    }
+    
+    return count > 0 ? totalDist / count : 10;
+}
+
+/**
+ * Eigenmode animation loop.
+ * x(t) = Re(e^{iωt} · v) = cos(ωt)·vReal - sin(ωt)·vImag
+ * 
+ * Vertices are displaced along a direction based on their eigenvector component.
+ * Edges stretch/compress to follow vertex positions.
+ */
+function runEigenmodeAnimation() {
+    if (!dynamicsRunning || !eigenmodeActive) return;
+    
+    const speed = dynamicsSpeedInput ? parseInt(dynamicsSpeedInput.value) / 10 : 1;
+    const dt = 0.016 * speed;  // Frame time
+    
+    const n = nodeStates.length;
+    const vReal = eigenmodeData.eigenvector.real;
+    const vImag = eigenmodeData.eigenvector.imag || new Array(n).fill(0);
+    const omega = eigenmodeData.frequency;
+    const scale = eigenmodeData.scale;
+    const dispScale = eigenmodeData.displacementScale;
+    
+    // Update phase
+    eigenmodePhase += omega * dt;
+    simulationTime += dt;
+    
+    // Compute x(t) = cos(ωt)·vReal - sin(ωt)·vImag
+    const cosPhase = Math.cos(eigenmodePhase);
+    const sinPhase = Math.sin(eigenmodePhase);
+    
+    for (let i = 0; i < n; i++) {
+        nodeStates[i] = scale * (cosPhase * vReal[i] - sinPhase * vImag[i]);
+        // Derivative: dx/dt = -ω·sin(ωt)·vReal - ω·cos(ωt)·vImag
+        nodeDerivatives[i] = scale * omega * (-sinPhase * vReal[i] - cosPhase * vImag[i]);
+    }
+    
+    // Update vertex positions (displacement mode)
+    updateEigenmodeVertexPositions(dispScale);
+    
+    // Update edge geometry to follow vertices
+    updateEdgeGeometry();
+    
+    // Update face meshes to follow vertices (for polyhedron surfaces)
+    updateFaceMeshes();
+    
+    // Update vertex colors based on state
+    updateEigenmodeVertexColors();
+    
+    updateEigenmodeDisplay();
+    
+    if (phaseEnabledCheckbox && phaseEnabledCheckbox.checked) {
+        updatePhaseDiagram();
+    }
+    
+    if (dynamicsUpdateCallback) {
+        dynamicsUpdateCallback();
+    }
+    
+    dynamicsAnimationId = requestAnimationFrame(runEigenmodeAnimation);
+}
+
+/**
+ * Update vertex positions based on eigenmode displacement
+ * Each vertex moves along a direction determined by its eigenvector component
+ */
+function updateEigenmodeVertexPositions(dispScale) {
+    const n = state.vertexMeshes.length;
+    if (!originalVertexPositions || originalVertexPositions.length !== n) return;
+    
+    for (let i = 0; i < n; i++) {
+        const mesh = state.vertexMeshes[i];
+        const origPos = originalVertexPositions[i];
+        const displacement = nodeStates[i] * dispScale;
+        
+        // Displacement direction: radial from graph center, or use eigenvector direction
+        // For 2D-like graphs, displace perpendicular to the plane
+        // For general graphs, displace radially from centroid
+        
+        // Compute graph centroid
+        let cx = 0, cy = 0, cz = 0;
+        for (let j = 0; j < n; j++) {
+            cx += originalVertexPositions[j].x;
+            cy += originalVertexPositions[j].y;
+            cz += originalVertexPositions[j].z;
+        }
+        cx /= n; cy /= n; cz /= n;
+        
+        // Direction from centroid to this vertex
+        let dx = origPos.x - cx;
+        let dy = origPos.y - cy;
+        let dz = origPos.z - cz;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        
+        if (dist > 0.01) {
+            // Normalize and scale by displacement
+            dx /= dist; dy /= dist; dz /= dist;
+        } else {
+            // Vertex at centroid - displace along Y
+            dx = 0; dy = 1; dz = 0;
+        }
+        
+        // Apply displacement
+        mesh.position.x = origPos.x + dx * displacement;
+        mesh.position.y = origPos.y + dy * displacement;
+        mesh.position.z = origPos.z + dz * displacement;
+    }
+}
+
+/**
+ * Update edge geometry to follow current vertex positions
+ */
+function updateEdgeGeometry() {
+    for (const edge of state.edgeObjects) {
+        if (!edge.arrow) continue;
+        
+        const fromMesh = state.vertexMeshes[edge.from];
+        const toMesh = state.vertexMeshes[edge.to];
+        
+        if (!fromMesh || !toMesh) continue;
+        
+        const fromPos = fromMesh.position;
+        const toPos = toMesh.position;
+        
+        // Compute direction and length
+        const dir = new THREE.Vector3().subVectors(toPos, fromPos);
+        const length = dir.length();
+        
+        if (length > 0.01) {
+            dir.normalize();
+            
+            // Update arrow position and direction
+            edge.arrow.position.copy(fromPos);
+            edge.arrow.setDirection(dir);
+            // Thin arrows - length * 0.1 for head length, length * 0.03 for head radius
+            edge.arrow.setLength(length * 0.9, length * 0.1, length * 0.03);
+            
+            // Color based on edge stretch/compression
+            const origFromPos = originalVertexPositions[edge.from];
+            const origToPos = originalVertexPositions[edge.to];
+            const origLength = origFromPos.distanceTo(origToPos);
+            const stretchRatio = length / origLength;
+            
+            // Red = compressed, Blue = stretched, White = neutral
+            const color = new THREE.Color();
+            if (stretchRatio < 1) {
+                // Compressed: white to red
+                const t = 1 - stretchRatio;
+                color.setRGB(1, 1 - t * 0.7, 1 - t * 0.7);
+            } else {
+                // Stretched: white to blue
+                const t = Math.min(stretchRatio - 1, 1);
+                color.setRGB(1 - t * 0.7, 1 - t * 0.7, 1);
+            }
+            
+            edge.arrow.setColor(color);
+        }
+    }
+}
+
+/**
+ * Update vertex colors based on eigenmode state
+ */
+function updateEigenmodeVertexColors() {
+    const n = state.vertexMeshes.length;
+    
+    // Find max amplitude for normalization
+    let maxAmp = 0.001;
+    for (let i = 0; i < n; i++) {
+        if (Math.abs(nodeStates[i]) > maxAmp) maxAmp = Math.abs(nodeStates[i]);
+    }
+    
+    for (let i = 0; i < n; i++) {
+        const mesh = state.vertexMeshes[i];
+        const amp = nodeStates[i] / maxAmp;  // -1 to +1
+        
+        // Color: negative (blue) → neutral (white) → positive (red/orange)
+        const color = new THREE.Color();
+        if (amp < 0) {
+            // Blue for negative
+            const t = -amp;
+            color.setRGB(0.3 + 0.7 * (1 - t), 0.5 + 0.5 * (1 - t), 1.0);
+        } else {
+            // Orange/red for positive
+            const t = amp;
+            color.setRGB(1.0, 0.7 - 0.5 * t, 0.3 - 0.2 * t);
+        }
+        
+        mesh.material.color.copy(color);
+        mesh.material.emissive.copy(color).multiplyScalar(0.3);
+        
+        // Scale based on amplitude
+        const scaleMultiplier = 1.0 + Math.abs(amp) * 0.3;
+        mesh.scale.setScalar(scaleMultiplier);
+    }
+}
+
+/**
+ * Update eigenmode-specific display info
+ */
+function updateEigenmodeDisplay() {
+    if (dynamicsTimeDisplay) {
+        dynamicsTimeDisplay.textContent = `t = ${simulationTime.toFixed(3)}`;
+    }
+    
+    // Show eigenmode info
+    if (dynamicsEnergyDisplay && eigenmodeData) {
+        const periodStr = eigenmodeData.frequency > 0.001 ? 
+            `T = ${(2 * Math.PI / eigenmodeData.frequency).toFixed(3)}` : 
+            'T = ∞';
+        dynamicsEnergyDisplay.textContent = `Mode: ${eigenmodeData.formula || 'λ'} | ${periodStr}`;
+    }
+    
+    // Max amplitude display
+    if (dynamicsMaxStateDisplay) {
+        let maxState = 0;
+        for (let i = 0; i < nodeStates.length; i++) {
+            if (Math.abs(nodeStates[i]) > maxState) maxState = Math.abs(nodeStates[i]);
+        }
+        dynamicsMaxStateDisplay.textContent = `|x|_max = ${maxState.toFixed(4)}`;
+    }
+}
+
+/**
+ * Stop eigenmode animation and restore original vertex positions
+ */
+export function stopEigenmodeAnimation() {
+    // Restore original vertex positions
+    if (originalVertexPositions && state.vertexMeshes.length === originalVertexPositions.length) {
+        for (let i = 0; i < state.vertexMeshes.length; i++) {
+            state.vertexMeshes[i].position.copy(originalVertexPositions[i]);
+            // Reset color and scale
+            state.vertexMeshes[i].material.color.setHex(0x00ff88);
+            state.vertexMeshes[i].material.emissive.setHex(0x004422);
+            state.vertexMeshes[i].scale.setScalar(1.0);
+        }
+        // Update edge geometry to match restored positions
+        for (const edge of state.edgeObjects) {
+            if (!edge.arrow) continue;
+            const fromPos = state.vertexMeshes[edge.from].position;
+            const toPos = state.vertexMeshes[edge.to].position;
+            const dir = new THREE.Vector3().subVectors(toPos, fromPos);
+            const length = dir.length();
+            if (length > 0.01) {
+                dir.normalize();
+                edge.arrow.position.copy(fromPos);
+                edge.arrow.setDirection(dir);
+                // Thin arrows - length * 0.1 for head length, length * 0.03 for head radius
+                edge.arrow.setLength(length * 0.9, length * 0.1, length * 0.03);
+                edge.arrow.setColor(new THREE.Color(0x00ffff));  // Reset to cyan
+            }
+        }
+        
+        // Update face meshes to match restored positions
+        updateFaceMeshes();
+    }
+    
+    originalVertexPositions = null;
+    eigenmodeActive = false;
+    eigenmodeData = null;
+    eigenmodePhase = 0;
+    stopDynamics();
+}
+
+/**
+ * Check if eigenmode animation is active
+ */
+export function isEigenmodeActive() {
+    return eigenmodeActive;
+}
+
+/**
+ * Get current eigenmode data
+ */
+export function getEigenmodeData() {
+    return eigenmodeData;
+}
+
+// =====================================================
+// END EIGENMODE ANIMATION
+// =====================================================
 
 // Cached rotation matrices
 let cayleyMatrix = null;
@@ -300,24 +947,46 @@ function invertMatrix(M) {
 function integrateTrapezoidal(dt) {
     const n = nodeStates.length;
     const A = state.adjacencyMatrix;
+    const sparseA = getSparseMatrix();
+    const useSparse = sparseA && sparseA.isSparse();
     
-    // Predictor (Euler)
-    const predictor = Array(n).fill(0);
-    for (let i = 0; i < n; i++) {
-        predictor[i] = nodeStates[i];
-        for (let j = 0; j < n; j++) {
-            predictor[i] += dt * A[i][j] * nodeStates[j];
+    // Predictor (Euler): x_pred = x + dt * A * x
+    let predictor;
+    if (useSparse) {
+        predictor = new Float64Array(n);
+        const Ax = new Float64Array(n);
+        sparseA.computeDerivative(nodeStates, Ax);
+        for (let i = 0; i < n; i++) {
+            predictor[i] = nodeStates[i] + dt * Ax[i];
+        }
+    } else {
+        predictor = Array(n).fill(0);
+        for (let i = 0; i < n; i++) {
+            predictor[i] = nodeStates[i];
+            for (let j = 0; j < n; j++) {
+                predictor[i] += dt * A[i][j] * nodeStates[j];
+            }
         }
     }
     
-    // Corrector
-    const corrector = Array(n).fill(0);
-    for (let i = 0; i < n; i++) {
-        let derivPredictor = 0;
-        for (let j = 0; j < n; j++) {
-            derivPredictor += A[i][j] * predictor[j];
+    // Corrector: x_new = x + 0.5 * dt * (A*x + A*x_pred)
+    let corrector;
+    if (useSparse) {
+        corrector = new Float64Array(n);
+        const Apred = new Float64Array(n);
+        sparseA.computeDerivative(predictor, Apred);
+        for (let i = 0; i < n; i++) {
+            corrector[i] = nodeStates[i] + 0.5 * dt * (nodeDerivatives[i] + Apred[i]);
         }
-        corrector[i] = nodeStates[i] + 0.5 * dt * (nodeDerivatives[i] + derivPredictor);
+    } else {
+        corrector = Array(n).fill(0);
+        for (let i = 0; i < n; i++) {
+            let derivPredictor = 0;
+            for (let j = 0; j < n; j++) {
+                derivPredictor += A[i][j] * predictor[j];
+            }
+            corrector[i] = nodeStates[i] + 0.5 * dt * (nodeDerivatives[i] + derivPredictor);
+        }
     }
     
     return corrector;
@@ -381,11 +1050,20 @@ export function startDynamics() {
     simulationTime = 0;
     dynamicsRunning = true;
     
-    // Reset caches
+    // Reset all caches including sparse matrix
     cayleyMatrix = null;
     cayleyDt = 0;
     rodriguesCache = null;
     rodriguesCacheDt = 0;
+    invalidateSparseMatrix();
+    
+    // Build sparse matrix and log mode
+    const sparseA = getSparseMatrix();
+    if (sparseA) {
+        const stats = sparseA.getStats();
+        console.log(`Dynamics starting with n=${n}, mode=${stats.isSparse ? 'SPARSE (SpMV)' : 'DENSE'}, ` +
+                    `density=${(stats.density * 100).toFixed(1)}%`);
+    }
     
     if (startDynamicsBtn) startDynamicsBtn.style.display = 'none';
     if (stopDynamicsBtn) stopDynamicsBtn.style.display = 'block';
@@ -395,6 +1073,10 @@ export function startDynamics() {
 
 export function stopDynamics() {
     dynamicsRunning = false;
+    
+    // Clear eigenmode state
+    eigenmodeActive = false;
+    
     if (dynamicsAnimationId) {
         cancelAnimationFrame(dynamicsAnimationId);
         dynamicsAnimationId = null;
@@ -437,13 +1119,29 @@ function runDynamics() {
     const n = nodeStates.length;
     const A = state.adjacencyMatrix;
     
+    // Get sparse matrix and check if we should use sparse operations
+    const sparseA = getSparseMatrix();
+    const useSparse = sparseA && sparseA.isSparse();
+    
+    // Convert to Float64Array for sparse operations (only once per dynamics start)
+    if (useSparse && !(nodeStates instanceof Float64Array)) {
+        nodeStates = Float64Array.from(nodeStates);
+        nodeDerivatives = new Float64Array(n);
+    }
+    
     // Run multiple integration steps per frame
     for (let step = 0; step < stepsPerFrame; step++) {
         // Compute derivatives: dx/dt = A * x
-        for (let i = 0; i < n; i++) {
-            nodeDerivatives[i] = 0;
-            for (let j = 0; j < n; j++) {
-                nodeDerivatives[i] += A[i][j] * nodeStates[j];
+        if (useSparse) {
+            // Sparse Matrix-Vector: O(nnz) instead of O(n²)
+            sparseA.computeDerivative(nodeStates, nodeDerivatives);
+        } else {
+            // Dense fallback: O(n²)
+            for (let i = 0; i < n; i++) {
+                nodeDerivatives[i] = 0;
+                for (let j = 0; j < n; j++) {
+                    nodeDerivatives[i] += A[i][j] * nodeStates[j];
+                }
             }
         }
         
@@ -496,6 +1194,8 @@ export function invalidateCaches() {
     cayleyDt = 0;
     rodriguesCache = null;
     rodriguesCacheDt = 0;
+    // Also invalidate sparse matrix when graph changes
+    invalidateSparseMatrix();
 }
 
 export function isDynamicsRunning() {
