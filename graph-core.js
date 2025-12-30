@@ -557,6 +557,10 @@ export function clearGraph() {
 }
 
 export function setVertexMaterial(mesh, type) {
+    if (!mesh || !mesh.material) {
+        console.warn('[VERTEX] setVertexMaterial called with invalid mesh');
+        return;
+    }
     if (type === 'hover') {
         mesh.material = hoverVertexMaterial.clone();
     } else if (type === 'selected') {
@@ -583,6 +587,20 @@ function getArrowScaleFactor() {
 
 export function addEdge(fromIdx, toIdx) {
     if (fromIdx === toIdx) return false;
+    
+    // Safety check: ensure adjacency matrix rows exist
+    const n = state.vertexMeshes.length;
+    if (fromIdx >= n || toIdx >= n || fromIdx < 0 || toIdx < 0) {
+        console.warn(`[EDGE] Invalid indices: from=${fromIdx}, to=${toIdx}, n=${n}`);
+        return false;
+    }
+    
+    // Safety check: ensure matrix rows are initialized
+    if (!state.adjacencyMatrix[fromIdx] || !state.adjacencyMatrix[toIdx]) {
+        console.warn(`[EDGE] Adjacency matrix not initialized for indices ${fromIdx}, ${toIdx}. Initializing...`);
+        ensureMatrixSize(n);
+    }
+    
     if (state.adjacencyMatrix[fromIdx][toIdx] === 1) return false;
     
     state.adjacencyMatrix[fromIdx][toIdx] = 1;
@@ -617,6 +635,38 @@ export function addEdge(fromIdx, toIdx) {
     }
     
     return true;
+}
+
+// Helper function to ensure adjacency matrices are properly sized
+function ensureMatrixSize(n) {
+    // Expand or create adjacency matrix rows
+    while (state.adjacencyMatrix.length < n) {
+        const newRow = Array(n).fill(0);
+        state.adjacencyMatrix.push(newRow);
+    }
+    // Ensure each row has the right number of columns
+    for (let i = 0; i < n; i++) {
+        if (!state.adjacencyMatrix[i]) {
+            state.adjacencyMatrix[i] = Array(n).fill(0);
+        }
+        while (state.adjacencyMatrix[i].length < n) {
+            state.adjacencyMatrix[i].push(0);
+        }
+    }
+    
+    // Same for symmetric matrix
+    while (state.symmetricAdjMatrix.length < n) {
+        const newRow = Array(n).fill(0);
+        state.symmetricAdjMatrix.push(newRow);
+    }
+    for (let i = 0; i < n; i++) {
+        if (!state.symmetricAdjMatrix[i]) {
+            state.symmetricAdjMatrix[i] = Array(n).fill(0);
+        }
+        while (state.symmetricAdjMatrix[i].length < n) {
+            state.symmetricAdjMatrix[i].push(0);
+        }
+    }
 }
 
 export function removeEdge(fromIdx, toIdx) {
@@ -767,13 +817,25 @@ export function addNewVertex(x, y, z) {
     const n = state.vertexMeshes.length;
     const position = new THREE.Vector3(x, y, z);
     
-    // Expand adjacency matrices
-    for (let i = 0; i < n; i++) {
-        state.adjacencyMatrix[i].push(0);
-        state.symmetricAdjMatrix[i].push(0);
+    // Expand adjacency matrices - ensure they exist first
+    if (n === 0) {
+        // First vertex - initialize with single-element arrays
+        state.adjacencyMatrix = [[0]];
+        state.symmetricAdjMatrix = [[0]];
+    } else {
+        // Add column to each existing row
+        for (let i = 0; i < n; i++) {
+            if (state.adjacencyMatrix[i]) {
+                state.adjacencyMatrix[i].push(0);
+            }
+            if (state.symmetricAdjMatrix[i]) {
+                state.symmetricAdjMatrix[i].push(0);
+            }
+        }
+        // Add new row
+        state.adjacencyMatrix.push(Array(n + 1).fill(0));
+        state.symmetricAdjMatrix.push(Array(n + 1).fill(0));
     }
-    state.adjacencyMatrix.push(Array(n + 1).fill(0));
-    state.symmetricAdjMatrix.push(Array(n + 1).fill(0));
     
     // Create the vertex
     return createVertex(position, n);
@@ -1959,6 +2021,341 @@ export function updateFaceMeshes() {
         // Recreate all face meshes with current vertex positions, preserving colors
         createFaceMeshes(faces, colors);
     }
+}
+
+// =====================================================
+// SNAP GRID FOR ADD VERTEX MODE
+// =====================================================
+
+let snapGridGroup = null;
+let snapGridSize = 5;
+let snapToGridEnabled = true;
+let currentProjection = '3d';
+let currentGridPlane = 'xz'; // 'xz', 'xy', 'yz'
+
+/**
+ * Create a 2D grid on the specified plane
+ * @param {string} plane - 'xz', 'xy', or 'yz'
+ * @param {number} gridSize - Grid cell size
+ * @param {number} gridExtent - Total grid extent
+ */
+function createGridOnPlane(plane, gridSize, gridExtent) {
+    const group = new THREE.Group();
+    const divisions = Math.floor(gridExtent / gridSize);
+    const halfExtent = gridExtent;
+    
+    // Material for grid lines - thin and subtle
+    const majorMaterial = new THREE.LineBasicMaterial({ 
+        color: 0x00acc1,  // Cyan for major lines
+        transparent: true, 
+        opacity: 0.35,
+        depthWrite: false
+    });
+    const minorMaterial = new THREE.LineBasicMaterial({ 
+        color: 0x26a69a,  // Teal for minor lines
+        transparent: true, 
+        opacity: 0.15,
+        depthWrite: false
+    });
+    
+    // Create grid lines
+    for (let i = -divisions; i <= divisions; i++) {
+        const pos = i * gridSize;
+        const isMajor = (i % 5 === 0);
+        const material = isMajor ? majorMaterial : minorMaterial;
+        
+        // Create two perpendicular lines for each position
+        const points1 = [];
+        const points2 = [];
+        
+        switch (plane) {
+            case 'xz': // Horizontal plane (Y = 0)
+                // Lines along X axis
+                points1.push(new THREE.Vector3(-halfExtent, 0, pos));
+                points1.push(new THREE.Vector3(halfExtent, 0, pos));
+                // Lines along Z axis
+                points2.push(new THREE.Vector3(pos, 0, -halfExtent));
+                points2.push(new THREE.Vector3(pos, 0, halfExtent));
+                break;
+            case 'xy': // Vertical front plane (Z = 0)
+                // Lines along X axis
+                points1.push(new THREE.Vector3(-halfExtent, pos, 0));
+                points1.push(new THREE.Vector3(halfExtent, pos, 0));
+                // Lines along Y axis
+                points2.push(new THREE.Vector3(pos, -halfExtent, 0));
+                points2.push(new THREE.Vector3(pos, halfExtent, 0));
+                break;
+            case 'yz': // Vertical side plane (X = 0)
+                // Lines along Y axis
+                points1.push(new THREE.Vector3(0, -halfExtent, pos));
+                points1.push(new THREE.Vector3(0, halfExtent, pos));
+                // Lines along Z axis
+                points2.push(new THREE.Vector3(0, pos, -halfExtent));
+                points2.push(new THREE.Vector3(0, pos, halfExtent));
+                break;
+        }
+        
+        const geometry1 = new THREE.BufferGeometry().setFromPoints(points1);
+        const geometry2 = new THREE.BufferGeometry().setFromPoints(points2);
+        
+        group.add(new THREE.Line(geometry1, material));
+        group.add(new THREE.Line(geometry2, material));
+    }
+    
+    return group;
+}
+
+/**
+ * Show snap grid for the current projection
+ * @param {number} gridSize - Grid cell size (default 5)
+ * @param {number} gridExtent - Total grid extent (default 100)
+ */
+export function showSnapGrid(gridSize = 5, gridExtent = 100) {
+    hideSnapGrid(); // Remove existing grid first
+    
+    // Don't show grid in 3D mode
+    if (currentProjection === '3d') {
+        console.log('[GRID] No grid in 3D mode');
+        return;
+    }
+    
+    snapGridSize = gridSize;
+    
+    // Determine which plane to use based on projection
+    switch (currentProjection) {
+        case 'xz': currentGridPlane = 'xz'; break; // Top view
+        case 'xy': currentGridPlane = 'xy'; break; // Front view
+        case 'yz': currentGridPlane = 'yz'; break; // Side view
+        default: currentGridPlane = 'xz';
+    }
+    
+    snapGridGroup = createGridOnPlane(currentGridPlane, gridSize, gridExtent);
+    scene.add(snapGridGroup);
+    
+    console.log(`[GRID] Snap grid shown: plane=${currentGridPlane}, size=${gridSize}, extent=${gridExtent}`);
+}
+
+/**
+ * Hide and remove the snap grid
+ */
+export function hideSnapGrid() {
+    if (snapGridGroup) {
+        // Dispose all children
+        snapGridGroup.traverse((child) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+        });
+        scene.remove(snapGridGroup);
+        snapGridGroup = null;
+        console.log('[GRID] Snap grid hidden');
+    }
+}
+
+/**
+ * Set snap-to-grid enabled state
+ * @param {boolean} enabled 
+ */
+export function setSnapToGrid(enabled) {
+    snapToGridEnabled = enabled;
+    console.log(`[GRID] Snap to grid: ${enabled}`);
+}
+
+/**
+ * Set grid size and recreate if visible
+ * @param {number} size 
+ */
+export function setSnapGridSize(size) {
+    snapGridSize = size;
+    if (snapGridGroup) {
+        showSnapGrid(size);
+    }
+}
+
+/**
+ * Snap a position to the grid based on current plane
+ * @param {THREE.Vector3} point - The 3D point to snap
+ * @returns {THREE.Vector3} Snapped position
+ */
+export function snapToGrid(x, y, z) {
+    if (!snapToGridEnabled) {
+        return { x, y, z };
+    }
+    
+    // Snap based on current grid plane
+    switch (currentGridPlane) {
+        case 'xz':
+            return {
+                x: Math.round(x / snapGridSize) * snapGridSize,
+                y: 0,
+                z: Math.round(z / snapGridSize) * snapGridSize
+            };
+        case 'xy':
+            return {
+                x: Math.round(x / snapGridSize) * snapGridSize,
+                y: Math.round(y / snapGridSize) * snapGridSize,
+                z: 0
+            };
+        case 'yz':
+            return {
+                x: 0,
+                y: Math.round(y / snapGridSize) * snapGridSize,
+                z: Math.round(z / snapGridSize) * snapGridSize
+            };
+        default:
+            return { x, y, z };
+    }
+}
+
+/**
+ * Get current grid state
+ */
+export function getSnapGridState() {
+    return {
+        visible: snapGridGroup !== null,
+        size: snapGridSize,
+        snapEnabled: snapToGridEnabled,
+        plane: currentGridPlane,
+        projection: currentProjection
+    };
+}
+
+/**
+ * Get current grid plane for vertex placement
+ */
+export function getCurrentGridPlane() {
+    return currentGridPlane;
+}
+
+// =====================================================
+// CAMERA PROJECTION VIEWS
+// =====================================================
+
+/**
+ * Set camera to a specific projection view
+ * @param {string} projection - 'xy', 'xz', 'yz', or '3d'
+ * @param {boolean} animate - Whether to animate the transition
+ */
+export function setCameraProjection(projection, animate = true) {
+    if (!camera || !controls) {
+        console.warn('[CAMERA] Camera or controls not initialized');
+        return;
+    }
+    
+    const previousProjection = currentProjection;
+    currentProjection = projection;
+    
+    // Calculate scene bounds to determine camera distance
+    let maxDist = 50;
+    const center = new THREE.Vector3(0, 0, 0);
+    
+    if (state.vertexMeshes.length > 0) {
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        
+        for (const mesh of state.vertexMeshes) {
+            const pos = mesh.position;
+            minX = Math.min(minX, pos.x);
+            maxX = Math.max(maxX, pos.x);
+            minY = Math.min(minY, pos.y);
+            maxY = Math.max(maxY, pos.y);
+            minZ = Math.min(minZ, pos.z);
+            maxZ = Math.max(maxZ, pos.z);
+            center.add(pos);
+        }
+        center.divideScalar(state.vertexMeshes.length);
+        
+        const sizeX = maxX - minX;
+        const sizeY = maxY - minY;
+        const sizeZ = maxZ - minZ;
+        maxDist = Math.max(sizeX, sizeY, sizeZ, 50) / 2 + 30;
+    }
+    
+    const distance = Math.max(maxDist * 2, 80);
+    let targetPos;
+    
+    switch (projection) {
+        case 'xy': // Front view (looking at XY plane, camera on +Z axis)
+            targetPos = new THREE.Vector3(center.x, center.y, center.z + distance);
+            break;
+        case 'xz': // Top view (looking down at XZ plane, camera on +Y axis)
+            targetPos = new THREE.Vector3(center.x, center.y + distance, center.z + 0.001); // Small offset to avoid gimbal lock
+            break;
+        case 'yz': // Side view (looking at YZ plane, camera on +X axis)
+            targetPos = new THREE.Vector3(center.x + distance, center.y, center.z);
+            break;
+        case '3d':
+        default:
+            // Isometric-ish 3D view
+            targetPos = new THREE.Vector3(
+                center.x + distance * 0.5,
+                center.y + distance * 0.35,
+                center.z + distance * 0.7
+            );
+            break;
+    }
+    
+    console.log(`[CAMERA] Setting projection: ${projection}, distance: ${distance.toFixed(1)}, center: (${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)})`);
+    
+    // Update grid visibility based on projection
+    // Only update if grid is currently showing
+    if (snapGridGroup) {
+        if (projection === '3d') {
+            hideSnapGrid();
+        } else {
+            // Recreate grid for new plane orientation
+            showSnapGrid(snapGridSize);
+        }
+    }
+    
+    if (animate) {
+        animateCameraTo(targetPos, center.clone());
+    } else {
+        camera.position.copy(targetPos);
+        controls.target.copy(center);
+        camera.lookAt(center);
+        controls.update();
+    }
+}
+
+/**
+ * Animate camera to target position smoothly
+ */
+function animateCameraTo(targetPos, targetLookAt) {
+    const startPos = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const duration = 400; // ms
+    const startTime = performance.now();
+    
+    function animateStep() {
+        const elapsed = performance.now() - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        
+        // Ease out cubic for smooth deceleration
+        const easeT = 1 - Math.pow(1 - t, 3);
+        
+        camera.position.lerpVectors(startPos, targetPos, easeT);
+        controls.target.lerpVectors(startTarget, targetLookAt, easeT);
+        controls.update();
+        
+        if (t < 1) {
+            requestAnimationFrame(animateStep);
+        } else {
+            // Ensure final position is exact
+            camera.position.copy(targetPos);
+            controls.target.copy(targetLookAt);
+            controls.update();
+        }
+    }
+    
+    animateStep();
+}
+
+/**
+ * Get current projection mode
+ */
+export function getCurrentProjection() {
+    return currentProjection;
 }
 
 // =====================================================

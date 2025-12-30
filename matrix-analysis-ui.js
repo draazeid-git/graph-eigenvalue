@@ -9,7 +9,7 @@ import {
     computeCharacteristicPolynomial, formatPolynomial,
     computeEigenvaluesNumerical, computeSkewSymmetricEigenvalues,
     detectTrigEigenvalues, formatTrigForm, subscript,
-    detectClosedForm, analyzeEigenvaluesForClosedForms,
+    detectClosedForm, analyzeEigenvaluesForClosedForms, analyzeEigenvaluesForClosedFormsWithN,
     SpectralEngine, PolynomialFactorizer, analyzeCharacteristicPolynomial
 } from './spectral-analysis.js';
 
@@ -299,7 +299,9 @@ function updateAnalysisDisplays(graphInfo, props) {
         if (mult > 0) uniqueSkewImag.push({ value, multiplicity: mult });
     }
     uniqueSkewImag.sort((a, b) => b.value - a.value);
-    const skewAnalysis = analyzeEigenvaluesForClosedForms(uniqueSkewImag.map(e => e.value));
+    
+    // Use graph size n for proper denominator detection, not the number of unique eigenvalues
+    const skewAnalysis = analyzeEigenvaluesForClosedFormsWithN(uniqueSkewImag.map(e => e.value), n);
     
     const skewAnalyticFormulaDisplay = document.getElementById('skew-analytic-formula-display');
     if (skewAnalyticFormulaDisplay) {
@@ -354,10 +356,26 @@ function updateAnalysisDisplays(graphInfo, props) {
         });
     }
     
-    // Polynomial
+    // Polynomial - show both symmetric and skew-symmetric
     const charPolyDisplay = document.getElementById('char-polynomial-display');
     if (charPolyDisplay) {
-        charPolyDisplay.innerHTML = `<span class="polynomial">${formatPolynomial(charPoly)}</span>`;
+        let skewPolyHtml = '';
+        try {
+            const skewPoly = computeCharacteristicPolynomial(state.adjacencyMatrix);
+            skewPolyHtml = formatPolynomial(skewPoly);
+        } catch (e) {
+            skewPolyHtml = '<span class="hint">Unable to compute</span>';
+        }
+        
+        charPolyDisplay.innerHTML = `
+            <div style="margin-bottom:8px;">
+                <span style="color:#4fc3f7;font-weight:bold;">Symmetric:</span>
+                <span class="polynomial">${formatPolynomial(charPoly)}</span>
+            </div>
+            <div>
+                <span style="color:#ff9800;font-weight:bold;">Skew-Sym:</span>
+                <span class="polynomial">${skewPolyHtml}</span>
+            </div>`;
     }
     
     // Complex plane eigenvalue visualization
@@ -428,26 +446,60 @@ export function showAnalysis() {
             </div>`;
     }
     
-    // Characteristic polynomial
+    // Characteristic polynomials - show BOTH symmetric and skew-symmetric
     const charPolyDisplay = document.getElementById('char-polynomial-display');
     if (charPolyDisplay) {
-        // Try polynomial factorization for additional insight
-        let factorizationHtml = '';
+        // SYMMETRIC characteristic polynomial
+        let symFactorizationHtml = '';
         try {
             const polyAnalysis = analyzeCharacteristicPolynomial(state.symmetricAdjMatrix);
             if (polyAnalysis.factorization && polyAnalysis.factors.length > 0) {
-                factorizationHtml = `<div class="factorization" style="margin-top:8px;font-size:0.9em;color:#888;">
-                    <b>Factorization:</b> p(λ) = ${polyAnalysis.factorization}
+                const methodNote = polyAnalysis.usedMuSubstitution ? 
+                    ' <span style="color:#4fc3f7;font-size:0.8em;">(μ=λ² substitution)</span>' : '';
+                symFactorizationHtml = `<div class="factorization" style="margin-top:4px;font-size:0.85em;color:#888;">
+                    Factorization: p(λ) = ${polyAnalysis.factorization}${methodNote}
                 </div>`;
             }
         } catch (e) {
-            console.warn('Polynomial factorization failed:', e);
+            console.warn('Symmetric polynomial factorization failed:', e);
+        }
+        
+        // SKEW-SYMMETRIC characteristic polynomial
+        let skewPolyHtml = '';
+        let skewFactorizationHtml = '';
+        try {
+            const skewPoly = computeCharacteristicPolynomial(state.adjacencyMatrix);
+            skewPolyHtml = formatPolynomial(skewPoly);
+            
+            const skewPolyAnalysis = analyzeCharacteristicPolynomial(state.adjacencyMatrix);
+            if (skewPolyAnalysis.factorization && skewPolyAnalysis.factors.length > 0) {
+                const methodNote = skewPolyAnalysis.usedMuSubstitution ? 
+                    ' <span style="color:#ff9800;font-size:0.8em;">(μ=λ² substitution)</span>' : '';
+                skewFactorizationHtml = `<div class="factorization" style="margin-top:4px;font-size:0.85em;color:#888;">
+                    Factorization: p(λ) = ${skewPolyAnalysis.factorization}${methodNote}
+                </div>`;
+            }
+        } catch (e) {
+            console.warn('Skew-symmetric polynomial computation failed:', e);
+            skewPolyHtml = '<span class="hint">Unable to compute</span>';
         }
         
         charPolyDisplay.innerHTML = `
-            <div class="polynomial-box">
+            <div class="polynomial-box" style="margin-bottom:12px;">
+                <div style="font-weight:bold;color:#4fc3f7;margin-bottom:4px;">Symmetric Adjacency Matrix:</div>
                 <div class="polynomial">${formatPolynomial(charPoly)}</div>
-                ${factorizationHtml}
+                ${symFactorizationHtml}
+                <div style="font-size:0.8em;color:#666;margin-top:4px;">
+                    → Eigenvalues are <b>real</b> (λ ∈ ℝ)
+                </div>
+            </div>
+            <div class="polynomial-box" style="border-top:1px solid #444;padding-top:12px;">
+                <div style="font-weight:bold;color:#ff9800;margin-bottom:4px;">Skew-Symmetric Adjacency Matrix:</div>
+                <div class="polynomial">${skewPolyHtml}</div>
+                ${skewFactorizationHtml}
+                <div style="font-size:0.8em;color:#666;margin-top:4px;">
+                    → Eigenvalues are <b>purely imaginary</b> (λ = ±iω)
+                </div>
             </div>`;
     }
     
@@ -492,10 +544,12 @@ export function showAnalysis() {
                 const mult = count > 1 ? ` (×${count})` : '';
                 uniqueParts.push(`${form}${mult}`);
             }
+            const methodNote = polyFactorResult.usedMuSubstitution ? 
+                '<br><span style="font-size:0.75em;color:#666;">Found via μ=λ² substitution</span>' : '';
             analyticFormulaDisplay.innerHTML = `<div class="formula-box factored">
                 <div class="formula" style="color:#4fc3f7;">λ: ${uniqueParts.join(', ')}</div>
                 <div class="formula-note" style="font-size:0.85em;color:#888;margin-top:4px;">
-                    <b>p(λ) = ${polyFactorResult.factorization}</b>
+                    <b>p(λ) = ${polyFactorResult.factorization}</b>${methodNote}
                 </div>
             </div>`;
         } else if (symAnalysis.allAnalytic) {

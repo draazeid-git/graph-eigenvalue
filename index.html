@@ -160,7 +160,15 @@
                         <option value="general-ladder">General Ladder/Truss (m×n)</option>
                         <option value="cuboid">3D Cuboid (m×n×k)</option>
                         <option value="torus">Torus Grid</option>
-                        <option value="five-bar">Five-Bar Mechanism (Fig.3, 14 nodes)</option>
+                        <option value="n-bar-mechanism">n-Bar Mechanism (select n)</option>
+                        <option value="four-bar">4-Bar Mechanism (9 nodes)</option>
+                        <option value="five-bar">5-Bar Mechanism (14 nodes)</option>
+                        <option value="six-bar">6-Bar Mechanism (19 nodes)</option>
+                        <option value="seven-bar">7-Bar Mechanism (24 nodes)</option>
+                        <option value="n-link-pendulum">n-Link Pendulum (select n)</option>
+                        <option value="one-link-pendulum">1-Link Pendulum (6 nodes)</option>
+                        <option value="two-link-pendulum">2-Link Pendulum (11 nodes)</option>
+                        <option value="three-link-pendulum">3-Link Pendulum (16 nodes)</option>
                         <option value="ladder">Simple Ladder (Lₙ)</option>
                         <option value="circular-ladder">Circular Ladder</option>
                         <option value="mobius-ladder">Möbius Ladder</option>
@@ -271,6 +279,20 @@
                         <label>k (jump):</label>
                         <input id="gp-k" type="number" value="2" min="1" max="9">
                     </div>
+                    <div id="param-n-bar" class="input-row" style="display: none;">
+                        <label>Bars (m):</label>
+                        <input id="n-bar-m" type="number" value="5" min="4" max="12">
+                        <span style="font-size: 10px; color: #888; margin-left: 8px;">
+                            (4-bar=9 nodes, 5-bar=14, 6-bar=19...)
+                        </span>
+                    </div>
+                    <div id="param-n-link" class="input-row" style="display: none;">
+                        <label>Links (n):</label>
+                        <input id="n-link-num" type="number" value="2" min="1" max="10">
+                        <span style="font-size: 10px; color: #888; margin-left: 8px;">
+                            (1-link=6, 2-link=11, 3-link=16...)
+                        </span>
+                    </div>
                     <div id="param-lollipop" class="input-row" style="display: none;">
                         <label>Clique (m):</label>
                         <input id="lollipop-m" type="number" value="4" min="3" max="10">
@@ -292,7 +314,7 @@
                 </div>
                 
                 <label class="checkbox-label">
-                    <input type="checkbox" id="skew-symmetric-checkbox">
+                    <input type="checkbox" id="skew-symmetric-checkbox" checked>
                     <span>Skew-symmetric (unidirectional)</span>
                 </label>
                 <button id="apply-template-btn" class="purple">Apply Template</button>
@@ -346,14 +368,58 @@
                             <input type="checkbox" id="test-family-hypercube" checked> Hypercube
                         </label>
                         <label style="flex: 1; font-size: 11px;">
-                            <input type="checkbox" id="test-family-fivebar"> 5-Bar
+                            <input type="checkbox" id="test-family-ladder" checked> Ladder
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-prism" checked> Prism
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-friendship" checked> Friendship
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-book" checked> Book
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-fan" checked> Fan
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-platonic" checked> Platonic
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-crown"> Crown
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-gear"> Gear
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-helm"> Helm
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-mobius"> Möbius
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-turan"> Turán
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-fivebar"> n-Bar
+                        </label>
+                        <label style="flex: 1; font-size: 11px;">
+                            <input type="checkbox" id="test-family-pendulum"> Pendulum
                         </label>
                     </div>
                     <div style="display: flex; gap: 6px; align-items: center; font-size: 11px;">
                         <span>n:</span>
-                        <input type="number" id="test-n-min" value="4" min="3" max="20" style="width: 45px;">
+                        <input type="number" id="test-n-min" value="4" min="3" max="20" style="width: 50px;">
                         <span>to</span>
-                        <input type="number" id="test-n-max" value="10" min="3" max="30" style="width: 45px;">
+                        <input type="number" id="test-n-max" value="10" min="3" max="30" style="width: 60px;">
                     </div>
                 </div>
                 
@@ -392,8 +458,18 @@
                     <p class="hint" id="hint-add" style="display:none;"><b>Add Edge:</b> Click source vertex, then target</p>
                     <p class="hint" id="hint-delete" style="display:none;"><b>Delete Edge:</b> Click on edge arrow</p>
                     <p class="hint" id="hint-drag" style="display:none;"><b>Drag:</b> Click and drag vertices</p>
-                    <p class="hint" id="hint-add-vertex" style="display:none;"><b>Add Node:</b> Click empty space to place</p>
+                    <p class="hint" id="hint-add-vertex" style="display:none;"><b>Add Node:</b> Click on grid to place. Use Top/Front/Side view for 2D placement.</p>
                     <p class="hint" id="hint-delete-vertex" style="display:none;"><b>Delete Node:</b> Click on vertex to remove</p>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <h4>📷 View Projection</h4>
+                <div class="button-row projection-buttons">
+                    <button id="project-xz-btn" class="small projection-btn" title="Top view (XZ plane)">Top</button>
+                    <button id="project-xy-btn" class="small projection-btn" title="Front view (XY plane)">Front</button>
+                    <button id="project-yz-btn" class="small projection-btn" title="Side view (YZ plane)">Side</button>
+                    <button id="project-3d-btn" class="small projection-btn active" title="3D perspective view">3D</button>
                 </div>
             </div>
             
@@ -412,6 +488,20 @@
                 <div class="button-row">
                     <button id="arrange-grid-btn" class="small">📐 Grid</button>
                     <button id="arrange-circle-btn" class="small">◯ Circle</button>
+                </div>
+            </div>
+            
+            <div id="snap-grid-controls" class="control-group" style="display: none;">
+                <h4>📐 Snap Grid</h4>
+                <div class="input-row">
+                    <label>Grid Size:</label>
+                    <input id="snap-grid-size" type="number" value="5" min="1" max="20" style="width: 60px;">
+                </div>
+                <div class="input-row">
+                    <label>
+                        <input type="checkbox" id="snap-to-grid-checkbox" checked>
+                        Snap to Grid
+                    </label>
                 </div>
             </div>
             
@@ -590,10 +680,10 @@
                 <details class="collapsible" open>
                     <summary>Numerical Values <span class="eigenmode-play-hint">(click to animate)</span></summary>
                     <div id="eigenvalues-display" class="eigenvalues-list"></div>
-                    <button id="reset-eigenmode-btn" class="action-btn secondary" style="margin-top: 8px; width: 100%;">
-                        ⏹ Reset Graph Shape
-                    </button>
                 </details>
+                <button id="reset-eigenmode-btn" class="secondary" style="margin-top: 8px; width: 100%;">
+                    ⏹ Restore Original Graph Shape
+                </button>
             </div>
             
             <div class="control-group">
@@ -1056,12 +1146,22 @@
                     <button id="universe-reset-view" class="secondary small">Reset View</button>
                     <button id="universe-zoom-fit" class="info small">Fit All</button>
                 </div>
+                
+                <h5 style="margin-top: 12px;">📷 View Projection</h5>
+                <div class="button-row projection-buttons">
+                    <button id="universe-project-xz-btn" class="small projection-btn" title="Top view (XZ plane)">Top</button>
+                    <button id="universe-project-xy-btn" class="small projection-btn" title="Front view (XY plane)">Front</button>
+                    <button id="universe-project-yz-btn" class="small projection-btn" title="Side view (YZ plane)">Side</button>
+                    <button id="universe-project-3d-btn" class="small projection-btn active" title="3D perspective view">3D</button>
+                </div>
+                
                 <p class="hint" style="margin-top: 10px;">
                     <strong>Mouse Controls:</strong><br>
-                    • Drag to rotate view<br>
-                    • Scroll to zoom in/out<br>
-                    • Right-drag to pan<br>
-                    • Double-click node to load graph
+                    • Drag: rotate (3D) / pan (2D views)<br>
+                    • Shift+drag or middle-drag: pan<br>
+                    • Scroll: zoom<br>
+                    • Right-drag: rubber band zoom<br>
+                    • Double-click: load graph
                 </p>
             </div>
             

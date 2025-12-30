@@ -23,7 +23,9 @@ import {
     computeSkewSymmetricEigenvalues,
     detectClosedForm,
     analyzeEigenvaluesForClosedForms,
-    subscript
+    subscript,
+    PolynomialFactorizer,
+    SpectralEngine
 } from './spectral-analysis.js';
 
 import {
@@ -46,6 +48,8 @@ import {
     clearDatabase,
     initializeForN
 } from './graph-database.js';
+
+import { ChebyshevFactorizer } from './chebyshev-factorizer.js';
 
 // =====================================================
 // SEARCH STATE
@@ -224,27 +228,197 @@ function computeCharacteristicPolynomial(matrix) {
 // =====================================================
 
 /**
- * Analyze eigenvalues for closed forms
- * Returns: { analytic: boolean, eigenvalues: [], reason?: string }
+ * Analyze eigenvalues for closed forms using both algebraic and numerical methods
+ * Returns: { analytic: boolean, eigenvalues: [], reason?: string, method?: string }
+ * 
+ * Strategy:
+ * 1. First try algebraic factorization of characteristic polynomial
+ *    - This works well for mechanism/pendulum families with even/odd power structure
+ * 2. Fall back to numerical eigenvalues + pattern matching if factorization fails
  */
 function analyzeGraphEigenvalues(n, edges) {
     const matrix = makeSkewSymmetricMatrix(n, edges);
+    
+    // ===== Method 1: Algebraic Factorization =====
+    // Compute exact characteristic polynomial and factor it
+    try {
+        const coeffs = computeCharacteristicPolynomial(matrix);
+        
+        // Try enhanced factorization with μ = λ² substitution
+        const factorResult = PolynomialFactorizer.factorWithMuSubstitution(coeffs);
+        
+        if (factorResult.allExact && factorResult.roots.length > 0) {
+            // Convert roots to eigenvalue format
+            const eigenvalues = [];
+            const seen = new Map();
+            
+            for (const root of factorResult.roots) {
+                // Skip imaginary eigenvalues for our purposes
+                if (root.isImaginary) continue;
+                
+                const key = root.value.toFixed(9);
+                if (seen.has(key)) {
+                    seen.get(key).multiplicity++;
+                } else {
+                    seen.set(key, {
+                        value: root.value,
+                        form: root.form,
+                        isNice: root.exact,
+                        multiplicity: 1
+                    });
+                }
+            }
+            
+            eigenvalues.push(...seen.values());
+            eigenvalues.sort((a, b) => b.value - a.value);
+            
+            // Verify we got the right count
+            const totalMult = eigenvalues.reduce((s, e) => s + e.multiplicity, 0);
+            if (totalMult === n) {
+                return {
+                    analytic: true,
+                    eigenvalues: eigenvalues,
+                    reason: null,
+                    method: 'algebraic_factorization',
+                    factorization: factorResult.factorization,
+                    usedMuSubstitution: factorResult.usedMuSubstitution
+                };
+            }
+        }
+        
+        // Check if factorization found most roots exactly
+        const exactRoots = factorResult.roots.filter(r => r.exact && !r.isImaginary);
+        const nonExactRoots = factorResult.roots.filter(r => !r.exact && !r.isImaginary);
+        
+        if (exactRoots.length > 0 && nonExactRoots.length <= 2) {
+            // Partial success - try pattern matching on remaining roots
+            let allGood = true;
+            const enhancedRoots = [...exactRoots];
+            
+            for (const root of nonExactRoots) {
+                const form = SpectralEngine.identifyClosedForm(root.value, n);
+                if (form.isExact) {
+                    enhancedRoots.push({ value: root.value, form: form.formula, exact: true });
+                } else {
+                    allGood = false;
+                    break;
+                }
+            }
+            
+            if (allGood) {
+                // Build eigenvalue list from enhanced roots
+                const eigenvalues = [];
+                const seen = new Map();
+                
+                for (const root of enhancedRoots) {
+                    const key = root.value.toFixed(9);
+                    if (seen.has(key)) {
+                        seen.get(key).multiplicity++;
+                    } else {
+                        seen.set(key, {
+                            value: root.value,
+                            form: root.form,
+                            isNice: true,
+                            multiplicity: 1
+                        });
+                    }
+                }
+                
+                eigenvalues.push(...seen.values());
+                eigenvalues.sort((a, b) => b.value - a.value);
+                
+                const totalMult = eigenvalues.reduce((s, e) => s + e.multiplicity, 0);
+                if (totalMult === n) {
+                    return {
+                        analytic: true,
+                        eigenvalues: eigenvalues,
+                        reason: null,
+                        method: 'algebraic_with_pattern_matching',
+                        factorization: factorResult.factorization
+                    };
+                }
+            }
+        }
+    } catch (e) {
+        // Factorization failed, continue to Chebyshev method
+        console.log(`Algebraic factorization failed for n=${n}: ${e.message}`);
+    }
+    
+    // ===== Method 2: Chebyshev Polynomial Factorization =====
+    // Try to identify eigenvalues as 2cos(kπ/m) patterns
+    try {
+        const coeffs = computeCharacteristicPolynomial(matrix);
+        const chebyResult = ChebyshevFactorizer.factorize(coeffs, {
+            maxDenominator: Math.max(50, 2 * n + 10),
+            tolerance: 1e-8
+        });
+        
+        if (chebyResult.success && chebyResult.roots.length > 0) {
+            // Count how many roots are exact
+            const exactCount = chebyResult.roots.filter(r => r.exact).length;
+            const totalCount = chebyResult.roots.length;
+            
+            // Accept if all roots are exact, or if most are exact (>80%)
+            if (exactCount === totalCount || exactCount >= totalCount * 0.8) {
+                const eigenvalues = [];
+                const seen = new Map();
+                
+                for (const root of chebyResult.roots) {
+                    if (root.isImaginary) continue;
+                    
+                    const key = root.value.toFixed(9);
+                    if (seen.has(key)) {
+                        seen.get(key).multiplicity++;
+                    } else {
+                        seen.set(key, {
+                            value: root.value,
+                            form: root.form,
+                            isNice: root.exact,
+                            multiplicity: 1,
+                            chebyshev: root.chebyshev
+                        });
+                    }
+                }
+                
+                eigenvalues.push(...seen.values());
+                eigenvalues.sort((a, b) => b.value - a.value);
+                
+                const totalMult = eigenvalues.reduce((s, e) => s + e.multiplicity, 0);
+                if (totalMult === n) {
+                    return {
+                        analytic: exactCount === totalCount,
+                        eigenvalues: eigenvalues,
+                        reason: exactCount === totalCount ? null : 'partial_chebyshev',
+                        method: 'chebyshev_factorization',
+                        chebyshevParameter: chebyResult.chebyshevParameter,
+                        exactRatio: exactCount / totalCount
+                    };
+                }
+            }
+        }
+    } catch (e) {
+        // Chebyshev factorization failed, continue to numerical method
+        console.log(`Chebyshev factorization failed for n=${n}: ${e.message}`);
+    }
+    
+    // ===== Method 3: Numerical Eigenvalues + Pattern Matching =====
     const skewEigs = computeSkewSymmetricEigenvalues(matrix);
     
     if (!skewEigs || skewEigs.length === 0) {
-        return { analytic: false, reason: 'no_eigenvalues' };
+        return { analytic: false, reason: 'no_eigenvalues', method: 'numerical' };
     }
     
     // Get imaginary parts (skew-symmetric has pure imaginary eigenvalues)
     const imagParts = skewEigs.map(e => e.imag);
     
-    // Analyze for closed forms
+    // Analyze for closed forms using pattern matching
     const analysis = analyzeEigenvaluesForClosedForms(imagParts);
     
     return {
         analytic: analysis.allAnalytic,
         eigenvalues: analysis.eigenvalues,
-        reason: analysis.allAnalytic ? null : 'not_closed_form'
+        reason: analysis.allAnalytic ? null : 'not_closed_form',
+        method: 'numerical_pattern_matching'
     };
 }
 

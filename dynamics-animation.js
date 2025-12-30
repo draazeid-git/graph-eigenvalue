@@ -1466,11 +1466,17 @@ export function resetDynamicsVisuals() {
     cayleyMatrix = null;
     rodriguesCache = null;
     
-    // Reset vertex colors AND scale
+    // Reset vertex colors, scale, AND power rings
     for (let i = 0; i < n; i++) {
         state.vertexMeshes[i].material.color.setHSL(0.5, 0, 0.4);
         state.vertexMeshes[i].material.emissive.setHSL(0.5, 0, 0.1);
         state.vertexMeshes[i].scale.setScalar(1.0); // Reset to base size
+        
+        // Hide power ring
+        const ring = state.vertexMeshes[i].userData.powerRing;
+        if (ring && ring.material) {
+            ring.material.opacity = 0;
+        }
     }
     
     // Reset arrows

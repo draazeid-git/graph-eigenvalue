@@ -88,11 +88,26 @@ export class SpectralEngine {
         denominators.add(2 * n);       // Half-angle forms
         denominators.add(n - 1);       // Wheel rim eigenvalues
         
-        // Medium priority: common small denominators
-        [2, 3, 4, 5, 6, 8, 10, 12].forEach(d => denominators.add(d));
+        // Mechanism and Pendulum specific denominators
+        // For n-bar mechanism: cells = (n-4)/5, try denominators related to cells
+        // For n-link pendulum: links = (n-1)/5, try denominators 2*links+1
+        if ((n - 4) % 5 === 0) {
+            const cells = (n - 4) / 5;
+            denominators.add(2 * cells + 3);   // Mechanism pattern
+            denominators.add(4 * cells + 2);   // Extended pattern
+        }
+        if ((n - 1) % 5 === 0) {
+            const links = (n - 1) / 5;
+            denominators.add(2 * links + 1);   // Pendulum Chebyshev parameter (e.g., 7 for 3-link)
+            denominators.add(2 * links + 3);   // Extended pattern
+            denominators.add(4 * links + 1);   // Larger pendulums
+        }
         
-        // Lower priority: extended range
-        for (let d = 2; d <= Math.min(30, 2 * n + 5); d++) {
+        // Medium priority: common small denominators
+        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 20].forEach(d => denominators.add(d));
+        
+        // Lower priority: extended range for larger graphs
+        for (let d = 2; d <= Math.min(50, 2 * n + 10); d++) {
             denominators.add(d);
         }
         
@@ -287,6 +302,53 @@ export class SpectralEngine {
                 }
                 if (base > sqrtRad && Math.abs(absVal - (base - sqrtRad)) < tolerance) {
                     return { type: 'radical_sum', formula: `${sign}(${base}-√${rad})`, isExact: true };
+                }
+            }
+        }
+        
+        // ===== MECHANISM/PENDULUM EIGENVALUE FORMS =====
+        // For eigenvalues > 2, try forms like √((a ± √b)/c)
+        // These arise from solving quartic factors in λ² via quadratic formula
+        
+        if (absVal > 2) {
+            // Try √((a + √b)/c) forms
+            for (let a = 3; a <= 30; a++) {
+                for (let b = 1; b <= 100; b++) {
+                    const sqrtB = Math.sqrt(b);
+                    for (let c = 1; c <= 4; c++) {
+                        // √((a + √b)/c)
+                        if (a + sqrtB > 0) {
+                            const val = Math.sqrt((a + sqrtB) / c);
+                            if (Math.abs(absVal - val) < tolerance) {
+                                const formula = c === 1 ? 
+                                    `${sign}√(${a}+√${b})` :
+                                    `${sign}√((${a}+√${b})/${c})`;
+                                return { type: 'nested_radical_div', formula, isExact: true, a, b, c, plusMinus: '+' };
+                            }
+                        }
+                        
+                        // √((a - √b)/c) when a > √b
+                        if (a > sqrtB) {
+                            const val = Math.sqrt((a - sqrtB) / c);
+                            if (Math.abs(absVal - val) < tolerance) {
+                                const formula = c === 1 ?
+                                    `${sign}√(${a}-√${b})` :
+                                    `${sign}√((${a}-√${b})/${c})`;
+                                return { type: 'nested_radical_div', formula, isExact: true, a, b, c, plusMinus: '-' };
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Try 2cosh(kπ/m) forms for large eigenvalues (hyperbolic analog of Chebyshev)
+            // 2cosh(x) = e^x + e^{-x}, relates to certain infinite graphs
+            for (let m = 2; m <= 20; m++) {
+                for (let k = 1; k < m; k++) {
+                    const cosh2 = 2 * Math.cosh(k * Math.PI / m);
+                    if (Math.abs(absVal - cosh2) < tolerance) {
+                        return { type: 'hyperbolic', formula: `${sign}2cosh(${k}π/${m})`, isExact: true, k, m };
+                    }
                 }
             }
         }
@@ -1138,6 +1200,408 @@ export class PolynomialFactorizer {
         const supers = '⁰¹²³⁴⁵⁶⁷⁸⁹';
         return String(n).split('').map(d => supers[parseInt(d)] || d).join('');
     }
+    
+    // =====================================================
+    // ENHANCED FACTORIZATION FOR MECHANISM/PENDULUM FAMILIES
+    // =====================================================
+    
+    /**
+     * Check if polynomial has only odd powers of λ (skew-symmetric property)
+     * Such polynomials arise from skew-symmetric adjacency matrices
+     */
+    static hasOnlyOddPowers(coeffs) {
+        for (let i = 0; i < coeffs.length; i += 2) {
+            if (Math.abs(coeffs[i]) > 1e-10) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Extract coefficients for odd powers only
+     * For p(λ) = c₁λⁿ + c₃λⁿ⁻² + ... (only odd powers)
+     * Returns coefficients for q(μ) where μ = λ², so p(λ) = λ·q(λ²)
+     */
+    static extractOddPowerCoeffs(coeffs) {
+        const result = [];
+        for (let i = 1; i < coeffs.length; i += 2) {
+            result.push(coeffs[i]);
+        }
+        return result;
+    }
+    
+    /**
+     * Advanced factorization using μ = λ² substitution
+     * This handles polynomials with only even or only odd powers
+     * which arise from symmetric/skew-symmetric graph matrices
+     * 
+     * Method:
+     * 1. Factor out λ^k (zeros)
+     * 2. Substitute μ = λ² to halve the effective degree
+     * 3. Find rational roots of the μ-polynomial
+     * 4. Factor μ-polynomial into quadratics using quadratic formula
+     * 5. Convert back: each μ-root gives ±√μ as λ-eigenvalues
+     * 
+     * @param {number[]} coeffs - Polynomial coefficients
+     * @returns {Object} Enhanced factorization result
+     */
+    static factorWithMuSubstitution(coeffs) {
+        if (!coeffs || coeffs.length === 0) {
+            return { factors: [], roots: [], factorization: '1', allExact: true };
+        }
+        
+        const n = coeffs.length - 1;
+        const factors = [];
+        const roots = [];
+        let remaining = [...coeffs];
+        
+        // Step 1: Factor out powers of λ (zero eigenvalues)
+        const zeroResult = this.factorOutZeros(remaining);
+        remaining = zeroResult.remaining;
+        if (zeroResult.multiplicity > 0) {
+            factors.push({ type: 'power', base: 'λ', exp: zeroResult.multiplicity });
+            for (let i = 0; i < zeroResult.multiplicity; i++) {
+                roots.push({ value: 0, form: '0', exact: true });
+            }
+        }
+        
+        // Step 2: Check if polynomial has only even or only odd powers
+        const onlyEven = this.hasOnlyEvenPowers(remaining);
+        const onlyOdd = this.hasOnlyOddPowers(remaining);
+        
+        if (onlyOdd && remaining.length > 1) {
+            // Factor out one more λ and convert to even powers
+            // p(λ) = λ·q(λ²) where q has only even powers in λ
+            factors.push({ type: 'power', base: 'λ', exp: 1 });
+            roots.push({ value: 0, form: '0', exact: true });
+            remaining = this.extractOddPowerCoeffs(remaining);
+        }
+        
+        if ((onlyEven || onlyOdd) && remaining.length > 1) {
+            // Convert to μ-polynomial where μ = λ²
+            let muCoeffs = onlyOdd ? remaining : this.extractEvenPowerCoeffs(remaining);
+            
+            // Apply iterative factorization to the μ-polynomial
+            const muResult = this.factorMuPolynomial(muCoeffs);
+            
+            // Convert μ-roots back to λ-eigenvalues
+            for (const muRoot of muResult.roots) {
+                if (muRoot.exact) {
+                    if (muRoot.value > 0) {
+                        const lambdaRoots = this.muRootToLambdaRoots(muRoot);
+                        roots.push(...lambdaRoots);
+                        factors.push({
+                            type: 'mu_factor',
+                            muValue: muRoot.value,
+                            muForm: muRoot.form,
+                            lambdaForm: `(λ²-${muRoot.form})`
+                        });
+                    } else if (muRoot.value === 0) {
+                        // μ = 0 means λ = 0 (already counted)
+                    } else {
+                        // μ < 0 means complex λ (imaginary)
+                        const imag = Math.sqrt(-muRoot.value);
+                        roots.push({ value: imag, form: `i√${-muRoot.value}`, exact: true, isImaginary: true });
+                        roots.push({ value: -imag, form: `-i√${-muRoot.value}`, exact: true, isImaginary: true });
+                    }
+                } else {
+                    // Non-exact μ root - try pattern matching on √μ
+                    if (muRoot.value > 0) {
+                        const lambda = Math.sqrt(muRoot.value);
+                        const form = SpectralEngine.identifyClosedForm(lambda, n);
+                        roots.push({ value: lambda, form: form.isExact ? form.formula : lambda.toFixed(6), exact: form.isExact });
+                        roots.push({ value: -lambda, form: form.isExact ? `-${form.formula}` : (-lambda).toFixed(6), exact: form.isExact });
+                    }
+                }
+            }
+            
+            // Add remaining μ-factors that weren't fully factored
+            for (const f of muResult.factors) {
+                if (f.type === 'quadratic_in_mu') {
+                    factors.push({
+                        type: 'quartic_in_lambda',
+                        a: f.a,
+                        b: f.b,
+                        form: f.form
+                    });
+                }
+            }
+            
+            remaining = muResult.remaining;
+        } else {
+            // Fall back to standard factorization for mixed-power polynomials
+            const intResult = this.factorIntegerRoots(remaining);
+            remaining = intResult.remaining;
+            for (const root of intResult.roots) {
+                factors.push({ type: 'linear', root: root.value });
+                roots.push(root);
+            }
+            
+            const quadResult = this.factorQuadraticRadicals(remaining);
+            remaining = quadResult.remaining;
+            factors.push(...quadResult.factors);
+            roots.push(...quadResult.roots);
+            
+            const biquadResult = this.factorBiquadratics(remaining);
+            remaining = biquadResult.remaining;
+            factors.push(...biquadResult.factors);
+            roots.push(...biquadResult.roots);
+        }
+        
+        // Handle any remaining polynomial numerically
+        if (remaining.length > 1 && !this.isConstant(remaining)) {
+            const numRoots = this.findRootsNumerically(remaining);
+            for (const val of numRoots) {
+                const form = SpectralEngine.identifyClosedForm(val, n);
+                roots.push({
+                    value: val,
+                    form: form.isExact ? form.formula : val.toFixed(6),
+                    exact: form.isExact
+                });
+            }
+            if (numRoots.length > 0) {
+                factors.push({ type: 'remainder', degree: remaining.length - 1, coeffs: remaining });
+            }
+        }
+        
+        // Build factorization string
+        const factorization = this.buildFactorizationString(factors, coeffs);
+        
+        // Sort roots by absolute value (descending)
+        roots.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+        
+        return {
+            factors,
+            roots,
+            factorization,
+            allExact: roots.every(r => r.exact),
+            originalDegree: n,
+            usedMuSubstitution: onlyEven || onlyOdd
+        };
+    }
+    
+    /**
+     * Factor a polynomial in μ (where μ = λ²)
+     * This is the core of the mechanism/pendulum factorization
+     * 
+     * Steps:
+     * 1. Find rational roots using Rational Root Theorem
+     * 2. Factor remaining polynomial into irreducible quadratics
+     * 3. Solve quadratics to get closed-form μ values
+     */
+    static factorMuPolynomial(muCoeffs) {
+        const factors = [];
+        const roots = [];
+        let remaining = [...muCoeffs];
+        
+        // Step 1: Factor out μ^k (zeros) - these correspond to additional λ = 0
+        const zeroResult = this.factorOutZeros(remaining);
+        remaining = zeroResult.remaining;
+        for (let i = 0; i < zeroResult.multiplicity; i++) {
+            roots.push({ value: 0, form: '0', exact: true });
+        }
+        
+        // Step 2: Find rational/integer roots of the μ-polynomial
+        const intResult = this.factorIntegerRoots(remaining);
+        remaining = intResult.remaining;
+        for (const root of intResult.roots) {
+            roots.push(root);
+        }
+        
+        // Step 3: Factor remaining into irreducible quadratics
+        // For a polynomial of degree 2k, try to find k quadratic factors
+        while (remaining.length >= 3) {
+            const quadResult = this.findQuadraticFactorInMu(remaining);
+            if (quadResult.found) {
+                remaining = quadResult.remaining;
+                factors.push(quadResult.factor);
+                roots.push(...quadResult.roots);
+            } else {
+                break;
+            }
+        }
+        
+        // If degree 2 remains, solve directly
+        if (remaining.length === 3) {
+            const a = remaining[0];
+            const b = remaining[1];
+            const c = remaining[2];
+            const disc = b * b - 4 * a * c;
+            
+            if (disc >= 0) {
+                const sqrtDisc = Math.sqrt(disc);
+                const mu1 = (-b + sqrtDisc) / (2 * a);
+                const mu2 = (-b - sqrtDisc) / (2 * a);
+                
+                const discInt = Math.round(disc);
+                const isDiscExact = Math.abs(disc - discInt) < 1e-9;
+                const bInt = Math.round(-b / a);
+                
+                if (isDiscExact) {
+                    const sqrtDiscInt = Math.round(sqrtDisc);
+                    const isPerfectSquare = Math.abs(sqrtDisc - sqrtDiscInt) < 1e-9;
+                    
+                    if (isPerfectSquare) {
+                        roots.push({ value: mu1, form: `${(bInt + sqrtDiscInt) / 2}`, exact: true });
+                        roots.push({ value: mu2, form: `${(bInt - sqrtDiscInt) / 2}`, exact: true });
+                    } else {
+                        roots.push({ value: mu1, form: `(${bInt}+√${discInt})/2`, exact: true });
+                        roots.push({ value: mu2, form: `(${bInt}-√${discInt})/2`, exact: true });
+                    }
+                    factors.push({
+                        type: 'quadratic_in_mu',
+                        a: -b / a,
+                        b: c / a,
+                        form: `(μ²${b >= 0 ? '-' : '+'}${Math.abs(Math.round(b/a))}μ+${Math.round(c/a)})`
+                    });
+                } else {
+                    roots.push({ value: mu1, form: mu1.toFixed(6), exact: false });
+                    roots.push({ value: mu2, form: mu2.toFixed(6), exact: false });
+                }
+                remaining = [1];
+            }
+        }
+        
+        return { factors, roots, remaining };
+    }
+    
+    /**
+     * Find a quadratic factor of the μ-polynomial
+     * Uses the fact that if μ² + pμ + q divides the polynomial,
+     * we can find p, q by comparing coefficients
+     */
+    static findQuadraticFactorInMu(coeffs) {
+        if (coeffs.length < 3) {
+            return { found: false };
+        }
+        
+        const degree = coeffs.length - 1;
+        
+        // Try integer values for the sum and product of roots
+        // If μ₁ + μ₂ = -p and μ₁·μ₂ = q, then factor is μ² + pμ + q
+        for (let p = -30; p <= 30; p++) {
+            for (let q = -100; q <= 100; q++) {
+                // Try to divide by μ² + pμ + q
+                const quotient = this.divideByQuadraticMu(coeffs, p, q);
+                if (quotient) {
+                    // Found a factor! Solve for roots
+                    const disc = p * p - 4 * q;
+                    const roots = [];
+                    
+                    if (disc >= 0) {
+                        const sqrtDisc = Math.sqrt(disc);
+                        const mu1 = (-p + sqrtDisc) / 2;
+                        const mu2 = (-p - sqrtDisc) / 2;
+                        
+                        const discInt = Math.round(disc);
+                        const isDiscExact = Math.abs(disc - discInt) < 1e-9;
+                        
+                        if (isDiscExact) {
+                            const sqrtDiscInt = Math.round(sqrtDisc);
+                            const isPerfectSquare = Math.abs(sqrtDisc - sqrtDiscInt) < 1e-9;
+                            
+                            if (isPerfectSquare) {
+                                roots.push({ value: mu1, form: String((-p + sqrtDiscInt) / 2), exact: true });
+                                if (Math.abs(mu1 - mu2) > 1e-9) {
+                                    roots.push({ value: mu2, form: String((-p - sqrtDiscInt) / 2), exact: true });
+                                }
+                            } else {
+                                roots.push({ value: mu1, form: `(${-p}+√${discInt})/2`, exact: true });
+                                if (Math.abs(mu1 - mu2) > 1e-9) {
+                                    roots.push({ value: mu2, form: `(${-p}-√${discInt})/2`, exact: true });
+                                }
+                            }
+                        } else {
+                            roots.push({ value: mu1, form: mu1.toFixed(6), exact: false });
+                            roots.push({ value: mu2, form: mu2.toFixed(6), exact: false });
+                        }
+                    }
+                    
+                    return {
+                        found: true,
+                        remaining: quotient,
+                        factor: {
+                            type: 'quadratic_in_mu',
+                            a: -p,
+                            b: q,
+                            form: `(μ²${p >= 0 ? '+' : ''}${p}μ+${q})`
+                        },
+                        roots
+                    };
+                }
+            }
+        }
+        
+        return { found: false };
+    }
+    
+    /**
+     * Divide polynomial by (μ² + pμ + q)
+     * Returns quotient if exact division, null otherwise
+     */
+    static divideByQuadraticMu(coeffs, p, q) {
+        const n = coeffs.length - 1;
+        if (n < 2) return null;
+        
+        const result = new Array(n - 1).fill(0);
+        result[0] = coeffs[0];
+        
+        if (n >= 2) {
+            result[1] = coeffs[1] - p * result[0];
+        }
+        
+        for (let i = 2; i < n - 1; i++) {
+            result[i] = coeffs[i] - p * result[i - 1] - q * result[i - 2];
+        }
+        
+        // Check remainders
+        const rem1 = coeffs[n - 1] - p * result[n - 3] - q * result[n - 4];
+        const rem2 = coeffs[n] - q * result[n - 3];
+        
+        if (Math.abs(rem1) > 1e-6 || Math.abs(rem2) > 1e-6) {
+            return null;
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Convert a μ-root to λ-roots
+     * If μ = k, then λ = ±√k
+     */
+    static muRootToLambdaRoots(muRoot) {
+        const roots = [];
+        
+        if (muRoot.value > 0) {
+            const lambda = Math.sqrt(muRoot.value);
+            
+            // Try to simplify the form
+            const muVal = muRoot.value;
+            const muForm = muRoot.form;
+            
+            // Check if μ is a perfect square integer
+            const sqrtMuVal = Math.sqrt(muVal);
+            if (Math.abs(sqrtMuVal - Math.round(sqrtMuVal)) < 1e-9) {
+                const intVal = Math.round(sqrtMuVal);
+                roots.push({ value: lambda, form: String(intVal), exact: true });
+                roots.push({ value: -lambda, form: String(-intVal), exact: true });
+            } else if (muRoot.exact) {
+                // μ is exact but not a perfect square
+                // Form: ±√(muForm)
+                roots.push({ value: lambda, form: `√(${muForm})`, exact: true });
+                roots.push({ value: -lambda, form: `-√(${muForm})`, exact: true });
+            } else {
+                roots.push({ value: lambda, form: lambda.toFixed(6), exact: false });
+                roots.push({ value: -lambda, form: (-lambda).toFixed(6), exact: false });
+            }
+        } else if (muRoot.value === 0) {
+            roots.push({ value: 0, form: '0', exact: true });
+        }
+        // Note: negative μ gives imaginary λ, handled elsewhere
+        
+        return roots;
+    }
 }
 
 /**
@@ -1151,8 +1615,22 @@ export function analyzeCharacteristicPolynomial(matrix) {
     // Step 1: Compute exact characteristic polynomial using SFF
     const coeffs = SpectralEngine.computeExactPolynomial(matrix);
     
-    // Step 2: Factor the polynomial symbolically
-    const factorization = PolynomialFactorizer.factorCharacteristicPolynomial(coeffs);
+    // Step 2: Try enhanced factorization with μ = λ² substitution first
+    // This works better for mechanism/pendulum families
+    let factorization = PolynomialFactorizer.factorWithMuSubstitution(coeffs);
+    
+    // If enhanced factorization didn't find all exact roots, try standard factorization
+    if (!factorization.allExact) {
+        const standardFactor = PolynomialFactorizer.factorCharacteristicPolynomial(coeffs);
+        
+        // Use whichever found more exact roots
+        const enhancedExactCount = factorization.roots.filter(r => r.exact).length;
+        const standardExactCount = standardFactor.roots.filter(r => r.exact).length;
+        
+        if (standardExactCount > enhancedExactCount) {
+            factorization = standardFactor;
+        }
+    }
     
     // Step 3: Build result with all information
     return {
@@ -1170,6 +1648,7 @@ export function analyzeCharacteristicPolynomial(matrix) {
             isExact: r.exact
         })),
         allExact: factorization.allExact,
+        usedMuSubstitution: factorization.usedMuSubstitution,
         
         // Summary
         summary: {
@@ -2926,6 +3405,25 @@ export function analyzeEigenvaluesForClosedForms(eigenvalues, tolerance = 1e-6) 
     const analysis = SpectralEngine.analyzeSpectrum(eigenvalues, n, tolerance);
     
     // Convert to legacy format for backward compatibility
+    return {
+        allAnalytic: analysis.allAnalytic,
+        eigenvalues: analysis.eigenvalues.map(e => ({
+            value: e.value,
+            multiplicity: e.multiplicity,
+            form: e.form,
+            isNice: e.isExact,
+            type: e.type
+        }))
+    };
+}
+
+/**
+ * Analyze eigenvalues with explicit graph size n for proper denominator detection
+ * Use this when the number of eigenvalues differs from graph size (e.g., unique values only)
+ */
+export function analyzeEigenvaluesForClosedFormsWithN(eigenvalues, graphSize, tolerance = 1e-6) {
+    const analysis = SpectralEngine.analyzeSpectrum(eigenvalues, graphSize, tolerance);
+    
     return {
         allAnalytic: analysis.allAnalytic,
         eigenvalues: analysis.eigenvalues.map(e => ({

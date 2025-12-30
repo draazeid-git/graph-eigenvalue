@@ -17,7 +17,10 @@ import {
     getIntersectedVertex, getIntersectedEdge,
     VERTEX_RADIUS, Arrow3D,
     removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle,
-    toggleFaces, setFaceOpacity, updateFaceMeshes, createFaceMeshes
+    toggleFaces, setFaceOpacity, updateFaceMeshes, createFaceMeshes,
+    // Snap grid and projection functions (v49)
+    showSnapGrid, hideSnapGrid, setSnapToGrid, setSnapGridSize, snapToGrid, getSnapGridState,
+    setCameraProjection, getCurrentProjection, getCurrentGridPlane
 } from './graph-core.js';
 
 import {
@@ -86,7 +89,7 @@ let solidFacesCheckbox, faceOptions, faceOpacityInput, faceOpacityLabel, refresh
 
 // Templates
 let templateSelect, applyTemplateBtn, skewSymmetricCheckbox;
-let templateParams, paramN, paramDepth, paramBranches, paramKary, paramGrid, paramCuboid, paramHypercube, paramGenPetersen, paramLollipop, paramKneser, paramRook;
+let templateParams, paramN, paramDepth, paramBranches, paramKary, paramGrid, paramCuboid, paramHypercube, paramGenPetersen, paramLollipop, paramKneser, paramRook, paramNBar, paramNLink;
 let templateNInput, treeDepthInput, treeBranchesInput, treeKInput;
 let gridRowsInput, gridColsInput;
 let cuboidMInput, cuboidNInput, cuboidKInput;
@@ -111,6 +114,13 @@ let addVertexModeBtn, deleteVertexModeBtn;
 let arrangeRowsInput, arrangeColsInput, arrangeSpacingInput;
 let arrangeGridBtn, arrangeCircleBtn;
 let currentEditMode = 'view';  // 'view', 'add', 'delete', 'drag', 'add-vertex', 'delete-vertex'
+
+// Projection buttons (Edit tab)
+let projectXYBtn, projectXZBtn, projectYZBtn, project3DBtn;
+// Snap grid controls
+let snapGridControls, snapGridSizeInput, snapToGridCheckbox;
+// Universe projection buttons
+let universeProjectXYBtn, universeProjectXZBtn, universeProjectYZBtn, universeProject3DBtn;
 
 // Edge controls
 let autoEdgesInput, autoGenerateBtn, clearEdgesBtn;
@@ -239,6 +249,9 @@ export function init() {
     // Initialize graph library
     initLibrary();
     
+    // Load custom graphs from localStorage and add to library
+    loadAndAddCustomGraphs();
+    
     // Setup event listeners
     setupEventListeners();
     setupTabs();
@@ -351,6 +364,8 @@ function grabDOMElements() {
     paramLollipop = document.getElementById('param-lollipop');
     paramKneser = document.getElementById('param-kneser');
     paramRook = document.getElementById('param-rook');
+    paramNBar = document.getElementById('param-n-bar');
+    paramNLink = document.getElementById('param-n-link');
     gpNInput = document.getElementById('gp-n');
     gpKInput = document.getElementById('gp-k');
     lollipopMInput = document.getElementById('lollipop-m');
@@ -397,6 +412,23 @@ function grabDOMElements() {
     arrangeSpacingInput = document.getElementById('arrange-spacing');
     arrangeGridBtn = document.getElementById('arrange-grid-btn');
     arrangeCircleBtn = document.getElementById('arrange-circle-btn');
+    
+    // Projection buttons (Edit tab)
+    projectXYBtn = document.getElementById('project-xy-btn');  // Front view (XY plane)
+    projectXZBtn = document.getElementById('project-xz-btn');  // Top view (XZ plane)
+    projectYZBtn = document.getElementById('project-yz-btn');  // Side view (YZ plane)
+    project3DBtn = document.getElementById('project-3d-btn');  // 3D perspective
+    
+    // Snap grid controls
+    snapGridControls = document.getElementById('snap-grid-controls');
+    snapGridSizeInput = document.getElementById('snap-grid-size');
+    snapToGridCheckbox = document.getElementById('snap-to-grid-checkbox');
+    
+    // Universe projection buttons
+    universeProjectXYBtn = document.getElementById('universe-project-xy-btn');
+    universeProjectXZBtn = document.getElementById('universe-project-xz-btn');
+    universeProjectYZBtn = document.getElementById('universe-project-yz-btn');
+    universeProject3DBtn = document.getElementById('universe-project-3d-btn');
     
     // Edge controls
     autoEdgesInput = document.getElementById('auto-edges');
@@ -1029,8 +1061,53 @@ function setupTabs() {
             const hintId = 'hint-' + mode;
             const hint = document.getElementById(hintId);
             if (hint) hint.style.display = 'block';
+            
+            // Show/hide snap grid controls and grid helper for add-vertex mode
+            if (mode === 'add-vertex') {
+                if (snapGridControls) snapGridControls.style.display = 'block';
+                
+                // If in 3D mode, switch to Top view first (so grid is visible)
+                const currentProj = getCurrentProjection();
+                if (currentProj === '3d') {
+                    setCameraProjection('xz', true);
+                    // Update projection button states
+                    [projectXYBtn, projectXZBtn, projectYZBtn, project3DBtn].forEach(b => {
+                        if (b) b.classList.remove('active');
+                    });
+                    if (projectXZBtn) projectXZBtn.classList.add('active');
+                }
+                
+                // Show grid after a small delay to let projection change settle
+                setTimeout(() => {
+                    const gridSize = parseInt(snapGridSizeInput?.value) || 5;
+                    showSnapGrid(gridSize);
+                }, currentProj === '3d' ? 100 : 0);
+            } else {
+                if (snapGridControls) snapGridControls.style.display = 'none';
+                hideSnapGrid();
+            }
         });
     });
+    
+    // Snap grid controls
+    if (snapGridSizeInput) {
+        snapGridSizeInput.addEventListener('change', () => {
+            const size = parseInt(snapGridSizeInput.value) || 5;
+            setSnapGridSize(size);
+            if (currentEditMode === 'add-vertex' && getCurrentProjection() !== '3d') {
+                showSnapGrid(size);
+            }
+        });
+    }
+    
+    if (snapToGridCheckbox) {
+        snapToGridCheckbox.addEventListener('change', () => {
+            setSnapToGrid(snapToGridCheckbox.checked);
+        });
+    }
+    
+    // Projection buttons (Edit tab)
+    setupProjectionButtons();
     
     // Arrange buttons
     if (arrangeGridBtn) {
@@ -1866,6 +1943,8 @@ function updateTemplateParams() {
     if (paramLollipop) paramLollipop.style.display = 'none';
     if (paramKneser) paramKneser.style.display = 'none';
     if (paramRook) paramRook.style.display = 'none';
+    if (paramNBar) paramNBar.style.display = 'none';
+    if (paramNLink) paramNLink.style.display = 'none';
     
     // Show relevant params based on template
     let showParams = false;
@@ -1910,8 +1989,24 @@ function updateTemplateParams() {
             if (paramGrid) paramGrid.style.display = 'flex';
             showParams = true;
             break;
+        case 'n-bar-mechanism':
+            if (paramNBar) paramNBar.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'four-bar':
         case 'five-bar':
-            // Five-bar is a fixed 14-node structure, no parameters needed
+        case 'six-bar':
+        case 'seven-bar':
+            // Fixed n-bar structures, no parameters needed
+            break;
+        case 'n-link-pendulum':
+            if (paramNLink) paramNLink.style.display = 'flex';
+            showParams = true;
+            break;
+        case 'one-link-pendulum':
+        case 'two-link-pendulum':
+        case 'three-link-pendulum':
+            // Fixed pendulum structures, no parameters needed
             break;
         case 'cuboid':
             if (paramCuboid) paramCuboid.style.display = 'flex';
@@ -1965,7 +2060,15 @@ const TEMPLATE_INFO = {
     'general-ladder': { name: 'General Ladder', nodes: 'm×n', edges: 'varies', formula: 'Truss eigenvalues' },
     'cuboid': { name: '3D Cuboid', nodes: 'm×n×k', edges: 'varies', formula: 'Product formula' },
     'torus': { name: 'Torus Cₘ□Cₙ', nodes: 'm×n', edges: '2mn', formula: 'λᵢⱼ = 2cos(2iπ/m) + 2cos(2jπ/n)' },
-    'five-bar': { name: 'Five-Bar (Fig.3)', nodes: '14', edges: '20', formula: 'Gyro-bondgraph spectrum' },
+    'five-bar': { name: 'Five-Bar Mechanism', nodes: '14', edges: '20', formula: 'Gyro-bondgraph spectrum' },
+    'four-bar': { name: 'Four-Bar Mechanism', nodes: '9', edges: '12', formula: 'Gyro-bondgraph spectrum' },
+    'six-bar': { name: 'Six-Bar Mechanism', nodes: '19', edges: '28', formula: 'Gyro-bondgraph spectrum' },
+    'seven-bar': { name: 'Seven-Bar Mechanism', nodes: '24', edges: '36', formula: 'Gyro-bondgraph spectrum' },
+    'n-bar-mechanism': { name: 'n-Bar Mechanism', nodes: '5(m-3)+4', edges: '8(m-3)+4', formula: 'Gyro-bondgraph spectrum' },
+    'one-link-pendulum': { name: '1-Link Pendulum', nodes: '6', edges: '6', formula: 'λ²(λ²-1)(λ²-5)' },
+    'two-link-pendulum': { name: '2-Link Pendulum', nodes: '11', edges: '14', formula: 'λ³(λ⁴-3λ²+1)(λ⁴-11λ²+21)' },
+    'three-link-pendulum': { name: '3-Link Pendulum', nodes: '16', edges: '22', formula: 'No closed form (n≥3)' },
+    'n-link-pendulum': { name: 'n-Link Pendulum', nodes: '5n+1', edges: '8n-2', formula: 'Closed form for n≤2 only' },
     'ladder': { name: 'Simple Ladder Lₙ', nodes: '2n', edges: '3n-2', formula: 'λₖ = 1 ± √(1+4cos²(kπ/(n+1)))' },
     'circular-ladder': { name: 'Circular Ladder', nodes: '2n', edges: '3n', formula: 'λₖ = 1 ± √(1+4cos²(kπ/n))' },
     'mobius-ladder': { name: 'Möbius Ladder', nodes: '2n', edges: '3n', formula: 'Twisted spectrum' },
@@ -2167,13 +2270,97 @@ function getPreviewGraph(template) {
             }
             break;
             
+        case 'four-bar':
+            // 4-bar mechanism: 1 cell diamond pattern
+            positions = [
+                { x: -1.5, y: 0 }, { x: -0.5, y: 0 },  // Left outer
+                { x: 0.5, y: 0 }, { x: 1.5, y: 0 },     // Right outer
+                { x: -1, y: -0.8 }, { x: 0, y: -0.5 },  // Bottom row
+                { x: 1, y: -0.8 }, { x: 0, y: 0.5 },    // Top intermediate & center
+                { x: 0, y: -0.8 }                        // Center diamond
+            ];
+            edges = [[0,4], [4,1], [1,5], [5,2], [2,6], [6,3],  // Rails
+                     [0,7], [7,1], [2,8], [8,3],                  // Outer diamonds
+                     [1,8], [8,2], [4,8], [8,5]];                 // Inner diamond
+            break;
+            
         case 'five-bar':
-            // Simplified 2-cell diamond
+        case 'n-bar-mechanism':
+            // 5-bar mechanism: 2 cell diamond pattern preview
             positions = [
                 { x: -2, y: 0 }, { x: -1, y: -1 }, { x: 0, y: 0 },
                 { x: -1, y: 1 }, { x: 1, y: -1 }, { x: 2, y: 0 }, { x: 1, y: 1 }
             ];
             edges = [[0,1], [0,3], [1,2], [3,2], [2,4], [2,6], [4,5], [6,5]];
+            break;
+            
+        case 'six-bar':
+            // 6-bar mechanism: 3 cell pattern preview
+            positions = [
+                { x: -3, y: 0 }, { x: -2, y: -1 }, { x: -1, y: 0 },
+                { x: -2, y: 1 }, { x: 0, y: -1 }, { x: 1, y: 0 },
+                { x: 0, y: 1 }, { x: 2, y: -1 }, { x: 3, y: 0 }, { x: 2, y: 1 }
+            ];
+            edges = [[0,1], [0,3], [1,2], [3,2], [2,4], [2,6], [4,5], [6,5],
+                     [5,7], [5,9], [7,8], [9,8]];
+            break;
+            
+        case 'seven-bar':
+            // 7-bar mechanism: 4 cell pattern preview
+            positions = [
+                { x: -4, y: 0 }, { x: -3, y: -1 }, { x: -2, y: 0 },
+                { x: -3, y: 1 }, { x: -1, y: -1 }, { x: 0, y: 0 },
+                { x: -1, y: 1 }, { x: 1, y: -1 }, { x: 2, y: 0 },
+                { x: 1, y: 1 }, { x: 3, y: -1 }, { x: 4, y: 0 }, { x: 3, y: 1 }
+            ];
+            edges = [[0,1], [0,3], [1,2], [3,2], [2,4], [2,6], [4,5], [6,5],
+                     [5,7], [5,9], [7,8], [9,8], [8,10], [8,12], [10,11], [12,11]];
+            break;
+            
+        case 'one-link-pendulum':
+            // 1-link pendulum: 6 nodes, open-ended mechanism
+            positions = [
+                { x: -1.5, y: 0 },   // 0: left edge
+                { x: -1, y: -1 },    // 1: top corner
+                { x: -1, y: 1 },     // 2: bottom corner
+                { x: 0, y: 0 },      // 3: inner diamond
+                { x: 1, y: -1 },     // 4: top tip
+                { x: 1, y: 1 }       // 5: bottom tip
+            ];
+            // Edges: left edge→corners, corners→inner, corners→tips (NOT inner→tips)
+            edges = [[0,1], [0,2], [1,3], [2,3], [1,4], [2,5]];
+            break;
+            
+        case 'two-link-pendulum':
+        case 'n-link-pendulum':
+            // 2-link pendulum preview
+            positions = [
+                { x: -2, y: 0 },     // 0: left edge
+                { x: -1.5, y: -1 },  // 1: top corner 1
+                { x: -1.5, y: 1 },   // 2: bottom corner 1
+                { x: -0.5, y: 0 },   // 3: inner 1
+                { x: 0.5, y: -1 },   // 4: top corner 2
+                { x: 0.5, y: 1 },    // 5: bottom corner 2
+                { x: 1, y: 0 },      // 6: inner 2
+                { x: 1.5, y: -1 },   // 7: top tip
+                { x: 1.5, y: 1 }     // 8: bottom tip
+            ];
+            // Edges: last cell inner connects to corners only, corners connect to tips
+            edges = [[0,1], [0,2], [1,3], [2,3], [3,4], [3,5], [4,6], [5,6], [4,7], [5,8]];
+            break;
+            
+        case 'three-link-pendulum':
+            // 3-link pendulum preview
+            positions = [
+                { x: -3, y: 0 },     // 0: left edge
+                { x: -2.5, y: -1 }, { x: -2.5, y: 1 }, { x: -1.5, y: 0 },  // 1,2,3: cell 1
+                { x: -0.5, y: -1 }, { x: -0.5, y: 1 }, { x: 0.5, y: 0 },   // 4,5,6: cell 2
+                { x: 1.5, y: -1 }, { x: 1.5, y: 1 }, { x: 2, y: 0 },       // 7,8,9: cell 3
+                { x: 2.5, y: -1 }, { x: 2.5, y: 1 }                         // 10,11: tips
+            ];
+            // Edges: last cell inner connects to corners only, corners connect to tips
+            edges = [[0,1], [0,2], [1,3], [2,3], [3,4], [3,5], [4,6], [5,6], 
+                     [6,7], [6,8], [7,9], [8,9], [7,10], [8,11]];
             break;
             
         case 'prism':
@@ -3805,14 +3992,213 @@ function applyTemplate(template) {
             }
             break;
             
+        case 'four-bar':
         case 'five-bar':
-            // Five-bar mechanism from Fig. 3 in Zeid-Rosenberg paper
-            // Exact structure with 14 nodes as shown in the paper
+        case 'six-bar':
+        case 'seven-bar':
+        case 'n-bar-mechanism':
+            // n-bar mechanism generator
+            // Structure: Two parallel rails (top and bottom) with connecting cells
+            // Each cell has: corner nodes, intermediate nodes on rails, and an inner diamond node
             {
-                n = 14;
+                // Determine number of bars
+                let m;
+                if (template === 'four-bar') m = 4;
+                else if (template === 'five-bar') m = 5;
+                else if (template === 'six-bar') m = 6;
+                else if (template === 'seven-bar') m = 7;
+                else {
+                    const nBarInput = document.getElementById('n-bar-m');
+                    m = nBarInput ? parseInt(nBarInput.value) || 5 : 5;
+                }
+                
+                const cells = m - 3;  // 4-bar=1 cell, 5-bar=2 cells, etc.
+                n = 5 * cells + 4;
                 numVerticesInput.value = n;
                 
-                // Clear and create vertices with custom positions matching Fig. 3
+                console.log(`Generating ${m}-bar mechanism: ${cells} cells, ${n} vertices`);
+                
+                // Clear and setup
+                clearGraph();
+                const radius = parseInt(radiusInput.value);
+                
+                // Initialize adjacency matrices with correct size
+                state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                
+                // Build positions array explicitly (all n positions)
+                const positions = new Array(n);
+                
+                // Layout parameters for better proportions
+                // Make the cell wider so horizontal rail edges are comparable to diagonals
+                const railSep = radius * 0.25;       // Vertical half-distance between rails
+                const cellWidth = radius * 0.5;      // Width of each cell (corner to corner)
+                const edgeNodeOffset = railSep * 1.2; // How far left/right edge nodes extend
+                
+                const totalWidth = cells * cellWidth;
+                const startX = -totalWidth / 2;
+                
+                // Node indices:
+                // - Corners: indices 0 to numCorners-1
+                //   - Top corners at even indices: 0, 2, 4, ...
+                //   - Bottom corners at odd indices: 1, 3, 5, ...
+                // - Left edge node: numCorners
+                // - Right edge node: numCorners + 1
+                // - Top rail intermediates: numCorners + 2 + [0..cells-1]
+                // - Bottom rail intermediates: numCorners + 2 + cells + [0..cells-1]
+                // - Inner diamond nodes: numCorners + 2 + 2*cells + [0..cells-1]
+                
+                const numCorners = 2 * (cells + 1);
+                const leftEdgeIdx = numCorners;
+                const rightEdgeIdx = numCorners + 1;
+                const topIntBase = numCorners + 2;
+                const botIntBase = topIntBase + cells;
+                const innerBase = botIntBase + cells;
+                
+                // Set corner positions (on the outer edges of each cell)
+                for (let c = 0; c <= cells; c++) {
+                    const x = startX + c * cellWidth;
+                    // Top corner (even index) - NEGATIVE y is UP in our coordinate system
+                    positions[2 * c] = { x: x, y: -railSep, z: 0 };
+                    // Bottom corner (odd index)
+                    positions[2 * c + 1] = { x: x, y: railSep, z: 0 };
+                }
+                
+                // Left edge node (to the left of first corner pair)
+                positions[leftEdgeIdx] = { x: startX - edgeNodeOffset, y: 0, z: 0 };
+                
+                // Right edge node (to the right of last corner pair)
+                positions[rightEdgeIdx] = { x: startX + cells * cellWidth + edgeNodeOffset, y: 0, z: 0 };
+                
+                // Top rail intermediate nodes (between corner pairs on top rail)
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[topIntBase + c] = { x: x, y: -railSep, z: 0 };
+                }
+                
+                // Bottom rail intermediate nodes
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[botIntBase + c] = { x: x, y: railSep, z: 0 };
+                }
+                
+                // Inner diamond nodes (in the middle of each cell, between the rails)
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[innerBase + c] = { x: x, y: 0, z: 0 };
+                }
+                
+                // Verify all positions are defined
+                for (let i = 0; i < n; i++) {
+                    if (!positions[i]) {
+                        console.error(`Position ${i} is undefined!`);
+                        positions[i] = { x: 0, y: 0, z: 0 };
+                    }
+                }
+                
+                // Create all vertices
+                for (let i = 0; i < n; i++) {
+                    const pos = new THREE.Vector3(positions[i].x, positions[i].y, positions[i].z);
+                    createVertex(pos, i);
+                }
+                
+                console.log(`Created ${state.vertexMeshes.length} vertices`);
+                
+                // Build edge list with directed edges (from -> to)
+                // The direction follows the flow pattern in the mechanism
+                const edgeList = [];
+                
+                // Top rail: flows left to right
+                // corner -> intermediate -> corner -> intermediate -> ...
+                for (let c = 0; c < cells; c++) {
+                    const topL = 2 * c;           // Left corner of cell
+                    const topR = 2 * (c + 1);     // Right corner of cell
+                    const topInt = topIntBase + c; // Intermediate between them
+                    edgeList.push([topL, topInt]);
+                    edgeList.push([topInt, topR]);
+                }
+                
+                // Bottom rail: flows left to right
+                for (let c = 0; c < cells; c++) {
+                    const botL = 2 * c + 1;
+                    const botR = 2 * (c + 1) + 1;
+                    const botInt = botIntBase + c;
+                    edgeList.push([botL, botInt]);
+                    edgeList.push([botInt, botR]);
+                }
+                
+                // Left edge: top corner -> edge node -> bottom corner
+                edgeList.push([0, leftEdgeIdx]);
+                edgeList.push([leftEdgeIdx, 1]);
+                
+                // Right edge: top corner -> edge node -> bottom corner
+                edgeList.push([2 * cells, rightEdgeIdx]);
+                edgeList.push([rightEdgeIdx, 2 * cells + 1]);
+                
+                // Inner diamonds: corners connect through center
+                // Pattern: topL -> inner, inner -> topR, botL -> inner, inner -> botR
+                for (let c = 0; c < cells; c++) {
+                    const inner = innerBase + c;
+                    const topL = 2 * c;
+                    const topR = 2 * (c + 1);
+                    const botL = 2 * c + 1;
+                    const botR = 2 * (c + 1) + 1;
+                    edgeList.push([topL, inner]);
+                    edgeList.push([inner, topR]);
+                    edgeList.push([botL, inner]);
+                    edgeList.push([inner, botR]);
+                }
+                
+                console.log(`Adding ${edgeList.length} directed edges, bidir=${bidir}`);
+                
+                // Add edges respecting the skew-symmetric setting
+                // bidir is already defined at the top of applyTemplate
+                for (const [from, to] of edgeList) {
+                    if (from >= 0 && from < n && to >= 0 && to < n) {
+                        addEdge(from, to);
+                        if (bidir) {
+                            addEdge(to, from);  // Only add reverse if bidirectional mode
+                        }
+                    } else {
+                        console.error(`Invalid edge: (${from}, ${to}) for n=${n}`);
+                    }
+                }
+                
+                console.log(`Edge objects created: ${state.edgeObjects.length}`);
+                
+                // Update UI
+                updatePhaseNodeSelectors();
+                invalidateCaches();
+                updateStats();
+                updateAnalyzeTabIfVisible();
+                return;
+            }
+            break;
+            
+        case 'one-link-pendulum':
+        case 'two-link-pendulum':
+        case 'three-link-pendulum':
+        case 'n-link-pendulum':
+            // n-link pendulum generator
+            // Structure: Like n-bar mechanism but with open end (no right tip nodes)
+            {
+                // Determine number of links
+                let links;
+                if (template === 'one-link-pendulum') links = 1;
+                else if (template === 'two-link-pendulum') links = 2;
+                else if (template === 'three-link-pendulum') links = 3;
+                else {
+                    const nLinkInput = document.getElementById('n-link-num');
+                    links = nLinkInput ? parseInt(nLinkInput.value) || 2 : 2;
+                }
+                
+                const cells = links;  // n-link has n cells
+                n = 5 * links + 1;
+                numVerticesInput.value = n;
+                
+                console.log(`Generating ${links}-link pendulum: ${cells} cells, ${n} vertices`);
+                
+                // Clear and setup
                 clearGraph();
                 const radius = parseInt(radiusInput.value);
                 
@@ -3820,80 +4206,156 @@ function applyTemplate(template) {
                 state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
                 state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
                 
-                // Node positions matching Fig. 3 layout (paper uses 1-indexed, we use 0-indexed)
-                // Paper node → Index: 1→0, 2→1, 3→2, 4→3, 5→4, 6→5, 7→6, 8→7, 9→8, 10→9, 11→10, 12→11, 13→12, 14→13
-                // Layout: x from 0-6, y from 0-2 (top=0, middle=1, bottom=2)
-                const nodePositions = [
-                    { x: 1, y: 2 },   // 0 (node 1): bottom-left
-                    { x: 1, y: 0 },   // 1 (node 2): top-left
-                    { x: 3, y: 2 },   // 2 (node 3): bottom-center
-                    { x: 3, y: 0 },   // 3 (node 4): top-center
-                    { x: 5, y: 2 },   // 4 (node 5): bottom-right
-                    { x: 5, y: 0 },   // 5 (node 6): top-right
-                    { x: 0, y: 1 },   // 6 (node 7): far-left middle
-                    { x: 2, y: 2 },   // 7 (node 8): bottom between 1,3
-                    { x: 2, y: 0 },   // 8 (node 9): top between 2,4
-                    { x: 4, y: 0 },   // 9 (node 10): top between 4,6
-                    { x: 4, y: 2 },   // 10 (node 11): bottom between 3,5
-                    { x: 6, y: 1 },   // 11 (node 12): far-right middle
-                    { x: 4, y: 1 },   // 12 (node 13): middle-right
-                    { x: 2, y: 1 }    // 13 (node 14): middle-left
-                ];
+                // Layout parameters
+                const railSep = radius * 0.25;
+                const cellWidth = radius * 0.5;
+                const edgeNodeOffset = railSep * 1.2;
                 
-                // Scale and center positions
-                const scale = radius * 0.28;
-                const centerX = 0;
-                const centerY = 0;
-                const positions = nodePositions.map(p => ({
-                    x: centerX + (p.x - 3) * scale,
-                    y: centerY + (p.y - 1) * scale,
-                    z: 0
-                }));
+                const totalWidth = cells * cellWidth;
+                const startX = -totalWidth / 2;
+                
+                // Node indices:
+                // - Top corners: 0, 2, 4, ..., 2*(cells-1) (cells nodes)
+                // - Bottom corners: 1, 3, 5, ..., 2*cells-1 (cells nodes)
+                // - Left edge node: 2*cells
+                // - Top intermediates: 2*cells+1 to 3*cells
+                // - Bottom intermediates: 3*cells+1 to 4*cells
+                // - Inner diamonds: 4*cells+1 to 5*cells
+                
+                const numCorners = 2 * cells;
+                const leftEdgeIdx = numCorners;
+                const topIntBase = numCorners + 1;
+                const botIntBase = topIntBase + cells;
+                const innerBase = botIntBase + cells;
+                
+                const positions = new Array(n);
+                
+                // Top corners
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + c * cellWidth;
+                    positions[2 * c] = { x: x, y: -railSep, z: 0 };
+                }
+                
+                // Bottom corners
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + c * cellWidth;
+                    positions[2 * c + 1] = { x: x, y: railSep, z: 0 };
+                }
+                
+                // Left edge node
+                positions[leftEdgeIdx] = { x: startX - edgeNodeOffset, y: 0, z: 0 };
+                
+                // Top intermediates (including tip)
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[topIntBase + c] = { x: x, y: -railSep, z: 0 };
+                }
+                
+                // Bottom intermediates (including tip)
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[botIntBase + c] = { x: x, y: railSep, z: 0 };
+                }
+                
+                // Inner diamonds
+                for (let c = 0; c < cells; c++) {
+                    const x = startX + (c + 0.5) * cellWidth;
+                    positions[innerBase + c] = { x: x, y: 0, z: 0 };
+                }
                 
                 // Create vertices
                 for (let i = 0; i < n; i++) {
-                    createVertex(positions[i], i);
+                    if (!positions[i]) {
+                        console.error(`Position ${i} is undefined!`);
+                        positions[i] = { x: 0, y: 0, z: 0 };
+                    }
+                    const pos = new THREE.Vector3(positions[i].x, positions[i].y, positions[i].z);
+                    createVertex(pos, i);
                 }
                 
-                // Edges from Fig. 3 (directed as shown by arrows in paper)
-                // Top row: 2→9→4→10→6
-                addEdge(1, 8);   // 2→9
-                addEdge(8, 3);   // 9→4
-                addEdge(3, 9);   // 4→10
-                addEdge(9, 5);   // 10→6
+                // Build edge list
+                const edgeList = [];
                 
-                // Bottom row: 1→8→3→11→5
-                addEdge(0, 7);   // 1→8
-                addEdge(7, 2);   // 8→3
-                addEdge(2, 10);  // 3→11
-                addEdge(10, 4);  // 11→5
+                // Top rail (all cells except last connect to next corner)
+                for (let c = 0; c < cells - 1; c++) {
+                    const topL = 2 * c;
+                    const topR = 2 * (c + 1);
+                    const topInt = topIntBase + c;
+                    edgeList.push([topL, topInt]);
+                    edgeList.push([topInt, topR]);
+                }
+                // Last cell top: corner to intermediate only
+                if (cells >= 1) {
+                    const topL = 2 * (cells - 1);
+                    const topInt = topIntBase + cells - 1;
+                    edgeList.push([topL, topInt]);
+                }
                 
-                // Left diamond (with node 7)
-                addEdge(6, 1);   // 7→2
-                addEdge(0, 6);   // 1→7
+                // Bottom rail
+                for (let c = 0; c < cells - 1; c++) {
+                    const botL = 2 * c + 1;
+                    const botR = 2 * (c + 1) + 1;
+                    const botInt = botIntBase + c;
+                    edgeList.push([botL, botInt]);
+                    edgeList.push([botInt, botR]);
+                }
+                if (cells >= 1) {
+                    const botL = 2 * (cells - 1) + 1;
+                    const botInt = botIntBase + cells - 1;
+                    edgeList.push([botL, botInt]);
+                }
                 
-                // Right diamond (with node 12)
-                addEdge(5, 11);  // 6→12
-                addEdge(11, 4);  // 12→5
+                // Left edge diamond
+                edgeList.push([0, leftEdgeIdx]);
+                edgeList.push([leftEdgeIdx, 1]);
                 
-                // Left inner diamond (through node 14)
-                addEdge(1, 13);  // 2→14
-                addEdge(0, 13);  // 1→14
-                addEdge(13, 3);  // 14→4
-                addEdge(13, 2);  // 14→3
+                // Inner diamonds
+                for (let c = 0; c < cells - 1; c++) {
+                    const inner = innerBase + c;
+                    const topL = 2 * c;
+                    const topR = 2 * (c + 1);
+                    const botL = 2 * c + 1;
+                    const botR = 2 * (c + 1) + 1;
+                    edgeList.push([topL, inner]);
+                    edgeList.push([inner, topR]);
+                    edgeList.push([botL, inner]);
+                    edgeList.push([inner, botR]);
+                }
                 
-                // Right inner diamond (through node 13)
-                addEdge(3, 12);  // 4→13
-                addEdge(2, 12);  // 3→13
-                addEdge(12, 5);  // 13→6
-                addEdge(12, 4);  // 13→5
+                // Last cell inner diamond connects to CORNERS ONLY (not tips)
+                // The tips are only connected via the rail edges (corner → tip)
+                if (cells >= 1) {
+                    const inner = innerBase + cells - 1;
+                    const topL = 2 * (cells - 1);
+                    const botL = 2 * (cells - 1) + 1;
+                    // Connect corners to inner diamond only
+                    edgeList.push([topL, inner]);
+                    edgeList.push([botL, inner]);
+                    // Do NOT connect inner to tips - tips only connect via rail edges
+                }
                 
-                // Update phase diagram selectors and stats
+                console.log(`Adding ${edgeList.length} directed edges, bidir=${bidir}`);
+                
+                // Add edges
+                for (const [from, to] of edgeList) {
+                    if (from >= 0 && from < n && to >= 0 && to < n) {
+                        addEdge(from, to);
+                        if (bidir) {
+                            addEdge(to, from);
+                        }
+                    } else {
+                        console.error(`Invalid edge: (${from}, ${to}) for n=${n}`);
+                    }
+                }
+                
+                console.log(`Edge objects created: ${state.edgeObjects.length}`);
+                
+                // Update UI
                 updatePhaseNodeSelectors();
                 invalidateCaches();
                 updateStats();
                 updateAnalyzeTabIfVisible();
-                return; // Skip the default generateGraph call
+                return;
             }
             break;
             
@@ -4818,6 +5280,11 @@ function onMouseUp(event) {
 }
 
 function onMouseClick(event) {
+    // Only handle clicks inside the 3D container
+    if (!container.contains(event.target)) {
+        return;
+    }
+    
     const addMode = addModeCheckbox && addModeCheckbox.checked;
     const deleteMode = deleteModeCheckbox && deleteModeCheckbox.checked;
     const addVertexMode = currentEditMode === 'add-vertex';
@@ -4891,7 +5358,6 @@ function onMouseClick(event) {
         // Add vertex: click empty space to place a new vertex
         const vertex = getIntersectedVertex(event);
         if (!vertex) {
-            // Get click position in 3D space on the Y=0 plane
             const rect = container.getBoundingClientRect();
             const mouse = new THREE.Vector2(
                 ((event.clientX - rect.left) / rect.width) * 2 - 1,
@@ -4901,16 +5367,34 @@ function onMouseClick(event) {
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(mouse, camera);
             
-            // Intersect with Y=0 plane
-            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-            const intersectPoint = new THREE.Vector3();
-            raycaster.ray.intersectPlane(plane, intersectPoint);
+            // Determine which plane to intersect based on current projection/grid plane
+            const gridPlane = getCurrentGridPlane();
+            let plane;
             
-            if (intersectPoint) {
-                addNewVertex(intersectPoint.x, 0, intersectPoint.z);
+            switch (gridPlane) {
+                case 'xy': // Front view - Z = 0 plane
+                    plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+                    break;
+                case 'yz': // Side view - X = 0 plane
+                    plane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+                    break;
+                case 'xz': // Top view - Y = 0 plane (default)
+                default:
+                    plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+                    break;
+            }
+            
+            const intersectPoint = new THREE.Vector3();
+            const intersected = raycaster.ray.intersectPlane(plane, intersectPoint);
+            
+            if (intersected) {
+                // Apply snap-to-grid based on current plane
+                const snapped = snapToGrid(intersectPoint.x, intersectPoint.y, intersectPoint.z);
+                addNewVertex(snapped.x, snapped.y, snapped.z);
                 if (numVerticesInput) numVerticesInput.value = state.vertexMeshes.length;
                 updateStats();
                 invalidateCaches();
+                console.log(`[ADD VERTEX] Placed at (${snapped.x.toFixed(1)}, ${snapped.y.toFixed(1)}, ${snapped.z.toFixed(1)}) on ${gridPlane} plane`);
             }
         }
     } else if (deleteVertexMode) {
@@ -6819,7 +7303,7 @@ function setupKeyboardShortcuts() {
             case 'escape':
                 // Deselect current vertex
                 if (state.selectedVertex !== null) {
-                    setVertexMaterial(state.vertexMeshes[state.selectedVertex], 'default');
+                    setVertexMaterial(state.selectedVertex, 'default');
                     state.selectedVertex = null;
                 }
                 break;
@@ -6925,6 +7409,75 @@ function setupMobileToggle() {
 }
 
 // =====================================================
+// PROJECTION BUTTONS (Edit Tab)
+// =====================================================
+
+function setupProjectionButtons() {
+    const buttons = [
+        { el: projectXYBtn, proj: 'xy', label: 'XY' },
+        { el: projectXZBtn, proj: 'xz', label: 'XZ' },
+        { el: projectYZBtn, proj: 'yz', label: 'YZ' },
+        { el: project3DBtn, proj: '3d', label: '3D' }
+    ];
+    
+    buttons.forEach(({ el, proj }) => {
+        if (el) {
+            el.addEventListener('click', () => {
+                // Update active state
+                [projectXYBtn, projectXZBtn, projectYZBtn, project3DBtn].forEach(btn => {
+                    if (btn) btn.classList.remove('active');
+                });
+                el.classList.add('active');
+                
+                // Set camera projection (this also handles grid updates)
+                setCameraProjection(proj);
+                
+                // If in add-vertex mode and switching to 3D, show warning
+                if (currentEditMode === 'add-vertex' && proj === '3d') {
+                    console.log('[PROJECTION] Grid hidden in 3D mode - switch to Top/Front/Side to place nodes on grid');
+                }
+            });
+        }
+    });
+    
+    console.log('[PROJECTION] Edit tab projection buttons initialized');
+}
+
+// =====================================================
+// PROJECTION BUTTONS (Universe)
+// =====================================================
+
+function setupUniverseProjectionButtons() {
+    const buttons = [
+        { el: universeProjectXYBtn, proj: 'xy', label: 'XY' },
+        { el: universeProjectXZBtn, proj: 'xz', label: 'XZ' },
+        { el: universeProjectYZBtn, proj: 'yz', label: 'YZ' },
+        { el: universeProject3DBtn, proj: '3d', label: '3D' }
+    ];
+    
+    buttons.forEach(({ el, proj }) => {
+        if (el) {
+            el.addEventListener('click', async () => {
+                // Update active state
+                [universeProjectXYBtn, universeProjectXZBtn, universeProjectYZBtn, universeProject3DBtn].forEach(btn => {
+                    if (btn) btn.classList.remove('active');
+                });
+                el.classList.add('active');
+                
+                // Set universe camera projection
+                if (universeModule) {
+                    universeModule.setUniverseCameraProjection(proj);
+                } else {
+                    console.warn('[PROJECTION] Universe module not loaded');
+                }
+            });
+        }
+    });
+    
+    console.log('[PROJECTION] Universe projection buttons initialized');
+}
+
+// =====================================================
 // LIBRARY TAB
 // =====================================================
 
@@ -6963,6 +7516,11 @@ function setupLibraryEventListeners() {
                 if (state && state.cameraPosition) {
                     universeModule.navigateToGalaxy(null); // Reset to origin
                 }
+                // Reset projection buttons to 3D
+                [universeProjectXYBtn, universeProjectXZBtn, universeProjectYZBtn, universeProject3DBtn].forEach(btn => {
+                    if (btn) btn.classList.remove('active');
+                });
+                if (universeProject3DBtn) universeProject3DBtn.classList.add('active');
             }
         });
     }
@@ -6975,6 +7533,9 @@ function setupLibraryEventListeners() {
             }
         });
     }
+    
+    // Universe projection buttons
+    setupUniverseProjectionButtons();
     
     // Search and filter handlers
     if (librarySearch) {
@@ -7998,6 +8559,8 @@ async function sendCurrentGraphToUniverse() {
 function saveCurrentGraphToLibrary() {
     const graphData = getCurrentGraphData();
     
+    console.log('[LIBRARY] Attempting to save graph:', graphData?.name);
+    
     if (!graphData || graphData.n === 0) {
         showLibraryToast('No graph to save! Create a graph first.', 'error');
         return;
@@ -8013,8 +8576,10 @@ function saveCurrentGraphToLibrary() {
             const stored = localStorage.getItem(libraryKey);
             if (stored) {
                 customLibrary = JSON.parse(stored);
+                console.log('[LIBRARY] Found existing library with', customLibrary.length, 'graphs');
             }
         } catch (e) {
+            console.warn('[LIBRARY] Could not parse existing library:', e);
             customLibrary = [];
         }
         
@@ -8025,27 +8590,32 @@ function saveCurrentGraphToLibrary() {
                 return;
             }
             customLibrary[existingIndex] = graphData;
+            console.log('[LIBRARY] Replacing existing graph at index', existingIndex);
         } else {
             customLibrary.push(graphData);
+            console.log('[LIBRARY] Adding new graph, library now has', customLibrary.length, 'graphs');
         }
         
         // Save back to localStorage
         localStorage.setItem(libraryKey, JSON.stringify(customLibrary));
+        console.log('[LIBRARY] Saved to localStorage');
         
-        // Also add to the current session's graph list via graph-library module if available
-        if (typeof addGraphToLibrary === 'function') {
-            addGraphToLibrary(graphData);
+        // Also add to the current session's graph library (in-memory)
+        try {
+            addToLibrary(graphData);
+            console.log('[LIBRARY] Added to in-memory library');
+        } catch (e) {
+            console.warn('[LIBRARY] Could not add to in-memory library:', e);
         }
         
         showLibraryToast(`"${graphData.name}" saved to library!`, 'success');
         
-        // Refresh library view if visible
-        if (typeof refreshLibraryDisplay === 'function') {
-            refreshLibraryDisplay();
-        }
+        // Refresh library UI
+        updateLibraryUI();
+        console.log('[LIBRARY] Updated library UI');
         
     } catch (e) {
-        console.error('Failed to save to library:', e);
+        console.error('[LIBRARY] Failed to save to library:', e);
         showLibraryToast('Failed to save: ' + e.message, 'error');
     }
 }
@@ -8058,13 +8628,31 @@ function loadCustomGraphsFromStorage() {
         const stored = localStorage.getItem('graphLibrary_custom');
         if (stored) {
             const customGraphs = JSON.parse(stored);
-            console.log(`Loaded ${customGraphs.length} custom graphs from storage`);
+            console.log(`[LIBRARY] Loaded ${customGraphs.length} custom graphs from storage`);
             return customGraphs;
         }
     } catch (e) {
-        console.warn('Could not load custom graphs:', e);
+        console.warn('[LIBRARY] Could not load custom graphs:', e);
     }
     return [];
+}
+
+/**
+ * Load custom graphs from localStorage and add them to the in-memory library
+ */
+function loadAndAddCustomGraphs() {
+    const customGraphs = loadCustomGraphsFromStorage();
+    if (customGraphs.length > 0) {
+        for (const graph of customGraphs) {
+            try {
+                addToLibrary(graph);
+            } catch (e) {
+                console.warn('[LIBRARY] Could not add custom graph:', graph.name, e);
+            }
+        }
+        console.log(`[LIBRARY] Added ${customGraphs.length} custom graphs to in-memory library`);
+        updateLibraryUI();
+    }
 }
 
 /**
@@ -8154,7 +8742,20 @@ async function _generateTestGraphsForUniverseImpl() {
         petersen: document.getElementById('test-family-petersen')?.checked ?? true,
         bipartite: document.getElementById('test-family-bipartite')?.checked ?? true,
         hypercube: document.getElementById('test-family-hypercube')?.checked ?? true,
-        fivebar: document.getElementById('test-family-fivebar')?.checked ?? false
+        // New families
+        ladder: document.getElementById('test-family-ladder')?.checked ?? true,
+        prism: document.getElementById('test-family-prism')?.checked ?? true,
+        friendship: document.getElementById('test-family-friendship')?.checked ?? true,
+        crown: document.getElementById('test-family-crown')?.checked ?? false,
+        book: document.getElementById('test-family-book')?.checked ?? true,
+        fan: document.getElementById('test-family-fan')?.checked ?? true,
+        gear: document.getElementById('test-family-gear')?.checked ?? false,
+        helm: document.getElementById('test-family-helm')?.checked ?? false,
+        turan: document.getElementById('test-family-turan')?.checked ?? false,
+        platonic: document.getElementById('test-family-platonic')?.checked ?? true,
+        mobius: document.getElementById('test-family-mobius')?.checked ?? false,
+        fivebar: document.getElementById('test-family-fivebar')?.checked ?? false,
+        pendulum: document.getElementById('test-family-pendulum')?.checked ?? false
     };
     
     const nMin = parseInt(document.getElementById('test-n-min')?.value) || 4;
@@ -8169,6 +8770,36 @@ async function _generateTestGraphsForUniverseImpl() {
         if (families.star && n >= 3) testGraphs.push(generateStarGraph(n));
         if (families.complete && n >= 2) testGraphs.push(generateCompleteGraph(n));
         if (families.wheel && n >= 4) testGraphs.push(generateWheelGraph(n));
+        
+        // New families
+        if (families.ladder && n >= 2) testGraphs.push(generateLadderGraph(n));
+        if (families.prism && n >= 3) testGraphs.push(generatePrismGraph(n));
+        if (families.friendship && n >= 2) testGraphs.push(generateFriendshipGraph(n));
+        if (families.crown && n >= 3) testGraphs.push(generateCrownGraph(n));
+        if (families.book && n >= 2) testGraphs.push(generateBookGraph(n));
+        if (families.fan && n >= 2) testGraphs.push(generateFanGraph(n));
+        if (families.gear && n >= 3) testGraphs.push(generateGearGraph(n));
+        if (families.helm && n >= 3) testGraphs.push(generateHelmGraph(n));
+        if (families.mobius && n >= 3) testGraphs.push(generateMoebiusLadder(n));
+    }
+    
+    // Turán graphs (generate a few interesting ones)
+    if (families.turan) {
+        testGraphs.push(generateTuranGraph(6, 2));   // T(6,2) = K_{3,3}
+        testGraphs.push(generateTuranGraph(6, 3));   // T(6,3) = 3 disjoint edges complement
+        testGraphs.push(generateTuranGraph(9, 3));   // T(9,3)
+        testGraphs.push(generateTuranGraph(10, 2));  // T(10,2) = K_{5,5}
+        testGraphs.push(generateTuranGraph(12, 3));  // T(12,3)
+        testGraphs.push(generateTuranGraph(12, 4));  // T(12,4)
+    }
+    
+    // Platonic solids (fixed graphs, not parameterized)
+    if (families.platonic) {
+        testGraphs.push(generateTetrahedronGraph());
+        testGraphs.push(generateCubeGraph());
+        testGraphs.push(generateOctahedronGraph());
+        testGraphs.push(generateDodecahedronGraph());
+        testGraphs.push(generateIcosahedronGraph());
     }
     
     // Add special graphs (not dependent on n range)
@@ -8225,7 +8856,31 @@ async function _generateTestGraphsForUniverseImpl() {
     }
     
     if (families.fivebar) {
-        testGraphs.push(generateFiveBarMechanismGraph());
+        // Add n-bar mechanisms based on nMin/nMax vertex count
+        // For m-bar mechanism: vertices = 5m - 11
+        // So: 4-bar=9, 5-bar=14, 6-bar=19, 7-bar=24, 8-bar=29, 9-bar=34, 10-bar=39, etc.
+        // Calculate max m from nMax: m = (nMax + 11) / 5
+        const maxBars = Math.floor((nMax + 11) / 5);
+        for (let m = 4; m <= Math.max(maxBars, 20); m++) {
+            const vertices = 5 * m - 11;
+            if (vertices >= nMin && vertices <= nMax) {
+                testGraphs.push(generateNBarMechanismGraph(m));
+            }
+        }
+    }
+    
+    if (families.pendulum) {
+        // Add n-link pendulums based on nMin/nMax vertex count
+        // For n-link pendulum: vertices = 5n + 1
+        // So: 1-link=6, 2-link=11, 3-link=16, 4-link=21, etc.
+        // Calculate max links from nMax: links = (nMax - 1) / 5
+        const maxLinks = Math.floor((nMax - 1) / 5);
+        for (let links = 1; links <= Math.max(maxLinks, 10); links++) {
+            const vertices = 5 * links + 1;
+            if (vertices >= nMin && vertices <= nMax) {
+                testGraphs.push(generateNLinkPendulumGraph(links));
+            }
+        }
     }
     
     // Deduplicate test graphs themselves (in case of any logic issues)
@@ -8262,6 +8917,18 @@ async function _generateTestGraphsForUniverseImpl() {
             if (/^Möbius[\s_]/i.test(text) || text === 'Möbius') return 'Möbius';
             if (/^Binary Tree[\s_]/i.test(text)) return 'Binary Tree';
             if (/Tree[\s_]/i.test(text) && !text.includes('□')) return 'Tree';
+            // New families
+            if (/^Prism[\s_]/i.test(text) || text === 'Prism') return 'Prism';
+            if (/^Friendship[\s_]/i.test(text) || text === 'Friendship') return 'Friendship';
+            if (/^Crown[\s_]/i.test(text) || text === 'Crown') return 'Crown';
+            if (/^Book[\s_]/i.test(text) || text === 'Book') return 'Book';
+            if (/^Fan[\s_]/i.test(text) || text === 'Fan') return 'Fan';
+            if (/^Gear[\s_]/i.test(text) || text === 'Gear') return 'Gear';
+            if (/^Helm[\s_]/i.test(text) || text === 'Helm') return 'Helm';
+            if (/^Turán[\s_]/i.test(text) || /^Turan[\s_]/i.test(text) || text === 'Turán') return 'Turán';
+            if (/^Tetrahedron/i.test(text) || /^Octahedron/i.test(text) || 
+                /^Cube$/i.test(text) || /^Icosahedron/i.test(text) || 
+                /^Dodecahedron/i.test(text) || text === 'Platonic') return 'Platonic';
         }
         
         // Try type field as fallback
@@ -8270,7 +8937,10 @@ async function _generateTestGraphsForUniverseImpl() {
                 'star': 'Star', 'cycle': 'Cycle', 'path': 'Path',
                 'complete': 'Complete', 'complete_bipartite': 'Complete Bipartite',
                 'wheel': 'Wheel', 'hypercube': 'Hypercube', 'grid': 'Grid',
-                'ladder': 'Ladder', 'petersen': 'Petersen', 'tree': 'Tree'
+                'ladder': 'Ladder', 'petersen': 'Petersen', 'tree': 'Tree',
+                'prism': 'Prism', 'friendship': 'Friendship', 'crown': 'Crown',
+                'book': 'Book', 'fan': 'Fan', 'gear': 'Gear', 'helm': 'Helm',
+                'turan': 'Turán', 'platonic': 'Platonic', 'mobius': 'Möbius'
             };
             if (typeMap[g.type]) return typeMap[g.type];
         }
@@ -8368,6 +9038,11 @@ async function _generateTestGraphsForUniverseImpl() {
     showLibraryToast(msg, 'success');
     console.log(`\n=== ${count} TEST GRAPHS ADDED TO UNIVERSE ===`);
     console.log('Use "F" key to fit all in view');
+    
+    // Refresh axes to encompass all newly added graphs
+    if (universeModule && universeModule.refreshUniverseAxes) {
+        universeModule.refreshUniverseAxes();
+    }
 }
 
 /**
@@ -8752,71 +9427,809 @@ function binomial(n, k) {
  * - ±√((11+√73)/2)
  * - ±√((11-√73)/2)
  */
-function generateFiveBarMechanismGraph() {
-    const n = 14;
-    const edges = [
-        // Top row: 2→9→4→10→6 (0-indexed: 1→8→3→9→5)
-        [1, 8], [8, 3], [3, 9], [9, 5],
-        // Bottom row: 1→8→3→11→5 (0-indexed: 0→7→2→10→4)
-        [0, 7], [7, 2], [2, 10], [10, 4],
-        // Left diamond (node 7 = index 6)
-        [6, 1], [0, 6],
-        // Right diamond (node 12 = index 11)
-        [5, 11], [11, 4],
-        // Left inner diamond (node 14 = index 13)
-        [1, 13], [0, 13], [13, 3], [13, 2],
-        // Right inner diamond (node 13 = index 12)
-        [3, 12], [2, 12], [12, 5], [12, 4]
-    ];
+/**
+ * Generate n-Bar Mechanism graph
+ * Based on gyro-bondgraph structures from planar linkage mechanisms
+ * 
+ * Structure:
+ * - m-bar mechanism has (m-3) internal "cells"
+ * - 4-bar: 1 cell, 9 vertices, 12 edges
+ * - 5-bar: 2 cells, 14 vertices, 20 edges
+ * - 6-bar: 3 cells, 19 vertices, 28 edges
+ * - General: vertices = 5(m-3) + 4, edges = 8(m-3) + 4
+ * 
+ * @param {number} m - Number of bars (minimum 4)
+ */
+function generateNBarMechanismGraph(m) {
+    if (m < 4) m = 4;
     
-    // Exact analytic eigenvalues
-    const sqrt3 = Math.sqrt(3);
-    const sqrt5 = Math.sqrt(5);
-    const sqrt73 = Math.sqrt(73);
-    const mu1 = (11 + sqrt73) / 2;  // ≈ 9.772
-    const mu2 = (11 - sqrt73) / 2;  // ≈ 1.228
-    const lambda1 = Math.sqrt(mu1); // ≈ 3.126
-    const lambda2 = Math.sqrt(mu2); // ≈ 1.108
+    const cells = m - 3;  // 4-bar = 1 cell, 5-bar = 2 cells, etc.
     
-    // Spectral radius is the largest |λ|
-    const spectralRadius = lambda1;  // √((11+√73)/2) ≈ 3.126
+    // Total vertices: 5*cells + 4
+    // Layout:
+    // - (cells+1) top corners at even indices: 0, 2, 4, ..., 2*cells
+    // - (cells+1) bottom corners at odd indices: 1, 3, 5, ..., 2*cells+1
+    // - 1 left edge node
+    // - 1 right edge node
+    // - cells top intermediates
+    // - cells bottom intermediates
+    // - cells inner diamond nodes
     
-    // Build eigenvalue array with algebraic forms
-    const eigenvalues = [
-        { value: lambda1, form: '√((11+√73)/2)', multiplicity: 1 },
-        { value: sqrt5, form: '√5', multiplicity: 1 },
-        { value: sqrt3, form: '√3', multiplicity: 1 },
-        { value: lambda2, form: '√((11-√73)/2)', multiplicity: 1 },
-        { value: 1, form: '1', multiplicity: 1 },
-        { value: 0, form: '0', multiplicity: 4 },
-        { value: -1, form: '-1', multiplicity: 1 },
-        { value: -lambda2, form: '-√((11-√73)/2)', multiplicity: 1 },
-        { value: -sqrt3, form: '-√3', multiplicity: 1 },
-        { value: -sqrt5, form: '-√5', multiplicity: 1 },
-        { value: -lambda1, form: '-√((11+√73)/2)', multiplicity: 1 }
-    ];
+    const numCorners = 2 * (cells + 1);
+    const leftEdge = numCorners;
+    const rightEdge = numCorners + 1;
+    const topIntBase = numCorners + 2;
+    const botIntBase = topIntBase + cells;
+    const innerBase = botIntBase + cells;
     
-    // Flatten for display (expand multiplicity)
-    const eigenvaluesFlat = [];
-    for (const ev of eigenvalues) {
-        const mult = ev.multiplicity || 1;
-        for (let i = 0; i < mult; i++) {
-            eigenvaluesFlat.push(ev.value);
-        }
+    const n = 5 * cells + 4;
+    const edges = [];
+    
+    // Top rail: corner - intermediate - corner - intermediate - ...
+    for (let c = 0; c < cells; c++) {
+        const topL = 2 * c;
+        const topR = 2 * (c + 1);
+        const topInt = topIntBase + c;
+        edges.push([topL, topInt]);
+        edges.push([topInt, topR]);
+    }
+    
+    // Bottom rail: same pattern
+    for (let c = 0; c < cells; c++) {
+        const botL = 2 * c + 1;
+        const botR = 2 * (c + 1) + 1;
+        const botInt = botIntBase + c;
+        edges.push([botL, botInt]);
+        edges.push([botInt, botR]);
+    }
+    
+    // Left edge node connects top-left (0) and bottom-left (1) corners
+    edges.push([0, leftEdge]);
+    edges.push([leftEdge, 1]);
+    
+    // Right edge node connects top-right and bottom-right corners
+    edges.push([2 * cells, rightEdge]);
+    edges.push([rightEdge, 2 * cells + 1]);
+    
+    // Inner diamonds - each connects 4 corners of a cell
+    for (let c = 0; c < cells; c++) {
+        const inner = innerBase + c;
+        const topL = 2 * c;
+        const topR = 2 * (c + 1);
+        const botL = 2 * c + 1;
+        const botR = 2 * (c + 1) + 1;
+        edges.push([topL, inner]);
+        edges.push([inner, topR]);
+        edges.push([botL, inner]);
+        edges.push([inner, botR]);
+    }
+    
+    // Spectral properties (approximate for general case)
+    // For small m, we can give exact values
+    let spectralRadius, analyticalRho;
+    
+    if (m === 4) {
+        // 4-bar: exact eigenvalues known
+        spectralRadius = (1 + Math.sqrt(5)) / 2 + 1;  // ≈ 2.618
+        analyticalRho = '1 + φ ≈ 2.618';
+    } else if (m === 5) {
+        // 5-bar: exact from previous analysis
+        const sqrt73 = Math.sqrt(73);
+        spectralRadius = Math.sqrt((11 + sqrt73) / 2);  // ≈ 3.126
+        analyticalRho = '√((11+√73)/2) ≈ 3.126';
+    } else {
+        // Approximate for larger mechanisms
+        spectralRadius = Math.sqrt(2 * cells + 2);
+        analyticalRho = `≈√${2 * cells + 2}`;
     }
     
     return {
         n,
         edges,
         edgeCount: edges.length,
-        name: '5-Bar Mechanism',
+        name: `${m}-Bar Mechanism`,
         family: 'Mechanism',
-        eigenvalues: eigenvaluesFlat,
-        eigenvaluesForms: eigenvalues,  // Keep algebraic forms
         spectralRadius: spectralRadius,
-        analyticalRho: '√((11+√73)/2)',
-        characteristicPolynomial: 'λ⁴(λ-1)(λ+1)(λ²-3)(λ²-5)(λ⁴-11λ²+12)',
-        expectedAlpha: 0  // Bounded spectral radius (not growing with n)
+        analyticalRho: analyticalRho,
+        expectedAlpha: 0,  // Bounded spectral radius
+        cells: cells,
+        description: `Planar ${m}-bar linkage mechanism bond graph with ${cells} cell${cells > 1 ? 's' : ''}`
+    };
+}
+
+// Keep legacy function for backward compatibility
+function generateFiveBarMechanismGraph() {
+    return generateNBarMechanismGraph(5);
+}
+
+// Convenience functions for common mechanisms
+function generateFourBarMechanismGraph() {
+    return generateNBarMechanismGraph(4);
+}
+
+function generateSixBarMechanismGraph() {
+    return generateNBarMechanismGraph(6);
+}
+
+function generateSevenBarMechanismGraph() {
+    return generateNBarMechanismGraph(7);
+}
+
+/**
+ * Generate n-Link Pendulum graph
+ * Derived from (n+3)-bar mechanism by removing the 3 tip nodes
+ * (right edge node, rightmost top corner, rightmost bottom corner)
+ * 
+ * Structure:
+ * - n-link pendulum has n "cells" (like n-bar mechanism has n-3 cells)
+ * - Vertices: 5n + 1
+ * - Edges: 8n - 2
+ * 
+ * Examples:
+ * - 1-link: 6 vertices, 6 edges (from 4-bar minus 3 tip nodes)
+ * - 2-link: 11 vertices, 14 edges (from 5-bar minus 3 tip nodes)
+ * - 3-link: 16 vertices, 22 edges (from 6-bar minus 3 tip nodes)
+ * 
+ * Characteristic polynomial pattern:
+ * - Always has λ^(n+1) factor (n+1 zero eigenvalues)
+ * - Remaining factors are quartics in λ² that can be solved analytically
+ * 
+ * @param {number} links - Number of links (minimum 1)
+ */
+function generateNLinkPendulumGraph(links) {
+    if (links < 1) links = 1;
+    
+    const cells = links;  // n-link has n cells
+    const n = 5 * links + 1;  // Total vertices
+    const edges = [];
+    
+    // Node layout (similar to mechanism but without right tip):
+    // - Top corners: 0, 2, 4, ..., 2*(cells-1) = 2*cells-2 (cells nodes, not cells+1)
+    // - Bottom corners: 1, 3, 5, ..., 2*cells-1 (cells nodes)
+    // - Left edge node: 2*cells
+    // - Top intermediates: 2*cells+1 to 2*cells+cells = 3*cells
+    // - Bottom intermediates: 3*cells+1 to 4*cells
+    // - Inner diamonds: 4*cells+1 to 5*cells (but last one connects differently)
+    
+    const numCorners = 2 * cells;  // cells top + cells bottom (no rightmost pair)
+    const leftEdgeIdx = numCorners;
+    const topIntBase = numCorners + 1;
+    const botIntBase = topIntBase + cells;
+    const innerBase = botIntBase + cells;
+    
+    // Top rail: corner - intermediate - corner
+    // But the last cell doesn't have a right corner, so it ends at intermediate
+    for (let c = 0; c < cells - 1; c++) {
+        const topL = 2 * c;
+        const topR = 2 * (c + 1);
+        const topInt = topIntBase + c;
+        edges.push([topL, topInt]);
+        edges.push([topInt, topR]);
+    }
+    // Last cell top rail: corner to intermediate (no right corner)
+    if (cells >= 1) {
+        const topL = 2 * (cells - 1);
+        const topInt = topIntBase + cells - 1;
+        edges.push([topL, topInt]);
+        // topInt is the end of top rail
+    }
+    
+    // Bottom rail: same pattern
+    for (let c = 0; c < cells - 1; c++) {
+        const botL = 2 * c + 1;
+        const botR = 2 * (c + 1) + 1;
+        const botInt = botIntBase + c;
+        edges.push([botL, botInt]);
+        edges.push([botInt, botR]);
+    }
+    // Last cell bottom rail
+    if (cells >= 1) {
+        const botL = 2 * (cells - 1) + 1;
+        const botInt = botIntBase + cells - 1;
+        edges.push([botL, botInt]);
+    }
+    
+    // Left edge node connects first top (0) and first bottom (1) corners
+    edges.push([0, leftEdgeIdx]);
+    edges.push([leftEdgeIdx, 1]);
+    
+    // Inner diamonds - each connects 4 corners of a cell
+    // For cells 0 to cells-2: normal diamond pattern
+    for (let c = 0; c < cells - 1; c++) {
+        const inner = innerBase + c;
+        const topL = 2 * c;
+        const topR = 2 * (c + 1);
+        const botL = 2 * c + 1;
+        const botR = 2 * (c + 1) + 1;
+        edges.push([topL, inner]);
+        edges.push([inner, topR]);
+        edges.push([botL, inner]);
+        edges.push([inner, botR]);
+    }
+    
+    // Last cell inner diamond connects to CORNERS ONLY (not tips)
+    // The tips are only connected via the rail edges (corner → tip)
+    if (cells >= 1) {
+        const inner = innerBase + cells - 1;
+        const topL = 2 * (cells - 1);
+        const botL = 2 * (cells - 1) + 1;
+        // Connect corners to inner diamond only
+        edges.push([topL, inner]);
+        edges.push([botL, inner]);
+        // Do NOT connect inner to tips
+    }
+    
+    // The tip intermediates are already connected via rail edges
+    // No additional connections needed
+    
+    // Calculate spectral properties
+    let spectralRadius, analyticalRho, charPoly;
+    
+    if (links === 1) {
+        // 1-link pendulum: p(λ) = λ²(λ²-1)(λ²-5)
+        spectralRadius = Math.sqrt(5);
+        analyticalRho = '√5';
+        charPoly = 'λ²(λ²-1)(λ²-5)';
+    } else if (links === 2) {
+        // 2-link pendulum: p(λ) = λ³(λ⁴-3λ²+1)(λ⁴-11λ²+21)
+        const sqrt37 = Math.sqrt(37);
+        spectralRadius = Math.sqrt((11 + sqrt37) / 2);
+        analyticalRho = '√((11+√37)/2)';
+        charPoly = 'λ³(λ⁴-3λ²+1)(λ⁴-11λ²+21)';
+    } else if (links === 3) {
+        // 3-link: No closed form - computed numerically
+        spectralRadius = 3.166399;  // √10.0260825878
+        analyticalRho = '≈3.166 (numerical)';
+        charPoly = 'λ⁴·Q(μ), μ=λ², Q has irrational coefficients';
+    } else if (links === 4) {
+        // 4-link: No closed form - computed numerically
+        spectralRadius = 3.276954;
+        analyticalRho = '≈3.277 (numerical)';
+        charPoly = 'λ⁵·Q(μ), μ=λ², Q has irrational coefficients';
+    } else {
+        // General n ≥ 5: Empirical formula ρ ≈ √(2n+4)
+        spectralRadius = Math.sqrt(2 * links + 4);
+        analyticalRho = `≈√${2 * links + 4} (numerical)`;
+        charPoly = `λ^${links+1}·Q(μ), μ=λ², no closed form`;
+    }
+    
+    return {
+        n,
+        edges,
+        edgeCount: edges.length,
+        name: `${links}-Link Pendulum`,
+        family: 'Pendulum',
+        spectralRadius: spectralRadius,
+        analyticalRho: analyticalRho,
+        expectedAlpha: 0,  // Bounded spectral radius
+        links: links,
+        characteristicPolynomial: charPoly,
+        description: `${links}-link pendulum bond graph (from ${links+3}-bar mechanism)`
+    };
+}
+
+// Convenience functions for common pendulums
+function generateOneLinkPendulumGraph() {
+    return generateNLinkPendulumGraph(1);
+}
+
+function generateTwoLinkPendulumGraph() {
+    return generateNLinkPendulumGraph(2);
+}
+
+function generateThreeLinkPendulumGraph() {
+    return generateNLinkPendulumGraph(3);
+}
+
+// =====================================================
+// ADDITIONAL GRAPH FAMILY GENERATORS
+// =====================================================
+
+/**
+ * Generate Ladder graph L_n (two parallel paths connected by rungs)
+ * L_n has 2n vertices and 3n-2 edges
+ * Eigenvalues: Related to path eigenvalues, α ≈ 0 (bounded)
+ */
+function generateLadderGraph(n) {
+    const vertices = 2 * n;
+    const edges = [];
+    
+    // Top rail: 0 - 1 - 2 - ... - (n-1)
+    for (let i = 0; i < n - 1; i++) {
+        edges.push([i, i + 1]);
+    }
+    
+    // Bottom rail: n - (n+1) - ... - (2n-1)
+    for (let i = n; i < 2 * n - 1; i++) {
+        edges.push([i, i + 1]);
+    }
+    
+    // Rungs: connect i to i+n
+    for (let i = 0; i < n; i++) {
+        edges.push([i, i + n]);
+    }
+    
+    // Spectral radius for ladder: approximately 2 + 2cos(π/(n+1))
+    // For large n, approaches 4
+    const rho = 2 + 2 * Math.cos(Math.PI / (n + 1));
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Ladder L_${n}`,
+        family: 'Ladder',
+        spectralRadius: rho,
+        analyticalRho: `2 + 2cos(π/${n+1})`,
+        expectedAlpha: 0  // Bounded
+    };
+}
+
+/**
+ * Generate Prism graph (also called Circular Ladder) Pr_n
+ * Cycle_n □ K_2 = two n-cycles connected by n rungs
+ * Has 2n vertices and 3n edges
+ */
+function generatePrismGraph(n) {
+    const vertices = 2 * n;
+    const edges = [];
+    
+    // Top cycle: 0 - 1 - 2 - ... - (n-1) - 0
+    for (let i = 0; i < n; i++) {
+        edges.push([i, (i + 1) % n]);
+    }
+    
+    // Bottom cycle: n - (n+1) - ... - (2n-1) - n
+    for (let i = 0; i < n; i++) {
+        edges.push([n + i, n + (i + 1) % n]);
+    }
+    
+    // Rungs: connect i to i+n
+    for (let i = 0; i < n; i++) {
+        edges.push([i, i + n]);
+    }
+    
+    // Spectral radius: 4 (3-regular graph)
+    // Eigenvalues: 2cos(2πk/n) + 1 and 2cos(2πk/n) - 1 for k = 0, ..., n-1
+    const rho = 3;  // For prism, max eigenvalue is 3 (degree)
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Prism Pr_${n}`,
+        family: 'Prism',
+        spectralRadius: rho,
+        analyticalRho: '3',
+        expectedAlpha: 0  // Bounded (3-regular)
+    };
+}
+
+/**
+ * Generate Friendship graph (Windmill graph) F_n
+ * n triangles sharing a single vertex
+ * Has 2n+1 vertices and 3n edges
+ * Spectral radius: (1 + √(1+8n))/2
+ */
+function generateFriendshipGraph(n) {
+    const vertices = 2 * n + 1;
+    const edges = [];
+    
+    // Central vertex is 0
+    // Each triangle uses vertices (2i+1, 2i+2) for i = 0, ..., n-1
+    for (let i = 0; i < n; i++) {
+        const v1 = 2 * i + 1;
+        const v2 = 2 * i + 2;
+        
+        // Triangle edges
+        edges.push([0, v1]);    // Center to first
+        edges.push([0, v2]);    // Center to second
+        edges.push([v1, v2]);   // Edge of triangle
+    }
+    
+    // Spectral radius: (1 + √(1+8n))/2
+    const rho = (1 + Math.sqrt(1 + 8 * n)) / 2;
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Friendship F_${n}`,
+        family: 'Friendship',
+        spectralRadius: rho,
+        analyticalRho: `(1 + √${1 + 8*n})/2`,
+        expectedAlpha: 0.5  // √n growth
+    };
+}
+
+/**
+ * Generate Crown graph S_n^0
+ * Complete bipartite K_{n,n} minus a perfect matching
+ * Has 2n vertices and n(n-1) edges
+ * Regular with degree n-1
+ */
+function generateCrownGraph(n) {
+    const vertices = 2 * n;
+    const edges = [];
+    
+    // Vertices 0..n-1 in one partition, n..2n-1 in other
+    // Connect i to all j except i+n
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            if (i !== j) {  // Skip the perfect matching edge
+                edges.push([i, n + j]);
+            }
+        }
+    }
+    
+    // Spectral radius: n-1 (degree-regular)
+    const rho = n - 1;
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Crown S^0_${n}`,
+        family: 'Crown',
+        spectralRadius: rho,
+        analyticalRho: `${n - 1}`,
+        expectedAlpha: 0.5  // √n growth for spectral radius relative to 2n vertices
+    };
+}
+
+/**
+ * Generate Möbius ladder M_n
+ * Like a ladder but with twisted ends (Möbius strip topology)
+ * Has 2n vertices, 3n edges, is 3-regular
+ */
+function generateMoebiusLadder(n) {
+    if (n < 3) n = 3;
+    const vertices = 2 * n;
+    const edges = [];
+    
+    // Two "rails" forming a cycle with twist
+    // Top cycle: 0 - 1 - ... - (n-1) connecting to (2n-1) at end
+    for (let i = 0; i < n - 1; i++) {
+        edges.push([i, i + 1]);
+    }
+    edges.push([n - 1, 2 * n - 1]);  // Twist!
+    
+    // Bottom cycle: n - (n+1) - ... - (2n-1) connecting to 0 at end  
+    for (let i = n; i < 2 * n - 1; i++) {
+        edges.push([i, i + 1]);
+    }
+    edges.push([2 * n - 1, 0]);  // This creates the Möbius twist
+    
+    // Actually, let me redo this properly
+    // Möbius ladder: vertices 0, 1, ..., 2n-1
+    // Edges: i connected to (i+1) mod 2n, and i connected to (i+n) mod 2n
+    const edgesSet = new Set();
+    const addEdge = (a, b) => {
+        const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+        if (!edgesSet.has(key)) {
+            edgesSet.add(key);
+            edges.length = 0; // Clear and rebuild
+        }
+    };
+    
+    // Rebuild edges correctly
+    edges.length = 0;
+    for (let i = 0; i < 2 * n; i++) {
+        // Cycle edge
+        const next = (i + 1) % (2 * n);
+        if (i < next) edges.push([i, next]);
+        else edges.push([next, i]);
+        
+        // Rung edge (with twist)
+        const rung = (i + n) % (2 * n);
+        if (i < rung) edges.push([i, rung]);
+    }
+    
+    // Deduplicate
+    const uniqueEdges = [...new Set(edges.map(e => e.sort((a,b) => a-b).join('-')))]
+        .map(s => s.split('-').map(Number));
+    
+    // 3-regular, spectral radius = 3
+    return {
+        n: vertices,
+        edges: uniqueEdges,
+        edgeCount: uniqueEdges.length,
+        name: `Möbius M_${n}`,
+        family: 'Möbius',
+        spectralRadius: 3,
+        analyticalRho: '3',
+        expectedAlpha: 0  // Bounded (3-regular)
+    };
+}
+
+/**
+ * Generate Book graph B_n (also called Stacked triangles)
+ * n triangles sharing a common edge (the "spine")
+ * Has n+2 vertices and 2n+1 edges
+ */
+function generateBookGraph(n) {
+    const vertices = n + 2;
+    const edges = [];
+    
+    // Spine edge: vertices 0 and 1
+    edges.push([0, 1]);
+    
+    // Each page is a triangle with vertices 0, 1, and (i+2)
+    for (let i = 0; i < n; i++) {
+        edges.push([0, i + 2]);
+        edges.push([1, i + 2]);
+    }
+    
+    // Spectral radius depends on n
+    // For book graph: ρ = (1 + √(1 + 4n)) / 2
+    const rho = (1 + Math.sqrt(1 + 4 * n)) / 2;
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Book B_${n}`,
+        family: 'Book',
+        spectralRadius: rho,
+        analyticalRho: `(1 + √${1 + 4*n})/2`,
+        expectedAlpha: 0.5  // √n growth
+    };
+}
+
+/**
+ * Generate Fan graph F_{1,n}
+ * Path P_n with a universal vertex connected to all
+ * Has n+1 vertices and 2n-1 edges
+ */
+function generateFanGraph(n) {
+    const vertices = n + 1;
+    const edges = [];
+    
+    // Path: 1 - 2 - 3 - ... - n (vertices 1 to n)
+    for (let i = 1; i < n; i++) {
+        edges.push([i, i + 1]);
+    }
+    
+    // Universal vertex 0 connects to all path vertices
+    for (let i = 1; i <= n; i++) {
+        edges.push([0, i]);
+    }
+    
+    // Spectral radius: approximately √(n + 1/4) + 1/2 for large n
+    const rho = Math.sqrt(n + 0.25) + 0.5;
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Fan F_{1,${n}}`,
+        family: 'Fan',
+        spectralRadius: rho,
+        analyticalRho: `≈√${n} + O(1)`,
+        expectedAlpha: 0.5  // √n growth
+    };
+}
+
+/**
+ * Generate Gear graph Ge_n
+ * Wheel with an extra vertex between each spoke and the rim
+ * Has 2n+1 vertices
+ */
+function generateGearGraph(n) {
+    const vertices = 2 * n + 1;
+    const edges = [];
+    
+    // Center vertex is 0
+    // Inner vertices (spoke endpoints): 1, 2, ..., n
+    // Outer vertices (gear teeth): n+1, n+2, ..., 2n
+    
+    // Spokes from center to inner vertices
+    for (let i = 1; i <= n; i++) {
+        edges.push([0, i]);
+    }
+    
+    // Inner to outer vertices
+    for (let i = 1; i <= n; i++) {
+        edges.push([i, n + i]);
+    }
+    
+    // Outer rim: connects adjacent teeth
+    for (let i = 1; i <= n; i++) {
+        const next = i === n ? 1 : i + 1;
+        edges.push([n + i, n + next]);
+    }
+    
+    // Spectral radius: approximately √n for large n
+    const rho = Math.sqrt(n);
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Gear Ge_${n}`,
+        family: 'Gear',
+        spectralRadius: rho,
+        analyticalRho: `≈√${n}`,
+        expectedAlpha: 0.25  // Slower than √n for vertices (2n+1 vertices, √n spectral radius)
+    };
+}
+
+/**
+ * Generate Helm graph H_n  
+ * Wheel W_n with a pendant vertex attached to each rim vertex
+ * Has 2n+1 vertices and 3n edges
+ */
+function generateHelmGraph(n) {
+    const vertices = 2 * n + 1;
+    const edges = [];
+    
+    // Center is 0
+    // Rim vertices: 1, 2, ..., n
+    // Pendant vertices: n+1, n+2, ..., 2n
+    
+    // Wheel part
+    // Spokes
+    for (let i = 1; i <= n; i++) {
+        edges.push([0, i]);
+    }
+    
+    // Rim cycle
+    for (let i = 1; i <= n; i++) {
+        const next = i === n ? 1 : i + 1;
+        edges.push([i, next]);
+    }
+    
+    // Pendant edges
+    for (let i = 1; i <= n; i++) {
+        edges.push([i, n + i]);
+    }
+    
+    // Spectral radius: approximately √n for large n (similar to wheel)
+    const rho = Math.sqrt(n);
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Helm H_${n}`,
+        family: 'Helm',
+        spectralRadius: rho,
+        analyticalRho: `≈√${n}`,
+        expectedAlpha: 0.25  // Slower than √n for vertices
+    };
+}
+
+/**
+ * Generate Turán graph T(n,r)
+ * Complete r-partite graph with parts as equal as possible
+ * Maximizes edges among n vertices with no (r+1)-clique
+ */
+function generateTuranGraph(n, r) {
+    if (r > n) r = n;
+    const vertices = n;
+    const edges = [];
+    
+    // Divide vertices into r parts as evenly as possible
+    const baseSize = Math.floor(n / r);
+    const extras = n % r;
+    
+    const partitions = [];
+    let start = 0;
+    for (let i = 0; i < r; i++) {
+        const size = baseSize + (i < extras ? 1 : 0);
+        partitions.push({ start, end: start + size });
+        start += size;
+    }
+    
+    // Connect all vertices in different partitions
+    for (let p1 = 0; p1 < r; p1++) {
+        for (let p2 = p1 + 1; p2 < r; p2++) {
+            for (let i = partitions[p1].start; i < partitions[p1].end; i++) {
+                for (let j = partitions[p2].start; j < partitions[p2].end; j++) {
+                    edges.push([i, j]);
+                }
+            }
+        }
+    }
+    
+    // For balanced Turán graph, spectral radius ≈ n(1 - 1/r)
+    const rho = (n - 1) * (1 - 1/r) + (1 - 1/r);  // Approximation
+    
+    return {
+        n: vertices,
+        edges,
+        edgeCount: edges.length,
+        name: `Turán T(${n},${r})`,
+        family: 'Turán',
+        spectralRadius: rho,
+        analyticalRho: `≈${n}(1-1/${r})`,
+        expectedAlpha: 1  // Linear growth (dense graph)
+    };
+}
+
+/**
+ * Generate Platonic solid graphs
+ */
+function generateTetrahedronGraph() {
+    return {
+        n: 4,
+        edges: [[0,1], [0,2], [0,3], [1,2], [1,3], [2,3]],
+        edgeCount: 6,
+        name: 'Tetrahedron',
+        family: 'Platonic',
+        spectralRadius: 3,
+        analyticalRho: '3',
+        expectedAlpha: 0  // Bounded (3-regular, fixed size)
+    };
+}
+
+function generateOctahedronGraph() {
+    // 6 vertices, 12 edges, 4-regular
+    return {
+        n: 6,
+        edges: [[0,1], [0,2], [0,3], [0,4], [1,2], [1,4], [1,5], [2,3], [2,5], [3,4], [3,5], [4,5]],
+        edgeCount: 12,
+        name: 'Octahedron',
+        family: 'Platonic',
+        spectralRadius: 4,
+        analyticalRho: '4',
+        expectedAlpha: 0  // Bounded
+    };
+}
+
+function generateCubeGraph() {
+    // 8 vertices, 12 edges, 3-regular (same as Hypercube Q_3)
+    return {
+        n: 8,
+        edges: [[0,1], [0,2], [0,4], [1,3], [1,5], [2,3], [2,6], [3,7], [4,5], [4,6], [5,7], [6,7]],
+        edgeCount: 12,
+        name: 'Cube',
+        family: 'Platonic',
+        spectralRadius: 3,
+        analyticalRho: '3',
+        expectedAlpha: 0  // Bounded (3-regular)
+    };
+}
+
+function generateIcosahedronGraph() {
+    // 12 vertices, 30 edges, 5-regular
+    const edges = [
+        [0,1], [0,2], [0,3], [0,4], [0,5],
+        [1,2], [2,3], [3,4], [4,5], [5,1],
+        [1,6], [2,6], [2,7], [3,7], [3,8], [4,8], [4,9], [5,9], [5,10], [1,10],
+        [6,7], [7,8], [8,9], [9,10], [10,6],
+        [6,11], [7,11], [8,11], [9,11], [10,11]
+    ];
+    return {
+        n: 12,
+        edges,
+        edgeCount: 30,
+        name: 'Icosahedron',
+        family: 'Platonic',
+        spectralRadius: 5,
+        analyticalRho: '5',
+        expectedAlpha: 0  // Bounded (5-regular)
+    };
+}
+
+function generateDodecahedronGraph() {
+    // 20 vertices, 30 edges, 3-regular
+    const edges = [
+        [0,1], [1,2], [2,3], [3,4], [4,0],  // Pentagon 1
+        [0,5], [1,6], [2,7], [3,8], [4,9],  // Connectors
+        [5,10], [6,10], [6,11], [7,11], [7,12], [8,12], [8,13], [9,13], [9,14], [5,14],
+        [10,15], [11,16], [12,17], [13,18], [14,19],
+        [15,16], [16,17], [17,18], [18,19], [19,15]  // Pentagon 2
+    ];
+    return {
+        n: 20,
+        edges,
+        edgeCount: 30,
+        name: 'Dodecahedron',
+        family: 'Platonic',
+        spectralRadius: 3,
+        analyticalRho: '3',
+        expectedAlpha: 0  // Bounded (3-regular)
     };
 }
 

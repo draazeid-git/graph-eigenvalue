@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { computeSkewSymmetricEigenvalues, computeEigenvaluesNumerical } from './spectral-analysis.js';
 
 // =====================================================
 // CONFIGURATION
@@ -28,9 +29,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const CONFIG = {
     // Universe scale - CLOSER together like the example
     galaxySpacing: 200,          // Distance between galaxy centers (was 400)
-    galaxyRadius: 120,           // Radius of each galaxy cluster (increased for visibility)
-    nodeBaseSize: 8,             // Base size for graph nodes (increased from 3)
-    nodeSizeScale: 1.0,          // Size multiplier based on vertex count (increased from 0.4)
+    galaxyRadius: 150,           // Radius of each galaxy cluster (increased for more spread)
+    nodeBaseSize: 10,            // Base size for graph nodes (increased from 8)
+    nodeSizeScale: 1.2,          // Size multiplier based on vertex count (increased from 1.0)
     
     // Movement - FASTER like the example (speed 400)
     moveSpeed: 400,              // Movement acceleration (was 300)
@@ -39,7 +40,7 @@ const CONFIG = {
     // Visual
     fogDensity: 0.0008,          // Fog density (reduced for better visibility)
     backgroundColor: 0x020205,   // Deep dark blue-black
-    starCount: 2000,             // Stars in background (reduced to avoid confusion with nodes)
+    starCount: 0,                // No background stars - cleaner view
     
     // Flow particles
     flowSpeed: 0.02,
@@ -54,13 +55,24 @@ const CONFIG = {
     selectedColor: 0x00ff00,
     
     // Spectral positioning configuration (for nodes within galaxies)
-    spectralMode: false,         // Toggle: false = artistic patterns, true = spectral positioning
     spectralScales: {
         x: 40,                   // Scale for log(n) axis (vertex count)
         y: 80,                   // Scale for density axis
         z: 25                    // Scale for spectral radius axis
     },
-    spectralSpread: 80,          // Base spread for spectral positioning within galaxy (increased)
+    spectralSpread: 400,          // Base spread for spectral positioning within galaxy (INCREASED for zoom visibility)
+    
+    // Analytic distinction visualization mode
+    analyticHighlightMode: false,  // Toggle: highlights analytic vs custom graphs
+    analyticColors: {
+        analytic: 0x00ffff,        // Cyan for library/analytic graphs
+        custom: 0xff6600,          // Orange for custom/built graphs  
+        analyticGlow: 0x00aaaa,    // Glow color for analytic
+        customGlow: 0xcc4400,      // Glow color for custom
+        manifoldColor: 0x004444,   // Color for the analytic manifold surface
+        manifoldOpacity: 0.15      // Opacity of manifold visualization
+    },
+    showAnalyticManifold: false,    // Toggle: show the analytic submanifold boundary
     
     // NEW: Galaxy axis configuration
     galaxyAxes: {
@@ -69,12 +81,20 @@ const CONFIG = {
         z: 'avgSpectralRadius'   // Current Z axis metric
     },
     
-    // Galaxy spread scales
+    // Galaxy spread scales (world units per normalized metric unit)
     galaxyScale: {
-        x: 1000,
-        y: 600,
-        z: 400
-    }
+        x: 800,   // Spread for X axis
+        y: 600,   // Spread for Y axis
+        z: 500    // Spread for Z axis
+    },
+    
+    // Log scale option for better distribution of clustered data
+    useLogScale: false,
+    
+    // Adaptive labels - only show labels for nearby graphs
+    adaptiveLabels: true,
+    maxVisibleLabels: 25,    // Max number of labels to show at once
+    labelFadeDistance: 300   // Distance at which labels start fading
 };
 
 // Available metrics for galaxy positioning
@@ -156,6 +176,12 @@ const GALAXY_AXIS_OPTIONS = {
         description: 'Coefficient in ρ ≈ c·n^α',
         range: [0, 'auto'],
         color: 0xffaa66
+    },
+    'eigenvalueRatio': {
+        name: 'λ_max/λ_min',
+        description: 'Ratio of largest to smallest non-zero eigenvalue',
+        range: [1, 'auto'],
+        color: 0x66aaff
     }
 };
 
@@ -210,6 +236,113 @@ const AXIS_PRESETS = {
         z: 'energy'
     }
 };
+
+/**
+ * Get a metric value from a graph's computed metrics
+ * Maps axis keys to actual metric values for positioning
+ * @param {Object} metrics - Computed metrics object from calculateGraphMetrics
+ * @param {string} axisKey - The metric key (e.g., 'alpha', 'avgSpectralRadius')
+ * @returns {number} The metric value
+ */
+function getMetricValue(metrics, axisKey) {
+    const mapping = {
+        // Core spectral metrics
+        'alpha': metrics.alpha ?? 0.5,
+        'rationality': metrics.rationality ?? 0.5,
+        'avgSpectralRadius': metrics.spectralRadius ?? metrics.avgSpectralRadius ?? 2,
+        'spectralGap': metrics.spectralGap ?? 0.5,
+        'energy': metrics.energy ?? 5,
+        'eigenvalueRatio': metrics.eigenvalueRatio ?? 1,
+        
+        // Graph structure metrics
+        'regularity': metrics.regularity ?? 0.5,
+        'sparsity': 1 - (metrics.density ?? 0.5),
+        'avgN': metrics.n ?? 5,
+        'graphCount': 1,  // Individual graphs always count as 1
+        'avgEdges': metrics.edgeCount ?? 5,
+        
+        // Derived metrics
+        'spectralSpread': (metrics.spectralRadius ?? 2) * 2,
+        'spectralRadiusRatio': metrics.n > 0 ? (metrics.spectralRadius ?? 2) / metrics.n : 0.3,
+        'coefficient': 1
+    };
+    
+    const value = mapping[axisKey];
+    if (value === undefined) {
+        console.warn(`Unknown metric key: ${axisKey}, using 0.5`);
+        return 0.5;
+    }
+    return value;
+}
+
+/**
+ * Compute the position for a graph based on configured axes
+ * Uses CONFIG.galaxyAxes to determine which metrics map to X, Y, Z
+ * @param {Object} metrics - Computed metrics object
+ * @returns {THREE.Vector3} World position
+ */
+function computeGraphPosition(metrics) {
+    const axes = CONFIG.galaxyAxes;
+    const scales = CONFIG.galaxyScale;
+    const useLog = CONFIG.useLogScale;
+    
+    // Get raw metric values
+    let xVal = getMetricValue(metrics, axes.x);
+    let yVal = getMetricValue(metrics, axes.y);
+    let zVal = getMetricValue(metrics, axes.z);
+    
+    // Get normalization ranges from axis options
+    const xOpt = GALAXY_AXIS_OPTIONS[axes.x] || { range: [0, 10] };
+    const yOpt = GALAXY_AXIS_OPTIONS[axes.y] || { range: [0, 10] };
+    const zOpt = GALAXY_AXIS_OPTIONS[axes.z] || { range: [0, 10] };
+    
+    // Helper to get actual range bounds
+    const getRange = (opt, val) => {
+        let min = opt.range[0] === 'auto' ? 0 : opt.range[0];
+        let max = opt.range[1] === 'auto' ? Math.max(val * 1.5, 10) : opt.range[1];
+        return [min, max];
+    };
+    
+    const [xMin, xMax] = getRange(xOpt, xVal);
+    const [yMin, yMax] = getRange(yOpt, yVal);
+    const [zMin, zMax] = getRange(zOpt, zVal);
+    
+    // Apply log scale if enabled (helps spread clustered values)
+    if (useLog) {
+        // Log transform: log(1 + value) to handle 0 values
+        xVal = Math.log1p(xVal);
+        yVal = Math.log1p(yVal);
+        zVal = Math.log1p(zVal);
+        
+        // Also transform the ranges
+        const xMinLog = Math.log1p(xMin), xMaxLog = Math.log1p(xMax);
+        const yMinLog = Math.log1p(yMin), yMaxLog = Math.log1p(yMax);
+        const zMinLog = Math.log1p(zMin), zMaxLog = Math.log1p(zMax);
+        
+        // Normalize to 0-1 in log space
+        const xNorm = xMaxLog > xMinLog ? (xVal - xMinLog) / (xMaxLog - xMinLog) : 0.5;
+        const yNorm = yMaxLog > yMinLog ? (yVal - yMinLog) / (yMaxLog - yMinLog) : 0.5;
+        const zNorm = zMaxLog > zMinLog ? (zVal - zMinLog) / (zMaxLog - zMinLog) : 0.5;
+        
+        return new THREE.Vector3(
+            (xNorm - 0.5) * scales.x,
+            (yNorm - 0.5) * scales.y,
+            (zNorm - 0.5) * scales.z
+        );
+    }
+    
+    // Linear normalization to 0-1, then scale to world coordinates
+    const xNorm = xMax > xMin ? (xVal - xMin) / (xMax - xMin) : 0.5;
+    const yNorm = yMax > yMin ? (yVal - yMin) / (yMax - yMin) : 0.5;
+    const zNorm = zMax > zMin ? (zVal - zMin) / (zMax - zMin) : 0.5;
+    
+    // Center around origin: -scale/2 to +scale/2
+    return new THREE.Vector3(
+        (xNorm - 0.5) * scales.x,
+        (yNorm - 0.5) * scales.y,
+        (zNorm - 0.5) * scales.z
+    );
+}
 
 // Galaxy family definitions with colors and descriptions
 const GALAXY_FAMILIES = {
@@ -345,6 +478,60 @@ const GALAXY_FAMILIES = {
         description: 'Gyro-bondgraph structures from mechanisms',
         pattern: 'grid'
     },
+    'Pendulum': {
+        color: 0xff6633,      // Orange Red
+        name: 'The Pendulums',
+        description: 'n-link pendulum bond graphs',
+        pattern: 'grid'
+    },
+    'Friendship': {
+        color: 0xff69b4,      // Hot Pink
+        name: 'The Friendships',
+        description: 'Windmill graphs - n triangles sharing a vertex',
+        pattern: 'radial'
+    },
+    'Crown': {
+        color: 0xffd700,      // Gold
+        name: 'The Crowns',
+        description: 'Complete bipartite minus perfect matching',
+        pattern: 'bipartite'
+    },
+    'Book': {
+        color: 0xdda0dd,      // Plum
+        name: 'The Stacks',
+        description: 'Triangles sharing a common edge',
+        pattern: 'cascade'
+    },
+    'Fan': {
+        color: 0x20b2aa,      // Light Sea Green
+        name: 'The Fans',
+        description: 'Path with universal vertex',
+        pattern: 'radial'
+    },
+    'Gear': {
+        color: 0xcd853f,      // Peru (brownish)
+        name: 'The Gears',
+        description: 'Wheel with extra spoke vertices',
+        pattern: 'wheel'
+    },
+    'Helm': {
+        color: 0x8b4513,      // Saddle Brown
+        name: 'The Helms',
+        description: 'Wheel with pendant vertices',
+        pattern: 'wheel'
+    },
+    'Turán': {
+        color: 0xdc143c,      // Crimson
+        name: 'The Turáns',
+        description: 'Complete r-partite - max edges without (r+1)-clique',
+        pattern: 'dense'
+    },
+    'Platonic': {
+        color: 0x4169e1,      // Royal Blue
+        name: 'The Platonics',
+        description: 'Tetrahedron, Cube, Octahedron, Dodecahedron, Icosahedron',
+        pattern: 'dense'
+    },
     'Unknown': {
         color: 0x888888,      // Gray
         name: 'The Nebulae',
@@ -439,6 +626,7 @@ const KNOWN_SCALING_EXPONENTS = {
     'Line Graph': { alpha: 0.5, c: 2, note: 'ρ(L(G)) related to Δ(G)' },
     'Complement': { alpha: 1, c: 1, note: 'ρ(Ḡ) = n-1-λₘᵢₙ(G)' },
     'Mechanism': { alpha: 0, c: 3.126, note: '5-Bar: ρ = √((11+√73)/2) ≈ 3.126 (bounded)' },
+    'Pendulum': { alpha: 0, c: 2.67, note: '2-Link: ρ = √((11+√37)/2) ≈ 2.67 (bounded)' },
     'Unknown': { alpha: 0.5, c: 2, note: 'Default estimate' }
 };
 
@@ -457,6 +645,7 @@ function calculateGalaxyMetrics(familyName, graphs) {
     let totalEnergy = 0;
     let totalSpectralGap = 0;
     let totalSpectralSpread = 0;
+    let totalEigenvalueRatio = 0;
     let totalN = 0;
     let totalEdges = 0;
     let totalDensity = 0;
@@ -469,6 +658,7 @@ function calculateGalaxyMetrics(familyName, graphs) {
     for (const graph of graphs) {
         const metrics = calculateGraphMetrics(graph);
         totalSpectralRadius += metrics.spectralRadius;
+        totalEigenvalueRatio += metrics.eigenvalueRatio || 0;
         totalN += metrics.n;
         totalEdges += (graph.edges ? graph.edges.length : 0);
         totalDensity += metrics.density;
@@ -557,6 +747,7 @@ function calculateGalaxyMetrics(familyName, graphs) {
     const avgSpectralGap = totalSpectralGap / count;
     const avgSpectralSpread = totalSpectralSpread / count;
     const avgDegreeVariance = totalDegreeVariance / count;
+    const avgEigenvalueRatio = totalEigenvalueRatio / count;
     
     // Regularity: 1 = perfectly regular, 0 = highly irregular
     const maxVariance = avgN > 1 ? avgN : 1;
@@ -580,9 +771,11 @@ function calculateGalaxyMetrics(familyName, graphs) {
         avgEnergy,
         avgSpectralGap,
         avgSpectralSpread,
+        avgEigenvalueRatio,
         // Derived
         spectralSpread: avgSpectralSpread,
         spectralRadiusRatio,
+        eigenvalueRatio: avgEigenvalueRatio,
         // Scores (0-1)
         rationality: rationalityScore,
         regularity,
@@ -661,6 +854,7 @@ function getGalaxyMetricValue(metrics, metricKey) {
         case 'spectralRadiusRatio': return metrics.spectralRadiusRatio || 0;
         case 'avgEdges': return metrics.avgEdges || 0;
         case 'coefficient': return metrics.coefficient || 1;
+        case 'eigenvalueRatio': return metrics.eigenvalueRatio || metrics.avgEigenvalueRatio || 1;
         default: return 0;
     }
 }
@@ -769,66 +963,90 @@ function galaxyMetricsToPosition(metrics, globalStats) {
 function calculateGraphMetrics(graph) {
     const n = graph.n || 1;
     const edgeCount = graph.edgeCount || graph.edges?.length || 0;
+    const edges = graph.edges || [];
+    
+    // DEBUG: Log input data
+    const debugName = graph.name || graph.family || `G(${n})`;
     
     // Calculate density (for undirected: edges / (n*(n-1)/2))
     const maxEdges = n * (n - 1) / 2;
     const density = maxEdges > 0 ? edgeCount / maxEdges : 0;
     
-    // Use explicit spectral radius if provided (test graphs have this)
-    let spectralRadius = graph.spectralRadius || 0;
+    // Initialize metrics
+    let spectralRadius = 0;
     let maxEigenvalue = 0;
     let minEigenvalue = 0;
     let spectralGap = 0;
     let energy = 0;
     let rationality = 0;
     let rationalCount = 0;
+    let eigenvalueRatio = 0;  // Ratio of largest to smallest non-zero eigenvalue
+    let computedEigenvalues = null;
     
-    // Extract metrics from eigenvalues if available
-    if (graph.eigenvalues && graph.eigenvalues.length > 0) {
-        const numericEigenvalues = graph.eigenvalues.map(e => {
-            if (typeof e === 'number') return e;
-            if (typeof e === 'object') {
-                if (e.value !== undefined) return e.value;
-                if (e.numeric !== undefined) return e.numeric;
-                // Try to parse from form/formula
-                if (e.form) {
-                    const parsed = parseFloat(e.form);
-                    if (!isNaN(parsed)) return parsed;
+    // ALWAYS compute skew-symmetric eigenvalues from the adjacency matrix
+    // (ignore any stored eigenvalues - they may be symmetric, not skew-symmetric)
+    if (edges.length > 0 && n > 0 && n <= 200) {
+        try {
+            // Build skew-symmetric adjacency matrix
+            const matrix = Array(n).fill(null).map(() => Array(n).fill(0));
+            for (const [i, j] of edges) {
+                if (i < n && j < n) {
+                    matrix[i][j] = 1;
+                    matrix[j][i] = -1;
                 }
             }
-            return 0;
-        }).filter(v => !isNaN(v));
-        
-        if (numericEigenvalues.length > 0) {
-            // Sort by absolute value for spectral radius
-            const sorted = [...numericEigenvalues].sort((a, b) => Math.abs(b) - Math.abs(a));
             
-            // Only override if we didn't have explicit spectralRadius
-            if (spectralRadius === 0) {
-                spectralRadius = Math.abs(sorted[0]);
+            // Compute eigenvalues using spectral analysis
+            const skewEigs = computeSkewSymmetricEigenvalues(matrix);
+            if (skewEigs && skewEigs.length > 0) {
+                // Extract imaginary parts (skew-symmetric has pure imaginary eigenvalues)
+                computedEigenvalues = skewEigs.map(e => Math.abs(e.imag || e.value || e)).filter(v => isFinite(v));
+                console.log(`  [METRICS] ${debugName}: COMPUTED ${computedEigenvalues.length} skew-sym eigenvalues`);
             }
-            
-            maxEigenvalue = Math.max(...numericEigenvalues);
-            minEigenvalue = Math.min(...numericEigenvalues);
-            spectralGap = sorted.length > 1 ? Math.abs(sorted[0]) - Math.abs(sorted[1]) : 0;
-            energy = numericEigenvalues.reduce((sum, λ) => sum + Math.abs(λ), 0);
-            
-            // Calculate rationality (fraction of eigenvalues that are simple rationals)
-            for (const eig of numericEigenvalues) {
-                if (isSimpleRational(eig)) {
-                    rationalCount++;
-                }
-            }
-            rationality = numericEigenvalues.length > 0 ? rationalCount / numericEigenvalues.length : 0;
+        } catch (err) {
+            console.warn(`  [METRICS] ${debugName}: Failed to compute eigenvalues:`, err.message);
         }
     }
     
-    // Estimate spectral radius from graph structure if still not available
+    // Process computed eigenvalues
+    if (computedEigenvalues && computedEigenvalues.length > 0) {
+        // Sort by absolute value for spectral radius
+        const sorted = [...computedEigenvalues].sort((a, b) => Math.abs(b) - Math.abs(a));
+        
+        spectralRadius = Math.abs(sorted[0]);
+        maxEigenvalue = Math.max(...computedEigenvalues);
+        minEigenvalue = Math.min(...computedEigenvalues);
+        spectralGap = sorted.length > 1 ? Math.abs(sorted[0]) - Math.abs(sorted[1]) : 0;
+        energy = computedEigenvalues.reduce((sum, λ) => sum + Math.abs(λ), 0);
+        
+        // Calculate eigenvalue ratio: largest / smallest non-zero
+        // Find smallest non-zero eigenvalue (by absolute value)
+        const nonZeroSorted = sorted.filter(v => Math.abs(v) > 1e-10);
+        if (nonZeroSorted.length >= 2) {
+            const largestAbs = Math.abs(nonZeroSorted[0]);
+            const smallestAbs = Math.abs(nonZeroSorted[nonZeroSorted.length - 1]);
+            eigenvalueRatio = smallestAbs > 1e-10 ? largestAbs / smallestAbs : 0;
+        } else if (nonZeroSorted.length === 1) {
+            eigenvalueRatio = 1;  // Only one non-zero eigenvalue
+        }
+        
+        // Calculate rationality (fraction of eigenvalues that are simple rationals)
+        for (const eig of computedEigenvalues) {
+            if (isSimpleRational(eig)) {
+                rationalCount++;
+            }
+        }
+        rationality = computedEigenvalues.length > 0 ? rationalCount / computedEigenvalues.length : 0;
+        
+        console.log(`  [METRICS] ${debugName}: ρ=${spectralRadius.toFixed(3)}, E=${energy.toFixed(2)}, gap=${spectralGap.toFixed(3)}, ratio=${eigenvalueRatio.toFixed(3)}`);
+    }
+    
+    // FALLBACK: Estimate spectral radius only if computation failed
     if (spectralRadius === 0 && edgeCount > 0) {
-        // Upper bound: sqrt(2 * edgeCount) for connected graphs
-        // Better estimate: average degree
+        console.warn(`  [METRICS] ${debugName}: FALLBACK to estimation (no eigenvalues computed)`);
         const avgDegree = (2 * edgeCount) / n;
-        spectralRadius = Math.max(avgDegree, Math.sqrt(avgDegree));
+        spectralRadius = Math.sqrt(avgDegree * Math.max(avgDegree, 2));
+        energy = 2 * edgeCount * 0.8;
     }
     
     // Estimate alpha based on graph structure
@@ -864,6 +1082,7 @@ function calculateGraphMetrics(graph) {
         spectralGap,
         energy,
         rationality,
+        eigenvalueRatio,
         alpha,
         // Derived metrics
         avgDegree: n > 0 ? (2 * edgeCount) / n : 0,
@@ -895,6 +1114,7 @@ function metricsToLocalPosition(metrics, familyStats, globalStats = null) {
             case 'avgN': return metrics.n ?? 5;
             case 'sparsity': 
             case 'density': return metrics.density ?? 0.5;
+            case 'eigenvalueRatio': return metrics.eigenvalueRatio ?? 1;
             default: return 0.5;
         }
     };
@@ -924,7 +1144,8 @@ function metricsToLocalPosition(metrics, familyStats, globalStats = null) {
             'energy': [2, 20],
             'avgN': [3, 15],
             'alpha': [0, 1],
-            'rationality': [0, 1]
+            'rationality': [0, 1],
+            'eigenvalueRatio': [1, 10]  // Typical range for eigenvalue ratios
         };
         return defaults[axisKey] || [0, 1];
     };
@@ -1023,7 +1244,7 @@ function setupScene() {
 
 function setupCamera() {
     const aspect = universeState.container.clientWidth / universeState.container.clientHeight;
-    universeState.camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 8000);
+    universeState.camera = new THREE.PerspectiveCamera(75, aspect, 0.01, 10000);
     // Start further back to see more of the spread-out galaxies
     universeState.camera.position.set(0, 300, 900);
 }
@@ -1045,35 +1266,34 @@ function setupControls() {
     );
     
     // Configure mouse buttons:
-    // - LEFT = Rotate
-    // - MIDDLE = Pan (moved from right)
-    // - RIGHT = disabled (used for rubber band zoom)
-    // Note: Using numeric values for compatibility
-    try {
-        universeState.controls.mouseButtons = {
-            LEFT: 0,      // ROTATE
-            MIDDLE: 2,    // PAN (was on right)
-            RIGHT: -1     // Disabled - used for rubber band zoom
-        };
-    } catch (e) {
-        console.warn('Could not configure mouse buttons:', e);
-    }
+    // - LEFT = Rotate (Shift+Left will pan due to OrbitControls default behavior)
+    // - MIDDLE = Pan
+    // - RIGHT = disabled (we use it for rubber band zoom manually)
+    // Using THREE.MOUSE enum for proper compatibility
+    universeState.controls.mouseButtons = {
+        LEFT: THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.PAN,
+        RIGHT: null  // Disabled - used for rubber band zoom
+    };
     
-    // Enable smooth damping for all movements (rubber banding effect)
+    // Enable smooth damping for all movements
     universeState.controls.enableDamping = true;
-    universeState.controls.dampingFactor = 0.08;  // Smoother, more rubber-band feel
+    universeState.controls.dampingFactor = 0.08;
     
     // Zoom settings
-    universeState.controls.zoomSpeed = 0.8;  // Slightly slower for more control
-    universeState.controls.minDistance = 10;
-    universeState.controls.maxDistance = 4000;
+    universeState.controls.enableZoom = true;
+    universeState.controls.zoomSpeed = 0.8;
+    universeState.controls.minDistance = 1;      // Allow very close zoom
+    universeState.controls.maxDistance = 5000;   // Allow zooming out further
     
     // Rotation settings
-    universeState.controls.rotateSpeed = 0.5;  // Smoother rotation
+    universeState.controls.enableRotate = true;
+    universeState.controls.rotateSpeed = 0.5;
     universeState.controls.autoRotate = false;
-    universeState.controls.autoRotateSpeed = 0.5;  // Slow auto-rotate when enabled
+    universeState.controls.autoRotateSpeed = 0.5;
     
-    // Pan settings
+    // Pan settings - Shift+Left or Middle button pans
+    universeState.controls.enablePan = true;
     universeState.controls.screenSpacePanning = true;
     universeState.controls.panSpeed = 0.8;
     
@@ -1209,14 +1429,15 @@ function createHUD() {
         <div class="hud-row">COORDS: <span id="universe-coords">0, 0, 0</span></div>
         <div class="hud-row">GALAXY: <span id="universe-galaxy">-</span></div>
         <div class="hud-row">METRICS: <span id="universe-galaxy-alpha">-</span></div>
-        <div class="hud-row">NODE MODE: <span id="universe-mode">Artistic</span></div>
         <div class="hud-row">PIVOT: <span id="universe-pivot">Origin</span></div>
+        <div class="hud-row">HIGHLIGHT: <span id="universe-highlight">-</span></div>
         <div class="hud-hint">
             <b>Left-drag</b>=Rotate | <b>Scroll</b>=Zoom | <b>Middle-drag</b>=Pan<br>
             <b style="color:#0ff">Right-drag</b>=<b style="color:#0ff">RUBBER BAND ZOOM</b><br>
-            <b>F</b>=Fit All | <b>M</b>=Mode | <b>R</b>=Auto-rotate<br>
+            <b>F</b>=Fit All | <b>R</b>=Auto-rotate<br>
             <b>P</b>=Set Pivot | <b>O</b>=Origin | <b>DblClick</b>=Pivot to graph<br>
-            <b style="color:#4fc3f7">E</b>=<b style="color:#4fc3f7">Expand All</b> | <b style="color:#ce93d8">C</b>=<b style="color:#ce93d8">Collapse All</b>
+            <b style="color:#4fc3f7">E</b>=<b style="color:#4fc3f7">Expand All</b> | <b style="color:#ce93d8">C</b>=<b style="color:#ce93d8">Collapse All</b><br>
+            <b style="color:#ff6600">H</b>=<b style="color:#ff6600">Highlight Analytic</b> | <b style="color:#00aaaa">V</b>=<b style="color:#00aaaa">Manifold</b>
         </div>
     `;
     universeState.container.appendChild(hud);
@@ -1310,7 +1531,27 @@ function createAxisControlPanel() {
         </div>
         <div id="axis-description" class="axis-desc"></div>
         <button id="axis-apply-btn">Apply</button>
-        <button id="axis-export-btn" style="background: #2a6b2a; margin-top: 5px;">📊 Export Table</button>
+        <div class="axis-row" style="margin-top: 8px;">
+            <label style="flex: 1;">
+                <input type="checkbox" id="log-scale-checkbox" ${CONFIG.useLogScale ? 'checked' : ''}>
+                Log Scale
+            </label>
+            <small style="color: #888; font-size: 9px;">Spreads clusters</small>
+        </div>
+        <div style="display: flex; gap: 5px; margin-top: 5px;">
+            <button id="axis-export-btn" style="flex: 1; background: #2a6b2a; font-size: 11px;">📊 Export</button>
+            <button id="axis-verify-btn" style="flex: 1; background: #b26a00; font-size: 11px;">✓ Verify</button>
+        </div>
+        
+        <div class="axis-divider" style="margin-top: 10px;"></div>
+        <div class="axis-panel-header" style="font-size: 11px;">💥 Cluster Navigation</div>
+        <div class="axis-row" style="margin-top: 5px;">
+            <label style="flex: 1;">
+                <input type="checkbox" id="adaptive-labels-checkbox" ${CONFIG.adaptiveLabels ? 'checked' : ''}>
+                Adaptive Labels
+            </label>
+            <small style="color: #888; font-size: 9px;">Show ${CONFIG.maxVisibleLabels} nearest</small>
+        </div>
         
         <div class="axis-divider" style="margin-top: 10px;"></div>
         <div class="axis-panel-header" style="font-size: 11px;">🔍 Expand/Collapse</div>
@@ -1327,7 +1568,7 @@ function createAxisControlPanel() {
         <div id="expand-status" style="font-size: 10px; color: #888; margin-top: 5px; text-align: center;"></div>
         
         <div class="axis-help">
-            <small>💡 Hover over axes to see descriptions</small>
+            <small>💡 Keys: F=fit all, E=expand, C=collapse, H=highlight</small>
         </div>
     `;
     
@@ -1377,6 +1618,16 @@ function createAxisControlPanel() {
         }
     });
     
+    // Add event listener for verify button
+    document.getElementById('axis-verify-btn').addEventListener('click', () => {
+        const result = verifyUniversePositions();
+        if (result && result.discrepancies.length > 0) {
+            alert(`Found ${result.discrepancies.length} position discrepancies!\nCheck console for details.`);
+        } else {
+            alert('No discrepancies found - all identical graphs have matching positions.');
+        }
+    });
+    
     // Add event listener for preset selector
     document.getElementById('axis-preset-select').addEventListener('change', (e) => {
         const presetKey = e.target.value;
@@ -1389,6 +1640,29 @@ function createAxisControlPanel() {
             applyAxisConfiguration();
             // Reset preset dropdown
             e.target.value = '';
+        }
+    });
+    
+    // Add event listener for log scale checkbox
+    document.getElementById('log-scale-checkbox').addEventListener('change', (e) => {
+        CONFIG.useLogScale = e.target.checked;
+        console.log(`Log scale ${CONFIG.useLogScale ? 'enabled' : 'disabled'}`);
+        applyAxisConfiguration();
+    });
+    
+    // Add event listener for adaptive labels checkbox
+    document.getElementById('adaptive-labels-checkbox').addEventListener('change', (e) => {
+        CONFIG.adaptiveLabels = e.target.checked;
+        console.log(`Adaptive labels ${CONFIG.adaptiveLabels ? 'enabled' : 'disabled'}`);
+        // If disabling, make all labels visible
+        if (!CONFIG.adaptiveLabels) {
+            for (const [graphId, nodeData] of universeState.graphNodes) {
+                const label = nodeData.mesh?.userData?.label;
+                if (label) {
+                    label.visible = true;
+                    if (label.material) label.material.opacity = 1;
+                }
+            }
         }
     });
     
@@ -1480,6 +1754,10 @@ function applyAxisConfiguration() {
                 addCustomGraph(customGraph.data, customGraph.expanded);
             }
             console.log(`Restored ${customGraphsBackup.length} custom graphs with new axis positions`);
+            
+            // IMPORTANT: Recreate axes to encompass all the newly added graphs
+            console.log('Recreating axes to encompass restored graphs...');
+            createUniverseAxes();
         }
         
         // Restore camera position
@@ -1513,6 +1791,31 @@ export function setGalaxyAxes(xAxis, yAxis, zAxis) {
     if (zSel) zSel.value = CONFIG.galaxyAxes.z;
     
     applyAxisConfiguration();
+}
+
+/**
+ * Toggle log scale for universe positioning
+ * Log scale helps spread out clustered data points
+ * @param {boolean} enabled - Whether to use log scale
+ */
+export function setLogScale(enabled) {
+    CONFIG.useLogScale = enabled;
+    
+    // Update checkbox if it exists
+    const checkbox = document.getElementById('log-scale-checkbox');
+    if (checkbox) checkbox.checked = enabled;
+    
+    console.log(`Log scale ${enabled ? 'enabled' : 'disabled'}`);
+    
+    // Rebuild universe with new scale
+    applyAxisConfiguration();
+}
+
+/**
+ * Get current log scale setting
+ */
+export function getLogScale() {
+    return CONFIG.useLogScale;
 }
 
 function createInfoPanel() {
@@ -1598,9 +1901,13 @@ function setupEventListeners() {
     
     // Rubber band zoom (right-click drag)
     universeState.renderer.domElement.addEventListener('mousedown', onRubberBandStart);
-    universeState.renderer.domElement.addEventListener('mousemove', onRubberBandMove);
-    universeState.renderer.domElement.addEventListener('mouseup', onRubberBandEnd);
+    // Use document-level listeners for move and up to handle mouse leaving canvas
+    document.addEventListener('mousemove', onRubberBandMove);
+    document.addEventListener('mouseup', onRubberBandEnd);
     universeState.renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    
+    // Safety: cancel rubber band if mouse leaves window entirely
+    document.addEventListener('mouseleave', onRubberBandCancel);
     
     // Window resize
     window.addEventListener('resize', onWindowResize);
@@ -1703,6 +2010,11 @@ function updateRubberBandOverlay() {
  * End rubber band selection and zoom to area
  */
 function onRubberBandEnd(event) {
+    // Always re-enable controls first to prevent freezing
+    if (universeState.controls) {
+        universeState.controls.enabled = true;
+    }
+    
     if (!universeState.rubberBand?.active) return;
     
     universeState.rubberBand.active = false;
@@ -1710,11 +2022,6 @@ function onRubberBandEnd(event) {
     // Hide overlay
     if (universeState.rubberBandOverlay) {
         universeState.rubberBandOverlay.style.display = 'none';
-    }
-    
-    // Re-enable OrbitControls
-    if (universeState.controls) {
-        universeState.controls.enabled = true;
     }
     
     const rb = universeState.rubberBand;
@@ -1729,6 +2036,27 @@ function onRubberBandEnd(event) {
     
     // Perform the zoom
     zoomToRubberBand(rb.startX, rb.startY, rb.endX, rb.endY);
+}
+
+/**
+ * Cancel rubber band selection (e.g., mouse left window)
+ */
+function onRubberBandCancel(event) {
+    if (!universeState.rubberBand?.active) return;
+    
+    universeState.rubberBand.active = false;
+    
+    // Hide overlay
+    if (universeState.rubberBandOverlay) {
+        universeState.rubberBandOverlay.style.display = 'none';
+    }
+    
+    // Re-enable controls
+    if (universeState.controls) {
+        universeState.controls.enabled = true;
+    }
+    
+    console.log('Rubber band cancelled');
 }
 
 /**
@@ -1895,11 +2223,6 @@ function onKeyDown(event) {
         case 'ArrowRight': case 'KeyD': universeState.moveRight = true; break;
         case 'Space': universeState.moveUp = true; event.preventDefault(); break;
         case 'ShiftLeft': case 'ShiftRight': universeState.moveDown = true; break;
-        // Toggle spectral mode with 'M' key
-        case 'KeyM': 
-            toggleSpectralMode();
-            event.preventDefault();
-            break;
         // Fit all galaxies in view with 'F' key
         case 'KeyF':
             fitAllInView();
@@ -1950,6 +2273,16 @@ function onKeyDown(event) {
         // Collapse all graphs with 'C' key  
         case 'KeyC':
             expandCollapseAll(false, '__all__');
+            event.preventDefault();
+            break;
+        // Toggle analytic highlight mode with 'H' key
+        case 'KeyH':
+            toggleAnalyticHighlightMode();
+            event.preventDefault();
+            break;
+        // Toggle analytic manifold visualization with 'V' key
+        case 'KeyV':
+            toggleAnalyticManifold();
             event.preventDefault();
             break;
     }
@@ -2268,18 +2601,80 @@ function showNodeInfo(nodeData) {
     if (metricsEl && metrics) {
         metricsEl.innerHTML = `
             <strong>Spectral Metrics:</strong><br>
-            <span class="metric">ρ(A) = ${metrics.spectralRadius.toFixed(4)}</span><br>
-            <span class="metric">Density = ${(metrics.density * 100).toFixed(1)}%</span><br>
-            <span class="metric">Avg Degree = ${metrics.avgDegree.toFixed(2)}</span>
+            <span class="metric">ρ (skew-sym) = ${metrics.spectralRadius.toFixed(4)}</span><br>
+            <span class="metric">Energy = ${metrics.energy?.toFixed(2) || 'N/A'}</span><br>
+            <span class="metric">Density = ${(metrics.density * 100).toFixed(1)}%</span>
         `;
         metricsEl.style.display = 'block';
     } else if (metricsEl) {
         metricsEl.style.display = 'none';
     }
     
+    // Compute and display BOTH symmetric and skew-symmetric eigenvalues
     if (statsEl) {
-        const eigenStr = formatEigenvaluesShort(graph.eigenvalues);
-        statsEl.innerHTML = `<strong>Eigenvalues:</strong><br><span class="eigenvalues">${eigenStr}</span>`;
+        let symEigenStr = '—';
+        let skewEigenStr = '—';
+        const n = graph.n || 0;
+        const edges = graph.edges || [];
+        
+        if (edges.length > 0 && n > 0 && n <= 200) {
+            try {
+                // Build SYMMETRIC adjacency matrix
+                const symMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                for (const [i, j] of edges) {
+                    if (i < n && j < n) {
+                        symMatrix[i][j] = 1;
+                        symMatrix[j][i] = 1;  // Symmetric!
+                    }
+                }
+                
+                // Compute symmetric eigenvalues
+                const symEigs = computeEigenvaluesNumerical(symMatrix);
+                if (symEigs && symEigs.length > 0) {
+                    const symValues = symEigs
+                        .map(e => typeof e === 'object' ? (e.value || e.real || 0) : e)
+                        .filter(v => isFinite(v))
+                        .sort((a, b) => Math.abs(b) - Math.abs(a));
+                    
+                    const symDisplayed = symValues.slice(0, 4).map(v => v.toFixed(3));
+                    symEigenStr = symDisplayed.join(', ');
+                    if (symValues.length > 4) {
+                        symEigenStr += ` ...`;
+                    }
+                }
+                
+                // Build SKEW-SYMMETRIC adjacency matrix
+                const skewMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+                for (const [i, j] of edges) {
+                    if (i < n && j < n) {
+                        skewMatrix[i][j] = 1;
+                        skewMatrix[j][i] = -1;  // Skew-symmetric!
+                    }
+                }
+                
+                // Compute skew-symmetric eigenvalues
+                const skewEigs = computeSkewSymmetricEigenvalues(skewMatrix);
+                if (skewEigs && skewEigs.length > 0) {
+                    const skewValues = skewEigs
+                        .map(e => Math.abs(e.imag || e.value || e))
+                        .filter(v => isFinite(v))
+                        .sort((a, b) => b - a);
+                    
+                    const skewDisplayed = skewValues.slice(0, 4).map(v => v.toFixed(3));
+                    skewEigenStr = skewDisplayed.join(', ');
+                    if (skewValues.length > 4) {
+                        skewEigenStr += ` ...`;
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to compute eigenvalues for info panel:', err);
+            }
+        }
+        
+        statsEl.innerHTML = `
+            <strong>Symmetric λ:</strong> <span class="eigenvalues">${symEigenStr}</span><br>
+            <strong>Skew-Sym |λ|:</strong> <span class="eigenvalues">${skewEigenStr}</span>
+        `;
     }
     
     // Show/hide and configure expand button
@@ -2327,6 +2722,17 @@ export function populateUniverse(graphs) {
     // Clear existing
     clearUniverse();
     
+    // DEBUG: Log input graph data
+    console.log(`\n========== POPULATE UNIVERSE ==========`);
+    console.log(`Input: ${graphs.length} graphs`);
+    
+    // Sample a few graphs to see their data
+    const sampleSize = Math.min(5, graphs.length);
+    for (let i = 0; i < sampleSize; i++) {
+        const g = graphs[i];
+        console.log(`  [${i}] "${g.name || g.family}": n=${g.n}, edgeCount=${g.edgeCount}, edges.length=${g.edges?.length}, eigenvalues=${g.eigenvalues?.length || 0}`);
+    }
+    
     // Store graphs for re-layout when toggling modes
     universeState.currentGraphs = graphs;
     
@@ -2350,7 +2756,8 @@ export function populateUniverse(graphs) {
     
     console.log(`Universe populated with ${graphs.length} graphs in ${familyGroups.size} galaxies`);
     console.log(`Galaxy positioning: Scaling Exponent (X) × Rationality (Y) × Avg ρ (Z)`);
-    console.log(`Node mode: ${CONFIG.spectralMode ? 'Spectral' : 'Artistic'}`);
+    console.log(`Node positioning: Spectral (based on graph metrics)`);
+    console.log(`========================================\n`);
 }
 
 /**
@@ -2395,8 +2802,29 @@ function calculateGalaxyData(familyGroups) {
 /**
  * Create axis indicators for the universe coordinate system
  * v35: Shows actual metric values on tick marks instead of just "Low/High"
+ * v35.1: Fixed axis bounds to extend to all galaxies
+ * v35.2: Fixed label duplication by properly removing old axes first
  */
 function createUniverseAxes() {
+    console.log('createUniverseAxes v35.2 - Fixed label duplication');
+    
+    // CRITICAL: Remove old axes before creating new ones to prevent label duplication
+    if (universeState.axisHelpers) {
+        universeState.scene.remove(universeState.axisHelpers);
+        // Dispose of all children to free memory
+        universeState.axisHelpers.traverse((child) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach(m => m.dispose());
+                } else {
+                    child.material.dispose();
+                }
+            }
+        });
+        universeState.axisHelpers = null;
+    }
+    
     const axisGroup = new THREE.Group();
     axisGroup.name = 'universeAxes';
     
@@ -2409,72 +2837,112 @@ function createUniverseAxes() {
     const globalStats = universeState.globalMetricStats || {};
     
     // Calculate actual bounds from all graphs in the universe
-    let minX = -100, maxX = 100;
-    let minY = -100, maxY = 100;
-    let minZ = -100, maxZ = 100;
+    // Start with no assumption - will expand based on data
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    console.log(`createUniverseAxes: Starting bounds calculation, ${universeState.galaxies.size} galaxies, ${universeState.graphNodes.size} graphNodes`);
     
     // Include galaxies
     for (const [name, galaxy] of universeState.galaxies) {
         const center = galaxy.center;
-        minX = Math.min(minX, center.x - 50);
-        maxX = Math.max(maxX, center.x + 50);
-        minY = Math.min(minY, center.y - 50);
-        maxY = Math.max(maxY, center.y + 50);
-        minZ = Math.min(minZ, center.z - 50);
-        maxZ = Math.max(maxZ, center.z + 50);
+        minX = Math.min(minX, center.x);
+        maxX = Math.max(maxX, center.x);
+        minY = Math.min(minY, center.y);
+        maxY = Math.max(maxY, center.y);
+        minZ = Math.min(minZ, center.z);
+        maxZ = Math.max(maxZ, center.z);
+        console.log(`  Galaxy "${name}": center=(${center.x.toFixed(1)}, ${center.y.toFixed(1)}, ${center.z.toFixed(1)})`);
     }
     
     // Include individual graph nodes
+    // For graphs in galaxies: world position = local position + galaxy center
+    // For custom graphs (added directly to scene): mesh.position IS world position
     universeState.graphNodes.forEach((nodeData, graphId) => {
         if (nodeData.mesh) {
-            const worldPos = new THREE.Vector3();
-            nodeData.mesh.getWorldPosition(worldPos);
-            minX = Math.min(minX, worldPos.x - 20);
-            maxX = Math.max(maxX, worldPos.x + 20);
-            minY = Math.min(minY, worldPos.y - 20);
-            maxY = Math.max(maxY, worldPos.y + 20);
-            minZ = Math.min(minZ, worldPos.z - 20);
-            maxZ = Math.max(maxZ, worldPos.z + 20);
+            let worldX, worldY, worldZ;
+            
+            // Check if this is a custom graph (added directly to scene) or a galaxy graph
+            if (nodeData.galaxy && nodeData.galaxy !== 'Custom' && universeState.galaxies.has(nodeData.galaxy)) {
+                // Galaxy graph: add galaxy center offset
+                const galaxy = universeState.galaxies.get(nodeData.galaxy);
+                const localPos = nodeData.mesh.position;
+                worldX = localPos.x + galaxy.center.x;
+                worldY = localPos.y + galaxy.center.y;
+                worldZ = localPos.z + galaxy.center.z;
+            } else {
+                // Custom graph: mesh position IS world position
+                worldX = nodeData.mesh.position.x;
+                worldY = nodeData.mesh.position.y;
+                worldZ = nodeData.mesh.position.z;
+            }
+            
+            minX = Math.min(minX, worldX);
+            maxX = Math.max(maxX, worldX);
+            minY = Math.min(minY, worldY);
+            maxY = Math.max(maxY, worldY);
+            minZ = Math.min(minZ, worldZ);
+            maxZ = Math.max(maxZ, worldZ);
         }
     });
     
-    // Add padding
-    const padding = 100;
-    minX -= padding; maxX += padding;
-    minY -= padding; maxY += padding;
-    minZ -= padding; maxZ += padding;
+    console.log(`  After graphNodes (${universeState.graphNodes.size} nodes): X=[${minX.toFixed(1)}, ${maxX.toFixed(1)}], Y=[${minY.toFixed(1)}, ${maxY.toFixed(1)}]`);
+    
+    // If no data found, use defaults
+    if (!isFinite(minX)) { minX = -100; maxX = 100; }
+    if (!isFinite(minY)) { minY = -100; maxY = 100; }
+    if (!isFinite(minZ)) { minZ = -100; maxZ = 100; }
+    
+    // Add generous padding (20% of range on each side, minimum 50)
+    const padX = Math.max(50, (maxX - minX) * 0.2);
+    const padY = Math.max(50, (maxY - minY) * 0.2);
+    const padZ = Math.max(50, (maxZ - minZ) * 0.2);
+    minX -= padX; maxX += padX;
+    minY -= padY; maxY += padY;
+    minZ -= padZ; maxZ += padZ;
+    
+    // Ensure axes pass through origin (0,0,0) for reference
+    minX = Math.min(minX, -50);
+    maxX = Math.max(maxX, 50);
+    minY = Math.min(minY, -50);
+    maxY = Math.max(maxY, 50);
+    minZ = Math.min(minZ, -50);
+    maxZ = Math.max(maxZ, 50);
     
     // Store bounds for later use
     universeState.axisBounds = { minX, maxX, minY, maxY, minZ, maxZ };
     
+    console.log(`Axis bounds calculated: X=[${minX.toFixed(0)}, ${maxX.toFixed(0)}], Y=[${minY.toFixed(0)}, ${maxY.toFixed(0)}], Z=[${minZ.toFixed(0)}, ${maxZ.toFixed(0)}]`);
+    
     /**
-     * Get the actual min/max range for a metric
+     * Get the actual min/max range for a metric based on global stats
+     * Maps visual axis positions back to actual metric values
      */
     function getMetricRange(metricKey) {
         const opt = GALAXY_AXIS_OPTIONS[metricKey];
         
-        // Fixed-range metrics (0-1)
+        // Fixed-range metrics (0-1 like rationality, regularity)
         if (opt && Array.isArray(opt.range) && opt.range[1] === 1 && opt.range[0] === 0) {
             return { min: 0, max: 1, isPercentage: true };
         }
         
-        // Use global stats if available
+        // Use global stats if available - this gives us actual data range
         if (globalStats[metricKey] && globalStats[metricKey].min !== Infinity) {
             const { min, max } = globalStats[metricKey];
-            const range = max - min || 1;
             return { 
-                min: Math.max(0, min - range * 0.05), 
-                max: max + range * 0.05,
+                min: min,
+                max: max,
                 isPercentage: false 
             };
         }
         
-        // Default ranges
+        // Default ranges when no data available
         const defaults = {
             'avgSpectralRadius': { min: 0, max: 10, isPercentage: false },
             'spectralGap': { min: 0, max: 5, isPercentage: false },
             'energy': { min: 0, max: 50, isPercentage: false },
-            'avgN': { min: 0, max: 30, isPercentage: false },
+            'avgN': { min: 3, max: 30, isPercentage: false },
             'alpha': { min: 0, max: 1, isPercentage: false },
             'rationality': { min: 0, max: 1, isPercentage: true },
             'regularity': { min: 0, max: 1, isPercentage: true },
@@ -2544,18 +3012,38 @@ function createUniverseAxes() {
     
     /**
      * Create tick marks with value labels along an axis
+     * Maps visual positions back to actual metric values using axis bounds
      */
     function createAxisTicks(axisDir, startPos, endPos, color, metricKey, tickCount = 6) {
         const tickGroup = new THREE.Group();
         const range = getMetricRange(metricKey);
-        const tickSize = 15;  // Larger ticks
+        const tickSize = 15;
+        
+        // Get the scale factor for this axis direction
+        const scale = CONFIG.galaxyScale;
+        const axisScale = axisDir === 'x' ? scale.x : (axisDir === 'y' ? scale.y : scale.z);
+        
+        // Get axis start and end positions
+        const startVal = axisDir === 'x' ? startPos.x : (axisDir === 'y' ? startPos.y : startPos.z);
+        const endVal = axisDir === 'x' ? endPos.x : (axisDir === 'y' ? endPos.y : endPos.z);
+        
+        // Calculate what metric values correspond to start and end positions
+        // Using: position = (normalized - 0.5) * scale
+        // So: normalized = position / scale + 0.5
+        // And: metricValue = normalized * (max - min) + min
+        const startNorm = startVal / axisScale + 0.5;
+        const endNorm = endVal / axisScale + 0.5;
+        const startMetric = startNorm * (range.max - range.min) + range.min;
+        const endMetric = endNorm * (range.max - range.min) + range.min;
+        
+        console.log(`createAxisTicks(${axisDir}): pos=[${startVal.toFixed(1)}, ${endVal.toFixed(1)}], scale=${axisScale}, range=[${range.min}, ${range.max}], metric=[${startMetric.toFixed(2)}, ${endMetric.toFixed(2)}]`);
         
         for (let i = 0; i <= tickCount; i++) {
             const t = i / tickCount;
             const pos = new THREE.Vector3().lerpVectors(startPos, endPos, t);
             
-            // Calculate actual metric value at this position
-            const actualValue = range.min + t * (range.max - range.min);
+            // Linear interpolation between start and end metric values
+            const actualValue = startMetric + t * (endMetric - startMetric);
             
             // Create tick mark (perpendicular to axis)
             const tickGeo = new THREE.BufferGeometry();
@@ -2591,11 +3079,11 @@ function createUniverseAxes() {
             });
             tickGroup.add(new THREE.Line(tickGeo, tickMat));
             
-            // Add value label
+            // Add value label - format based on range
             const valueLabel = createTextSprite(
                 formatTickValue(actualValue, range.isPercentage, true), 
                 color, 
-                0.5  // Larger labels
+                0.5
             );
             valueLabel.position.copy(labelOffset);
             tickGroup.add(valueLabel);
@@ -2609,15 +3097,25 @@ function createUniverseAxes() {
     const yRange = getMetricRange(axes.y);
     const zRange = getMetricRange(axes.z);
     
+    // Calculate dynamic tick counts based on axis length
+    const xLength = maxX - minX;
+    const yLength = maxY - minY;
+    const zLength = maxZ - minZ;
+    
+    // More ticks for longer axes (1 tick per ~100 units, minimum 5, max 12)
+    const xTickCount = Math.max(5, Math.min(12, Math.ceil(xLength / 100)));
+    const yTickCount = Math.max(5, Math.min(12, Math.ceil(yLength / 100)));
+    const zTickCount = Math.max(5, Math.min(12, Math.ceil(zLength / 100)));
+    
     // === X-AXIS (red) ===
     const xStart = new THREE.Vector3(minX, 0, 0);
     const xEnd = new THREE.Vector3(maxX, 0, 0);
     axisGroup.add(createThickAxis(xStart, xEnd, xOption.color, 3));
-    axisGroup.add(createAxisTicks('x', xStart, xEnd, xOption.color, axes.x, 6));
+    axisGroup.add(createAxisTicks('x', xStart, xEnd, xOption.color, axes.x, xTickCount));
     
-    // X-axis name label
-    const xNameLabel = createTextSprite('X: ' + xOption.name, xOption.color, 0.7);
-    xNameLabel.position.set((minX + maxX) / 2, -80, 0);
+    // X-axis name label - larger and clearer, at the end of axis
+    const xNameLabel = createTextSprite(xOption.name, xOption.color, 1.0);
+    xNameLabel.position.set(maxX + 80, 0, 0);
     axisGroup.add(xNameLabel);
     
     // X-axis arrow
@@ -2632,11 +3130,11 @@ function createUniverseAxes() {
     const yStart = new THREE.Vector3(0, minY, 0);
     const yEnd = new THREE.Vector3(0, maxY, 0);
     axisGroup.add(createThickAxis(yStart, yEnd, yOption.color, 3));
-    axisGroup.add(createAxisTicks('y', yStart, yEnd, yOption.color, axes.y, 5));
+    axisGroup.add(createAxisTicks('y', yStart, yEnd, yOption.color, axes.y, yTickCount));
     
-    // Y-axis name label
-    const yNameLabel = createTextSprite('Y: ' + yOption.name, yOption.color, 0.7);
-    yNameLabel.position.set(-100, (minY + maxY) / 2, 0);
+    // Y-axis name label - at the top of axis
+    const yNameLabel = createTextSprite(yOption.name, yOption.color, 1.0);
+    yNameLabel.position.set(0, maxY + 80, 0);
     axisGroup.add(yNameLabel);
     
     // Y-axis arrow
@@ -2650,11 +3148,11 @@ function createUniverseAxes() {
     const zStart = new THREE.Vector3(0, 0, minZ);
     const zEnd = new THREE.Vector3(0, 0, maxZ);
     axisGroup.add(createThickAxis(zStart, zEnd, zOption.color, 3));
-    axisGroup.add(createAxisTicks('z', zStart, zEnd, zOption.color, axes.z, 5));
+    axisGroup.add(createAxisTicks('z', zStart, zEnd, zOption.color, axes.z, zTickCount));
     
-    // Z-axis name label
-    const zNameLabel = createTextSprite('Z: ' + zOption.name, zOption.color, 0.7);
-    zNameLabel.position.set(0, -80, (minZ + maxZ) / 2);
+    // Z-axis name label - at the end of axis
+    const zNameLabel = createTextSprite(zOption.name, zOption.color, 1.0);
+    zNameLabel.position.set(0, 0, maxZ + 80);
     axisGroup.add(zNameLabel);
     
     // Z-axis arrow
@@ -2712,6 +3210,8 @@ function groupGraphsByFamily(graphs) {
         let familyBase = 'Unknown';
         
         if (graph.family) {
+            const familyLower = graph.family.toLowerCase();
+            
             // Check for Cartesian products first (contains □)
             if (graph.family.includes('□')) {
                 familyBase = 'Cartesian Product';
@@ -2721,14 +3221,97 @@ function groupGraphsByFamily(graphs) {
                 familyBase = 'Tensor Product';
             }
             // Check for line graphs
-            else if (graph.family.startsWith('Line(') || graph.family.includes('Line Graph')) {
+            else if (graph.family.startsWith('Line(') || familyLower.includes('line graph')) {
                 familyBase = 'Line Graph';
             }
             // Check for complement graphs
-            else if (graph.family.includes('Complement') || graph.family.includes('complement')) {
+            else if (familyLower.includes('complement')) {
                 familyBase = 'Complement';
             }
-            // Standard family extraction
+            // Check for mechanism/pendulum
+            else if (familyLower.includes('mechanism') || familyLower.includes('bar')) {
+                familyBase = 'Mechanism';
+            }
+            else if (familyLower.includes('pendulum') || familyLower.includes('link')) {
+                familyBase = 'Pendulum';
+            }
+            // Check for specific named families
+            else if (familyLower.includes('path')) {
+                familyBase = 'Path';
+            }
+            else if (familyLower.includes('cycle') || familyLower.includes('ring')) {
+                familyBase = 'Cycle';
+            }
+            else if (familyLower.includes('star')) {
+                familyBase = 'Star';
+            }
+            else if (familyLower.includes('wheel')) {
+                familyBase = 'Wheel';
+            }
+            else if (familyLower.includes('ladder')) {
+                familyBase = 'Ladder';
+            }
+            else if (familyLower.includes('grid') || familyLower.includes('mesh') || familyLower.includes('lattice')) {
+                familyBase = 'Grid';
+            }
+            else if (familyLower.includes('prism')) {
+                familyBase = 'Prism';
+            }
+            else if (familyLower.includes('hypercube') || familyLower.includes('cube')) {
+                familyBase = 'Hypercube';
+            }
+            else if (familyLower.includes('tree')) {
+                familyBase = familyLower.includes('binary') ? 'Binary Tree' : 'Tree';
+            }
+            else if (familyLower.includes('petersen')) {
+                familyBase = 'Petersen';
+            }
+            else if (familyLower.includes('möbius') || familyLower.includes('mobius')) {
+                familyBase = 'Möbius';
+            }
+            else if (familyLower.includes('circulant')) {
+                familyBase = 'Circulant';
+            }
+            else if (familyLower.includes('crown')) {
+                familyBase = 'Crown';
+            }
+            else if (familyLower.includes('book')) {
+                familyBase = 'Book';
+            }
+            else if (familyLower.includes('fan')) {
+                familyBase = 'Fan';
+            }
+            else if (familyLower.includes('gear')) {
+                familyBase = 'Gear';
+            }
+            else if (familyLower.includes('helm')) {
+                familyBase = 'Helm';
+            }
+            else if (familyLower.includes('friendship') || familyLower.includes('windmill')) {
+                familyBase = 'Friendship';
+            }
+            else if (familyLower.includes('turán') || familyLower.includes('turan')) {
+                familyBase = 'Turán';
+            }
+            else if (familyLower.includes('platonic') || familyLower.includes('tetrahedron') || 
+                     familyLower.includes('octahedron') || familyLower.includes('dodecahedron') ||
+                     familyLower.includes('icosahedron')) {
+                familyBase = 'Platonic';
+            }
+            else if (familyLower.includes('empty') || familyLower.includes('null')) {
+                familyBase = 'Empty';
+            }
+            // Complete bipartite before complete
+            else if (familyLower.includes('complete') && familyLower.includes('bipartite')) {
+                familyBase = 'Complete Bipartite';
+            }
+            else if (familyLower.includes('complete')) {
+                familyBase = 'Complete';
+            }
+            else if (familyLower.includes('bipartite')) {
+                familyBase = 'Bipartite';
+            }
+            // Standard family extraction fallback
             else {
                 const parts = graph.family.split(' ');
                 familyBase = parts[0];
@@ -2754,52 +3337,51 @@ function groupGraphsByFamily(graphs) {
         groups.get(familyBase).push(graph);
     }
     
+    // Log summary of grouping
+    console.log('=== Universe Family Grouping Summary ===');
+    for (const [family, familyGraphs] of groups) {
+        console.log(`  ${family}: ${familyGraphs.length} graphs`);
+    }
+    console.log('========================================');
+    
     return groups;
 }
 
 // Old golden spiral positioning removed - now using calculateGalaxyData() with metrics-based positioning
 
 function createGalaxy(familyName, graphs, position, config, galaxyMetrics = null) {
+    // PURE ABSOLUTE POSITIONING: Galaxy group stays at origin
+    // Graphs are positioned purely by their metrics, not offset by galaxy center
     const galaxyGroup = new THREE.Group();
-    galaxyGroup.position.copy(position);
+    // galaxyGroup.position stays at (0,0,0) - no offset!
     
-    // Galaxy identifier (floating text sprite) - SMALLER
-    const label = createTextSprite(config.name, config.color, 1.2);
-    label.position.set(0, CONFIG.galaxyRadius + 20, 0);
-    galaxyGroup.add(label);
-    
-    // Subtitle with count only - SMALLER, no metrics here (visible in HUD)
-    const subtitle = createTextSprite(`${graphs.length}`, 0x888888, 0.5);
-    subtitle.position.set(0, CONFIG.galaxyRadius + 5, 0);
-    galaxyGroup.add(subtitle);
-    
-    // Galaxy glow (point light)
-    const light = new THREE.PointLight(config.color, 0.5, CONFIG.galaxyRadius * 3);
-    light.position.set(0, 0, 0);
-    galaxyGroup.add(light);
-    
-    // Calculate family statistics for spectral node positioning
+    // Calculate family statistics for logging
     const familyStats = calculateFamilyStats(graphs);
     
-    // Create nodes for each graph
-    // Choose positioning method based on mode
-    const nodePositions = CONFIG.spectralMode 
-        ? calculateSpectralNodePositions(graphs, familyStats)
-        : calculateNodePositions(graphs.length, config.pattern);
+    // Create nodes for each graph using ABSOLUTE positioning
+    const nodePositions = calculateSpectralNodePositions(graphs, familyStats);
+    
+    // Track actual positions to compute centroid for UI (fly-to button)
+    let centroidX = 0, centroidY = 0, centroidZ = 0;
     
     for (let i = 0; i < graphs.length; i++) {
         const graph = graphs[i];
-        const nodePos = nodePositions[i];
+        const nodePos = nodePositions[i];  // This is already absolute (n*8, rho*15, (E-8)*8)
         
         // Calculate metrics for this graph
         const metrics = calculateGraphMetrics(graph);
         
         const nodeMesh = createGraphNode(graph, config.color, metrics);
-        nodeMesh.position.copy(nodePos);
+        nodeMesh.position.copy(nodePos);  // Absolute position
         nodeMesh.userData.graphId = graph.id;
         nodeMesh.userData.familyColor = config.color;
         
         galaxyGroup.add(nodeMesh);
+        
+        // Accumulate for centroid calculation
+        centroidX += nodePos.x;
+        centroidY += nodePos.y;
+        centroidZ += nodePos.z;
         
         // Store reference with metrics
         universeState.graphNodes.set(graph.id, {
@@ -2810,43 +3392,67 @@ function createGalaxy(familyName, graphs, position, config, galaxyMetrics = null
         });
     }
     
-    // Add flow particles based on pattern (adjusted for spectral mode)
-    if (graphs.length > 1) {
-        createGalaxyFlows(galaxyGroup, nodePositions, config);
-    }
+    // Compute centroid (average position of all graphs in this family)
+    const count = graphs.length;
+    const centroid = new THREE.Vector3(
+        centroidX / count,
+        centroidY / count,
+        centroidZ / count
+    );
     
-    // Add axis indicators in spectral mode (for node positioning)
-    if (CONFIG.spectralMode && graphs.length > 1) {
-        createGalaxyAxisIndicators(galaxyGroup, familyStats, config.color);
-    }
+    // No galaxy labels - they clutter the view
+    // Galaxy centroid is still stored for fly-to navigation
     
     universeState.scene.add(galaxyGroup);
     
+    // Store galaxy with centroid as "center" (for fly-to UI)
     universeState.galaxies.set(familyName, {
         group: galaxyGroup,
-        center: position,
+        center: centroid,  // Centroid of member graphs, not an offset
         config: config,
         graphs: graphs,
         familyStats: familyStats,
-        galaxyMetrics: galaxyMetrics  // Store galaxy-level metrics
+        galaxyMetrics: galaxyMetrics
     });
+    
+    console.log(`Created galaxy "${familyName}" with ${graphs.length} graphs, centroid: (${centroid.x.toFixed(1)}, ${centroid.y.toFixed(1)}, ${centroid.z.toFixed(1)})`);
 }
 
 /**
- * NEW: Calculate node positions based on spectral metrics
+ * Calculate node positions based on configured axes
+ * Uses CONFIG.galaxyAxes to map metrics to X, Y, Z coordinates
  * @param {Array} graphs - Array of graph objects
- * @param {Object} familyStats - Statistics for normalization
+ * @param {Object} familyStats - Statistics for normalization (unused in pure absolute mode)
  * @returns {Array} Array of THREE.Vector3 positions
  */
 function calculateSpectralNodePositions(graphs, familyStats) {
     const positions = [];
-    const globalStats = universeState.globalMetricStats;  // Use global stats for consistent scaling
+    const count = graphs.length;
     
-    for (const graph of graphs) {
-        const metrics = calculateGraphMetrics(graph);
-        const pos = metricsToLocalPosition(metrics, familyStats, globalStats);
+    if (count === 0) return positions;
+    
+    const axes = CONFIG.galaxyAxes;
+    console.log(`\n=== calculateSpectralNodePositions for ${count} graphs ===`);
+    console.log(`  Axes: X=${axes.x}, Y=${axes.y}, Z=${axes.z}, LogScale=${CONFIG.useLogScale}`);
+    
+    // Compute metrics and positions for each graph
+    for (let i = 0; i < graphs.length; i++) {
+        const g = graphs[i];
+        const m = calculateGraphMetrics(g);
+        
+        // Use the new dynamic positioning based on configured axes
+        const pos = computeGraphPosition(m);
+        
         positions.push(pos);
+        
+        // Log positioning
+        const xVal = getMetricValue(m, axes.x);
+        const yVal = getMetricValue(m, axes.y);
+        const zVal = getMetricValue(m, axes.z);
+        console.log(`  → ${g.name || g.family}: ${axes.x}=${xVal.toFixed(2)}, ${axes.y}=${yVal.toFixed(2)}, ${axes.z}=${zVal.toFixed(2)} → pos=(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
     }
+    
+    console.log(`=== END calculateSpectralNodePositions ===\n`);
     
     return positions;
 }
@@ -2858,10 +3464,13 @@ function calculateNodePositions(count, pattern) {
     const positions = [];
     
     // Scale radius based on count - larger galaxies need more space
-    // Use cube root scaling so 466 graphs get ~7.7x the radius of 1 graph
+    // Use cube root scaling so 100 graphs get ~4.6x the radius of 1 graph
     const baseRadius = CONFIG.galaxyRadius;
     const scaleFactor = Math.cbrt(count);  // Cube root for 3D volume scaling
-    const radius = Math.max(baseRadius, 15 * scaleFactor);
+    const radius = Math.max(baseRadius, 25 * scaleFactor);  // Increased from 15 to 25
+    
+    // Minimum separation between nodes (scale with node size)
+    const minSeparation = CONFIG.nodeBaseSize * 2.5;
     
     switch (pattern) {
         case 'cascade':
@@ -3129,10 +3738,25 @@ function createGraphNode(graph, baseColor, metrics = null) {
     // Size based on vertex count
     const size = CONFIG.nodeBaseSize + (graph.n || 4) * CONFIG.nodeSizeScale;
     
-    // NEW: In spectral mode, modulate color by spectral radius
+    // Determine if this is an analytic (library) graph or custom-built
+    const isAnalytic = !graph.isCustom && !graph.isBuilt;
+    const isCustom = graph.isCustom || graph.isBuilt;
+    
+    // NEW: In analytic highlight mode, override colors based on graph type
     let nodeColor = baseColor;
-    if (CONFIG.spectralMode && metrics && metrics.spectralRadius > 0) {
-        // Shift hue based on spectral radius (higher = warmer)
+    let glowColor = baseColor;
+    
+    if (CONFIG.analyticHighlightMode) {
+        // Use distinct colors for analytic vs custom graphs
+        if (isCustom) {
+            nodeColor = new THREE.Color(CONFIG.analyticColors.custom);
+            glowColor = new THREE.Color(CONFIG.analyticColors.customGlow);
+        } else {
+            nodeColor = new THREE.Color(CONFIG.analyticColors.analytic);
+            glowColor = new THREE.Color(CONFIG.analyticColors.analyticGlow);
+        }
+    } else if (metrics && metrics.spectralRadius > 0) {
+        // Spectral coloring - shift hue based on spectral radius (higher = warmer)
         const baseHSL = new THREE.Color(baseColor).getHSL({});
         // Use normalizedSpectralRadius if available, otherwise estimate from spectralRadius/(n-1)
         const n = graph.n || 4;
@@ -3141,10 +3765,17 @@ function createGraphNode(graph, baseColor, metrics = null) {
         const newHue = (baseHSL.h + srNorm * 0.1) % 1;
         const newLightness = Math.min(baseHSL.l + srNorm * 0.1, 0.9);
         nodeColor = new THREE.Color().setHSL(newHue, baseHSL.s, newLightness);
+        glowColor = nodeColor;
+    } else {
+        glowColor = nodeColor;
     }
     
     // Create a group to hold all parts
     const nodeGroup = new THREE.Group();
+    
+    // Store analytic status on the group for later reference
+    nodeGroup.userData.isAnalytic = isAnalytic;
+    nodeGroup.userData.isCustom = isCustom;
     
     // INVISIBLE hit mesh for raycasting (solid sphere, slightly larger)
     const hitGeometry = new THREE.SphereGeometry(size * 1.2, 8, 8);
@@ -3169,8 +3800,8 @@ function createGraphNode(graph, baseColor, metrics = null) {
     const coreGeometry = new THREE.IcosahedronGeometry(size * 0.35, 0);
     const coreMaterial = new THREE.MeshPhongMaterial({ 
         color: 0xffffff,
-        emissive: nodeColor,
-        emissiveIntensity: 0.3,
+        emissive: glowColor,
+        emissiveIntensity: isCustom && CONFIG.analyticHighlightMode ? 0.5 : 0.3,  // Brighter glow for custom in highlight mode
         shininess: 100,
         specular: 0x444444
     });
@@ -3195,9 +3826,9 @@ function createTextSprite(text, color, scale = 1, options = {}) {
     // Clear with transparent background
     context.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Font setup - larger and bolder
+    // Font setup - regular weight (not bold)
     const fontSize = options.fontSize || 72;
-    context.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
+    context.font = `${fontSize}px "Segoe UI", Arial, sans-serif`;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     
@@ -3218,23 +3849,19 @@ function createTextSprite(text, color, scale = 1, options = {}) {
         context.fill();
     }
     
-    // Draw text outline/stroke for contrast
-    context.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    context.lineWidth = 6;
+    // Draw text outline/stroke for contrast (thinner)
+    context.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    context.lineWidth = 3;
     context.strokeText(text, centerX, centerY);
     
-    // Draw glow effect
+    // Subtle glow effect
     context.shadowColor = colorStr;
-    context.shadowBlur = 15;
+    context.shadowBlur = 8;
     context.shadowOffsetX = 0;
     context.shadowOffsetY = 0;
     
     // Draw main text
     context.fillStyle = colorStr;
-    context.fillText(text, centerX, centerY);
-    
-    // Second pass for brighter center
-    context.shadowBlur = 5;
     context.fillText(text, centerX, centerY);
     
     const texture = new THREE.CanvasTexture(canvas);
@@ -3249,8 +3876,8 @@ function createTextSprite(text, color, scale = 1, options = {}) {
     });
     
     const sprite = new THREE.Sprite(material);
-    // Larger base scale for better visibility
-    sprite.scale.set(120 * scale, 30 * scale, 1);
+    // Smaller base scale
+    sprite.scale.set(100 * scale, 25 * scale, 1);
     
     return sprite;
 }
@@ -3258,9 +3885,8 @@ function createTextSprite(text, color, scale = 1, options = {}) {
 function createGalaxyFlows(galaxyGroup, nodePositions, config) {
     if (nodePositions.length < 2) return;
     
-    // In spectral mode, connect based on metric proximity
-    // In artistic mode, connect sequentially
-    const maxFlowDist = CONFIG.spectralMode ? 80 : 60;
+    // Connect based on metric proximity (spectral positioning)
+    const maxFlowDist = 80;
     
     // Create flow particles between nearby nodes
     for (let i = 0; i < nodePositions.length - 1; i++) {
@@ -3427,10 +4053,75 @@ function animate() {
     // Update HUD
     updateHUD();
     
+    // Update adaptive label visibility
+    if (CONFIG.adaptiveLabels) {
+        updateAdaptiveLabels();
+    }
+    
     // Render
     universeState.renderer.render(universeState.scene, universeState.camera);
     
     universeState.prevTime = time;
+}
+
+/**
+ * Update label visibility based on distance to camera
+ * Only shows labels for the N closest graphs to reduce clutter
+ */
+function updateAdaptiveLabels() {
+    const cameraPos = universeState.camera.position;
+    const maxLabels = CONFIG.maxVisibleLabels;
+    const fadeDistance = CONFIG.labelFadeDistance;
+    
+    // Collect all graphs with their distances to camera
+    const graphDistances = [];
+    
+    for (const [graphId, nodeData] of universeState.graphNodes) {
+        const mesh = nodeData.mesh;
+        const label = mesh.userData?.label;
+        
+        if (!label) continue;
+        
+        const worldPos = new THREE.Vector3();
+        mesh.getWorldPosition(worldPos);
+        const distance = worldPos.distanceTo(cameraPos);
+        
+        graphDistances.push({ label, distance, nodeData });
+    }
+    
+    // Sort by distance (closest first)
+    graphDistances.sort((a, b) => a.distance - b.distance);
+    
+    // When very close (< 30 units), show fewer labels
+    // When extremely close (< 10), show almost none - selection is better
+    const closestDistance = graphDistances.length > 0 ? graphDistances[0].distance : 100;
+    let effectiveMaxLabels = maxLabels;
+    if (closestDistance < 10) {
+        effectiveMaxLabels = 3;  // Very close - show only 3 labels
+    } else if (closestDistance < 30) {
+        effectiveMaxLabels = Math.min(10, maxLabels);  // Close - show fewer
+    }
+    
+    // Show only the closest N labels, with fade based on distance
+    for (let i = 0; i < graphDistances.length; i++) {
+        const { label, distance } = graphDistances[i];
+        
+        if (i < effectiveMaxLabels) {
+            // Calculate opacity based on distance
+            let opacity = 1;
+            if (distance > fadeDistance * 0.5) {
+                opacity = Math.max(0.2, 1 - (distance - fadeDistance * 0.5) / fadeDistance);
+            }
+            
+            label.visible = true;
+            if (label.material) {
+                label.material.opacity = opacity;
+            }
+        } else {
+            // Hide labels beyond the limit
+            label.visible = false;
+        }
+    }
 }
 
 function updateMovement(delta) {
@@ -3544,11 +4235,17 @@ function updateHUD() {
         }
     }
     
-    // Update mode indicator
-    const modeEl = document.getElementById('universe-mode');
-    if (modeEl) {
-        modeEl.textContent = CONFIG.spectralMode ? 'Spectral' : 'Artistic';
-        modeEl.style.color = CONFIG.spectralMode ? '#00ff88' : '#ffaa00';
+    // Update highlight mode indicator
+    const highlightEl = document.getElementById('universe-highlight');
+    if (highlightEl) {
+        if (CONFIG.analyticHighlightMode) {
+            highlightEl.innerHTML = `<span style="color:#00ffff">●</span> Analytic vs <span style="color:#ff6600">●</span> Custom`;
+        } else if (CONFIG.showAnalyticManifold) {
+            highlightEl.innerHTML = `<span style="color:#00aaaa">Manifold ON</span>`;
+        } else {
+            highlightEl.textContent = 'OFF';
+            highlightEl.style.color = '#666';
+        }
     }
 }
 
@@ -3579,87 +4276,269 @@ function toHexColor(color) {
 }
 
 // =====================================================
-// NEW: SPECTRAL MODE TOGGLE
+// LEGACY API STUBS (spectral mode is now always on)
 // =====================================================
 
-/**
- * Toggle between artistic and spectral positioning modes
- */
+// Spectral mode is now always on - these functions are kept for API compatibility
 export function toggleSpectralMode() {
-    CONFIG.spectralMode = !CONFIG.spectralMode;
+    console.log('Spectral positioning is now always enabled');
+}
+
+export function setSpectralMode(enabled) {
+    // No-op - spectral mode is always on
+}
+
+export function isSpectralMode() {
+    return true;  // Always spectral mode now
+}
+
+/**
+ * Toggle analytic highlight mode
+ * Shows distinction between library/analytic graphs (cyan) and custom/built graphs (orange)
+ */
+export function toggleAnalyticHighlightMode() {
+    CONFIG.analyticHighlightMode = !CONFIG.analyticHighlightMode;
     
-    console.log(`Switched to ${CONFIG.spectralMode ? 'Spectral' : 'Artistic'} mode`);
+    console.log(`Analytic Highlight Mode: ${CONFIG.analyticHighlightMode ? 'ON' : 'OFF'}`);
+    console.log('  Cyan = Analytic/Library graphs (closed-form eigenvalues)');
+    console.log('  Orange = Custom/Built graphs');
     
-    // Store camera position
-    const camPos = universeState.camera.position.clone();
-    const camTarget = universeState.controls?.target?.clone() || new THREE.Vector3();
-    
-    // Backup custom graphs before repopulating
-    const customGraphsBackup = [];
-    universeState.graphNodes.forEach((nodeData, graphId) => {
-        if (nodeData.mesh?.userData?.isCustom) {
-            const data = nodeData.data;
-            console.log(`  Backing up for mode change: "${data?.name}", family="${data?.family}"`);
-            customGraphsBackup.push({
-                data: {
-                    n: data.n,
-                    edges: data.edges,
-                    edgeCount: data.edgeCount,
-                    name: data.name,
-                    family: data.family,
-                    eigenvalues: data.eigenvalues,
-                    spectralRadius: data.spectralRadius,
-                    analyticalRho: data.analyticalRho,
-                    expectedAlpha: data.expectedAlpha
-                },
-                expanded: nodeData.expanded === true
-            });
-        }
-    });
-    
-    // Re-populate universe with current graphs (if any)
-    if (universeState.currentGraphs && universeState.currentGraphs.length > 0) {
-        populateUniverse(universeState.currentGraphs);
-    } else {
-        // No standard graphs - just clear and recreate axes
-        clearUniverse();
-        createUniverseAxes();
-    }
-    
-    // Restore custom graphs
-    if (customGraphsBackup.length > 0) {
-        console.log(`Restoring ${customGraphsBackup.length} custom graphs after mode change`);
-        for (const customGraph of customGraphsBackup) {
-            addCustomGraph(customGraph.data, customGraph.expanded);
-        }
-    }
-    
-    // Restore camera position
-    universeState.camera.position.copy(camPos);
-    if (universeState.controls?.target) {
-        universeState.controls.target.copy(camTarget);
-    }
+    // Update all existing nodes with new colors
+    updateAllNodeColors();
     
     // Update HUD
+    updateHUD();
+    
+    // If turning on, also show a brief notification
+    if (CONFIG.analyticHighlightMode) {
+        showNotification('Analytic Highlight: ON\n🔵 Cyan = Analytic graphs\n🟠 Orange = Custom graphs', 3000);
+    }
+}
+
+/**
+ * Toggle analytic manifold visualization
+ * Shows a visual boundary/surface representing where analytic graphs cluster
+ */
+export function toggleAnalyticManifold() {
+    CONFIG.showAnalyticManifold = !CONFIG.showAnalyticManifold;
+    
+    console.log(`Analytic Manifold Visualization: ${CONFIG.showAnalyticManifold ? 'ON' : 'OFF'}`);
+    
+    if (CONFIG.showAnalyticManifold) {
+        createAnalyticManifold();
+        showNotification('Analytic Manifold: ON\nShows region where analytic graphs cluster', 3000);
+    } else {
+        removeAnalyticManifold();
+    }
+    
     updateHUD();
 }
 
 /**
- * Set spectral mode directly
- * @param {boolean} enabled - Whether spectral mode should be enabled
+ * Update colors of all existing graph nodes based on current mode
  */
-export function setSpectralMode(enabled) {
-    if (CONFIG.spectralMode !== enabled) {
-        toggleSpectralMode();
+function updateAllNodeColors() {
+    for (const [graphId, nodeData] of universeState.graphNodes) {
+        const mesh = nodeData.mesh;
+        const graph = nodeData.data;
+        if (!mesh || !graph) continue;
+        
+        // Determine graph type
+        const isAnalytic = !graph.isCustom && !graph.isBuilt;
+        const isCustom = graph.isCustom || graph.isBuilt;
+        
+        // Get appropriate color
+        let nodeColor;
+        if (CONFIG.analyticHighlightMode) {
+            nodeColor = isCustom 
+                ? new THREE.Color(CONFIG.analyticColors.custom)
+                : new THREE.Color(CONFIG.analyticColors.analytic);
+        } else {
+            // Use original family color
+            const familyConfig = GALAXY_FAMILIES[graph.family] || GALAXY_FAMILIES['Unknown'];
+            nodeColor = new THREE.Color(familyConfig.color);
+        }
+        
+        // Update wireframe material
+        if (mesh.material) {
+            mesh.material.color = nodeColor;
+        }
+        
+        // Update core material
+        if (mesh.coreMaterial) {
+            mesh.coreMaterial.emissive = nodeColor;
+            mesh.coreMaterial.emissiveIntensity = isCustom && CONFIG.analyticHighlightMode ? 0.5 : 0.3;
+        }
+        
+        // Update children materials
+        mesh.traverse((child) => {
+            if (child.material && child.material.color && child !== mesh) {
+                if (child.material.wireframe) {
+                    child.material.color = nodeColor;
+                }
+                if (child.material.emissive) {
+                    child.material.emissive = nodeColor;
+                }
+            }
+        });
     }
 }
 
 /**
- * Get current spectral mode state
- * @returns {boolean} Whether spectral mode is enabled
+ * Create analytic manifold visualization
+ * This creates a semi-transparent surface showing where analytic graphs cluster
  */
-export function isSpectralMode() {
-    return CONFIG.spectralMode;
+function createAnalyticManifold() {
+    // Remove existing manifold first
+    removeAnalyticManifold();
+    
+    // Collect positions of all analytic graphs
+    const analyticPositions = [];
+    for (const [graphId, nodeData] of universeState.graphNodes) {
+        const graph = nodeData.data;
+        const mesh = nodeData.mesh;
+        if (!graph || !mesh) continue;
+        
+        const isAnalytic = !graph.isCustom && !graph.isBuilt;
+        if (isAnalytic) {
+            const worldPos = new THREE.Vector3();
+            mesh.getWorldPosition(worldPos);
+            analyticPositions.push(worldPos);
+        }
+    }
+    
+    if (analyticPositions.length < 4) {
+        console.log('Not enough analytic graphs to create manifold');
+        return;
+    }
+    
+    // Calculate bounding box and centroid
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    let centroid = new THREE.Vector3();
+    
+    for (const pos of analyticPositions) {
+        minX = Math.min(minX, pos.x);
+        maxX = Math.max(maxX, pos.x);
+        minY = Math.min(minY, pos.y);
+        maxY = Math.max(maxY, pos.y);
+        minZ = Math.min(minZ, pos.z);
+        maxZ = Math.max(maxZ, pos.z);
+        centroid.add(pos);
+    }
+    centroid.divideScalar(analyticPositions.length);
+    
+    // Create an inverted cone shape representing the analytic region
+    const coneHeight = (maxY - minY) * 1.2 + 100;
+    const coneRadius = Math.max(maxX - minX, maxZ - minZ) * 0.7 + 50;
+    
+    // Create cone geometry (inverted - apex at top)
+    const coneGeometry = new THREE.ConeGeometry(coneRadius, coneHeight, 32, 1, true);
+    const coneMaterial = new THREE.MeshBasicMaterial({
+        color: CONFIG.analyticColors.manifoldColor,
+        transparent: true,
+        opacity: CONFIG.analyticColors.manifoldOpacity,
+        side: THREE.DoubleSide,
+        wireframe: false
+    });
+    
+    const cone = new THREE.Mesh(coneGeometry, coneMaterial);
+    cone.position.copy(centroid);
+    cone.position.y = (minY + maxY) / 2;
+    cone.rotation.x = Math.PI;  // Invert the cone
+    cone.name = 'analyticManifold';
+    
+    // Also add a wireframe version for better visibility
+    const wireframeMaterial = new THREE.MeshBasicMaterial({
+        color: CONFIG.analyticColors.analytic,
+        transparent: true,
+        opacity: 0.3,
+        wireframe: true
+    });
+    const wireframeCone = new THREE.Mesh(coneGeometry.clone(), wireframeMaterial);
+    wireframeCone.position.copy(cone.position);
+    wireframeCone.rotation.copy(cone.rotation);
+    wireframeCone.name = 'analyticManifoldWireframe';
+    
+    // Add label
+    const label = createTextSprite('Analytic Submanifold', CONFIG.analyticColors.analytic, 1.5);
+    label.position.copy(centroid);
+    label.position.y = maxY + 50;
+    label.name = 'analyticManifoldLabel';
+    
+    universeState.scene.add(cone);
+    universeState.scene.add(wireframeCone);
+    universeState.scene.add(label);
+    
+    // Store references for removal
+    universeState.analyticManifold = { cone, wireframeCone, label };
+    
+    console.log(`Created analytic manifold: centroid=${centroid.toArray().map(v => v.toFixed(1))}, ` +
+                `radius=${coneRadius.toFixed(1)}, height=${coneHeight.toFixed(1)}`);
+}
+
+/**
+ * Remove analytic manifold visualization
+ */
+function removeAnalyticManifold() {
+    if (universeState.analyticManifold) {
+        const { cone, wireframeCone, label } = universeState.analyticManifold;
+        
+        if (cone) {
+            universeState.scene.remove(cone);
+            cone.geometry.dispose();
+            cone.material.dispose();
+        }
+        if (wireframeCone) {
+            universeState.scene.remove(wireframeCone);
+            wireframeCone.geometry.dispose();
+            wireframeCone.material.dispose();
+        }
+        if (label) {
+            universeState.scene.remove(label);
+        }
+        
+        universeState.analyticManifold = null;
+    }
+}
+
+/**
+ * Show a temporary notification in the universe view
+ */
+function showNotification(message, duration = 2000) {
+    // Create or update notification element
+    let notif = document.getElementById('universe-notification');
+    if (!notif) {
+        notif = document.createElement('div');
+        notif.id = 'universe-notification';
+        notif.style.cssText = `
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 20px 30px;
+            border-radius: 10px;
+            font-family: monospace;
+            font-size: 16px;
+            z-index: 1000;
+            white-space: pre-line;
+            text-align: center;
+            border: 2px solid #0ff;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        `;
+        universeState.container.appendChild(notif);
+    }
+    
+    notif.textContent = message;
+    notif.style.display = 'block';
+    
+    // Auto-hide after duration
+    setTimeout(() => {
+        notif.style.display = 'none';
+    }, duration);
 }
 
 // =====================================================
@@ -3713,11 +4592,15 @@ export function setOnLoadInBuild(callback) {
  */
 export function navigateToGalaxy(familyName) {
     if (!familyName) {
-        // Reset to origin
+        // Reset to origin and 3D mode
         universeState.camera.position.set(0, 100, 200);
         if (universeState.controls && universeState.controls.target) {
             universeState.controls.target.set(0, 0, 0);
+            // Re-enable rotation (back to 3D mode)
+            universeState.controls.enableRotate = true;
         }
+        // Reset projection state to 3D
+        universeCurrentProjection = '3d';
         return;
     }
     
@@ -3786,6 +4669,131 @@ export function zoomToFitAll() {
 }
 
 /**
+ * Set camera to a specific projection view (Universe)
+ * @param {string} projection - 'xy', 'xz', 'yz', or '3d'
+ */
+let universeCurrentProjection = '3d';
+
+export function setUniverseCameraProjection(projection) {
+    if (!universeState.camera || !universeState.controls) return;
+    
+    universeCurrentProjection = projection;
+    
+    // Cancel any active rubber band to prevent frozen state
+    if (universeState.rubberBand?.active) {
+        universeState.rubberBand.active = false;
+        if (universeState.rubberBandOverlay) {
+            universeState.rubberBandOverlay.style.display = 'none';
+        }
+    }
+    
+    // Ensure controls are fully enabled
+    universeState.controls.enabled = true;
+    universeState.controls.enablePan = true;
+    universeState.controls.enableZoom = true;
+    
+    // For 2D views: disable rotation so left-drag pans instead of rotates
+    // For 3D view: enable rotation
+    if (projection === '3d') {
+        universeState.controls.enableRotate = true;
+    } else {
+        universeState.controls.enableRotate = false;
+    }
+    
+    // Calculate scene bounds
+    let minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
+    
+    if (universeState.galaxies.size > 0) {
+        minX = Infinity; maxX = -Infinity;
+        minY = Infinity; maxY = -Infinity;
+        minZ = Infinity; maxZ = -Infinity;
+        
+        for (const [name, galaxy] of universeState.galaxies) {
+            const c = galaxy.center;
+            minX = Math.min(minX, c.x);
+            maxX = Math.max(maxX, c.x);
+            minY = Math.min(minY, c.y);
+            maxY = Math.max(maxY, c.y);
+            minZ = Math.min(minZ, c.z);
+            maxZ = Math.max(maxZ, c.z);
+        }
+    }
+    
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    const center = new THREE.Vector3(centerX, centerY, centerZ);
+    
+    const sizeX = maxX - minX || 100;
+    const sizeY = maxY - minY || 100;
+    const sizeZ = maxZ - minZ || 100;
+    const maxSize = Math.max(sizeX, sizeY, sizeZ, 200);
+    const distance = maxSize * 1.5;
+    
+    let targetPos;
+    
+    switch (projection) {
+        case 'xy': // View from front (looking at XY plane, camera on +Z)
+            targetPos = new THREE.Vector3(centerX, centerY, centerZ + distance);
+            break;
+        case 'xz': // View from above (looking at XZ plane, camera on +Y)
+            targetPos = new THREE.Vector3(centerX, centerY + distance, centerZ + 0.001);
+            break;
+        case 'yz': // View from side (looking at YZ plane, camera on +X)
+            targetPos = new THREE.Vector3(centerX + distance, centerY, centerZ);
+            break;
+        case '3d':
+        default:
+            targetPos = new THREE.Vector3(
+                centerX + distance * 0.5,
+                centerY + distance * 0.3,
+                centerZ + distance * 0.8
+            );
+            break;
+    }
+    
+    // Animate camera transition
+    animateUniverseCameraTo(targetPos, center);
+    
+    console.log(`[UNIVERSE CAMERA] Projection: ${projection}, rotate: ${universeState.controls.enableRotate}`);
+}
+
+/**
+ * Animate universe camera to target position
+ */
+function animateUniverseCameraTo(targetPos, targetLookAt) {
+    const startPos = universeState.camera.position.clone();
+    const startTarget = universeState.controls.target.clone();
+    const duration = 600; // ms
+    const startTime = performance.now();
+    
+    function animateStep() {
+        const elapsed = performance.now() - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        
+        // Ease out cubic
+        const easeT = 1 - Math.pow(1 - t, 3);
+        
+        universeState.camera.position.lerpVectors(startPos, targetPos, easeT);
+        universeState.controls.target.lerpVectors(startTarget, targetLookAt, easeT);
+        universeState.controls.update();
+        
+        if (t < 1) {
+            requestAnimationFrame(animateStep);
+        }
+    }
+    
+    animateStep();
+}
+
+/**
+ * Get current universe projection mode
+ */
+export function getUniverseCurrentProjection() {
+    return universeCurrentProjection;
+}
+
+/**
  * Navigate to a specific graph node
  */
 export function navigateToGraph(graphId) {
@@ -3814,7 +4822,7 @@ export function getUniverseState() {
         graphCount: universeState.graphNodes.size,
         cameraPosition: universeState.camera?.position.clone(),
         selectedGraphId: universeState.selectedNode?.userData.graphId,
-        spectralMode: CONFIG.spectralMode  // NEW: Include spectral mode in state
+        spectralMode: true  // Always spectral mode now
     };
 }
 
@@ -3872,8 +4880,17 @@ export function addCustomGraph(graphData, expanded = true) {
     const metrics = calculateSingleGraphMetrics(graphData);
     console.log(`Custom graph metrics: α=${metrics.alpha.toFixed(2)}, rat=${(metrics.rationality*100).toFixed(0)}%, ρ=${metrics.spectralRadius.toFixed(2)}`);
     
-    // Determine position based on metrics
-    const position = calculateCustomGraphPosition(metrics);
+    // Determine the family base name (for coloring and labeling)
+    const familyBase = getFamilyBase(graphData.family);
+    
+    // Use the same dynamic positioning as library graphs
+    const position = computeGraphPosition(metrics);
+    
+    const axes = CONFIG.galaxyAxes;
+    const xVal = getMetricValue(metrics, axes.x);
+    const yVal = getMetricValue(metrics, axes.y);
+    const zVal = getMetricValue(metrics, axes.z);
+    console.log(`  Position: ${axes.x}=${xVal.toFixed(2)}, ${axes.y}=${yVal.toFixed(2)}, ${axes.z}=${zVal.toFixed(2)} → (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
     
     // Create the graph visualization
     let graphMesh;
@@ -3903,9 +4920,11 @@ export function addCustomGraph(graphData, expanded = true) {
             ...graphData,
             id: graphId,
             family: graphData.family || 'Custom',
-            name: graphData.name || `Custom G(${graphData.n}, ${graphData.edges?.length || 0})`
+            name: graphData.name || `Custom G(${graphData.n}, ${graphData.edges?.length || 0})`,
+            isCustom: true,  // Mark as custom for analytic highlight mode
+            isBuilt: true    // Also mark as built
         },
-        galaxy: 'Custom',
+        galaxy: familyBase,  // Family name for coloring/grouping
         metrics: metrics,
         expanded: expanded
     });
@@ -3923,17 +4942,79 @@ export function addCustomGraph(graphData, expanded = true) {
 }
 
 /**
+ * Get the base family name that maps to GALAXY_FAMILIES
+ */
+function getFamilyBase(family) {
+    if (!family) return 'Unknown';
+    
+    const familyLower = family.toLowerCase();
+    
+    // Use same logic as groupGraphsByFamily
+    if (family.includes('□')) return 'Cartesian Product';
+    if (family.includes('×') || family.includes('⊗')) return 'Tensor Product';
+    if (family.startsWith('Line(') || familyLower.includes('line graph')) return 'Line Graph';
+    if (familyLower.includes('complement')) return 'Complement';
+    if (familyLower.includes('mechanism') || familyLower.includes('bar')) return 'Mechanism';
+    if (familyLower.includes('pendulum') || familyLower.includes('link')) return 'Pendulum';
+    if (familyLower.includes('path')) return 'Path';
+    if (familyLower.includes('cycle') || familyLower.includes('ring')) return 'Cycle';
+    if (familyLower.includes('star')) return 'Star';
+    if (familyLower.includes('wheel')) return 'Wheel';
+    if (familyLower.includes('ladder')) return 'Ladder';
+    if (familyLower.includes('grid') || familyLower.includes('mesh') || familyLower.includes('lattice')) return 'Grid';
+    if (familyLower.includes('prism')) return 'Prism';
+    if (familyLower.includes('hypercube') || familyLower.includes('cube')) return 'Hypercube';
+    if (familyLower.includes('tree')) return familyLower.includes('binary') ? 'Binary Tree' : 'Tree';
+    if (familyLower.includes('petersen')) return 'Petersen';
+    if (familyLower.includes('möbius') || familyLower.includes('mobius')) return 'Möbius';
+    if (familyLower.includes('circulant')) return 'Circulant';
+    if (familyLower.includes('crown')) return 'Crown';
+    if (familyLower.includes('book')) return 'Book';
+    if (familyLower.includes('fan')) return 'Fan';
+    if (familyLower.includes('gear')) return 'Gear';
+    if (familyLower.includes('helm')) return 'Helm';
+    if (familyLower.includes('friendship') || familyLower.includes('windmill')) return 'Friendship';
+    if (familyLower.includes('turán') || familyLower.includes('turan')) return 'Turán';
+    if (familyLower.includes('empty') || familyLower.includes('null')) return 'Empty';
+    if (familyLower.includes('complete') && familyLower.includes('bipartite')) return 'Complete Bipartite';
+    if (familyLower.includes('complete')) return 'Complete';
+    if (familyLower.includes('bipartite')) return 'Bipartite';
+    
+    // Check if the first word is a known family
+    const firstWord = family.split(' ')[0];
+    if (GALAXY_FAMILIES[firstWord]) return firstWord;
+    
+    return 'Unknown';
+}
+
+/**
+ * Refresh/recreate the universe axes to encompass all current graphs
+ * Call this after adding multiple custom graphs to update axis bounds
+ */
+export function refreshUniverseAxes() {
+    if (!universeState.active) {
+        console.warn('Cannot refresh axes: universe not active');
+        return;
+    }
+    console.log('Refreshing universe axes to encompass all graphs...');
+    createUniverseAxes();
+}
+
+/**
  * Calculate metrics for a single graph
+ * ALWAYS computes skew-symmetric eigenvalues (ignores stored symmetric eigenvalues)
  */
 function calculateSingleGraphMetrics(graphData) {
     const n = graphData.n || 0;
-    const edgeCount = graphData.edges?.length || 0;
+    const edges = graphData.edges || [];
+    const edgeCount = edges.length;
     const maxEdges = n * (n - 1) / 2;
     const density = maxEdges > 0 ? edgeCount / maxEdges : 0;
+    const debugName = graphData.name || graphData.family || `Custom G(${n})`;
     
     // Calculate degrees
     const degrees = new Array(n).fill(0);
-    for (const [i, j] of (graphData.edges || [])) {
+    for (const [i, j] of edges) {
         degrees[i]++;
         degrees[j]++;
     }
@@ -3942,50 +5023,78 @@ function calculateSingleGraphMetrics(graphData) {
     const minDegree = Math.min(...degrees, Infinity);
     const regularity = maxDegree > 0 ? minDegree / maxDegree : 1;
     
-    // Get spectral radius from eigenvalues if available
-    let spectralRadius = graphData.spectralRadius || 0;
+    // Initialize metrics
+    let spectralRadius = 0;
     let spectralGap = 0;
     let energy = 0;
     let rationality = 0;
     let rationalCount = 0;
+    let eigenvalueRatio = 0;  // Ratio of largest to smallest non-zero eigenvalue
+    let computedEigenvalues = null;
     
-    if (graphData.eigenvalues && graphData.eigenvalues.length > 0) {
-        const numericEigs = graphData.eigenvalues.map(e => {
-            if (typeof e === 'object') return e.value ?? e.numeric ?? 0;
-            return typeof e === 'number' ? e : 0;
-        }).filter(v => typeof v === 'number' && isFinite(v))
-          .sort((a, b) => Math.abs(b) - Math.abs(a));
-        
-        if (numericEigs.length > 0) {
-            spectralRadius = Math.abs(numericEigs[0]);
-            spectralGap = numericEigs.length > 1 ? Math.abs(numericEigs[0]) - Math.abs(numericEigs[1]) : 0;
-            energy = numericEigs.reduce((sum, λ) => sum + Math.abs(λ), 0);
-            
-            // Calculate rationality (fraction of eigenvalues that are simple rationals)
-            for (const eig of numericEigs) {
-                if (isSimpleRational(eig)) {
-                    rationalCount++;
+    // ALWAYS compute skew-symmetric eigenvalues from the adjacency matrix
+    // (ignore any stored eigenvalues - they may be symmetric, not skew-symmetric)
+    if (edges.length > 0 && n > 0 && n <= 200) {
+        try {
+            // Build skew-symmetric adjacency matrix
+            const matrix = Array(n).fill(null).map(() => Array(n).fill(0));
+            for (const [i, j] of edges) {
+                if (i < n && j < n) {
+                    matrix[i][j] = 1;
+                    matrix[j][i] = -1;
                 }
             }
-            rationality = numericEigs.length > 0 ? rationalCount / numericEigs.length : 0;
             
-            console.log(`  Eigenvalues (first 5): ${numericEigs.slice(0,5).map(v => v.toFixed(3)).join(', ')}`);
-            console.log(`  Rational eigenvalues: ${rationalCount}/${numericEigs.length} = ${(rationality*100).toFixed(0)}%`);
+            // Compute eigenvalues using spectral analysis
+            const skewEigs = computeSkewSymmetricEigenvalues(matrix);
+            if (skewEigs && skewEigs.length > 0) {
+                // Extract imaginary parts (skew-symmetric has pure imaginary eigenvalues)
+                computedEigenvalues = skewEigs.map(e => Math.abs(e.imag || e.value || e)).filter(v => isFinite(v));
+                console.log(`  [SINGLE METRICS] ${debugName}: COMPUTED ${computedEigenvalues.length} skew-sym eigenvalues`);
+            }
+        } catch (err) {
+            console.warn(`  [SINGLE METRICS] ${debugName}: Failed to compute eigenvalues:`, err.message);
         }
-    } else {
-        // Estimate spectral radius from degree
+    }
+    
+    // Process computed eigenvalues
+    if (computedEigenvalues && computedEigenvalues.length > 0) {
+        const sorted = [...computedEigenvalues].sort((a, b) => Math.abs(b) - Math.abs(a));
+        
+        spectralRadius = Math.abs(sorted[0]);
+        spectralGap = sorted.length > 1 ? Math.abs(sorted[0]) - Math.abs(sorted[1]) : 0;
+        energy = computedEigenvalues.reduce((sum, λ) => sum + Math.abs(λ), 0);
+        
+        // Calculate eigenvalue ratio: largest / smallest non-zero
+        const nonZeroSorted = sorted.filter(v => Math.abs(v) > 1e-10);
+        if (nonZeroSorted.length >= 2) {
+            const largestAbs = Math.abs(nonZeroSorted[0]);
+            const smallestAbs = Math.abs(nonZeroSorted[nonZeroSorted.length - 1]);
+            eigenvalueRatio = smallestAbs > 1e-10 ? largestAbs / smallestAbs : 0;
+        } else if (nonZeroSorted.length === 1) {
+            eigenvalueRatio = 1;
+        }
+        
+        // Calculate rationality
+        for (const eig of computedEigenvalues) {
+            if (isSimpleRational(eig)) {
+                rationalCount++;
+            }
+        }
+        rationality = computedEigenvalues.length > 0 ? rationalCount / computedEigenvalues.length : 0;
+        
+        console.log(`  [SINGLE METRICS] ${debugName}: ρ=${spectralRadius.toFixed(3)}, E=${energy.toFixed(2)}, ratio=${eigenvalueRatio.toFixed(3)}`);
+    }
+    
+    // FALLBACK: Estimate only if computation failed
+    if (spectralRadius === 0 && edgeCount > 0) {
+        console.warn(`  [SINGLE METRICS] ${debugName}: FALLBACK to estimation`);
         spectralRadius = Math.sqrt(maxDegree * avgDegree) || avgDegree;
-        // Can't compute rationality without eigenvalues, use density as proxy
+        energy = 2 * edgeCount * 0.8;
         rationality = density > 0.5 ? 0.4 : 0.2;
     }
     
-    // Use provided spectralRadius if available (for analytical test graphs)
-    if (graphData.spectralRadius && graphData.spectralRadius > 0) {
-        spectralRadius = graphData.spectralRadius;
-    }
-    
     // Estimate alpha (scaling exponent) based on graph structure
-    // OR use provided expectedAlpha for test graphs
     let alpha;
     if (graphData.expectedAlpha !== undefined) {
         // Use provided alpha for test/analytical graphs
@@ -4020,6 +5129,7 @@ function calculateSingleGraphMetrics(graphData) {
         spectralRadius,
         spectralGap,
         energy,
+        eigenvalueRatio,
         alpha,
         rationality,
         // Family and name for positioning
@@ -4029,215 +5139,12 @@ function calculateSingleGraphMetrics(graphData) {
         avgSpectralRadius: spectralRadius,
         avgSpectralGap: spectralGap,
         avgEnergy: energy,
+        avgEigenvalueRatio: eigenvalueRatio,
         // Normalized spectral radius for spectral mode coloring (normalize by max possible: n-1)
         normalizedSpectralRadius: n > 1 ? spectralRadius / (n - 1) : 0.5
     };
 }
 
-/**
- * Calculate position for a custom graph based on its metrics
- * Uses the SAME axis mapping as galaxy positioning for consistent distribution
- */
-function calculateCustomGraphPosition(metrics) {
-    const globalStats = universeState.globalMetricStats;
-    const axes = CONFIG.galaxyAxes;
-    const scales = CONFIG.galaxyScale;  // {x: 1000, y: 600, z: 400}
-    
-    console.log(`Calculating position with axes: X=${axes.x}, Y=${axes.y}, Z=${axes.z}`);
-    console.log(`  Graph metrics: ρ=${metrics.spectralRadius?.toFixed(3)}, n=${metrics.n}, α=${metrics.alpha?.toFixed(2)}`);
-    
-    // Generate deterministic small jitter from graph properties (to prevent exact overlaps)
-    let hash = 0;
-    const name = metrics.name || '';
-    for (let i = 0; i < name.length; i++) {
-        hash = ((hash << 5) - hash) + name.charCodeAt(i);
-        hash = hash & hash;
-    }
-    hash = ((hash << 5) - hash) + (metrics.n || 0);
-    hash = ((hash << 5) - hash) + (metrics.edgeCount || 0);
-    
-    // Small deterministic jitter (±5 units) to prevent exact overlaps
-    const jitterX = (Math.abs(hash % 1000) / 1000 - 0.5) * 10;
-    const jitterY = (Math.abs((hash * 31) % 1000) / 1000 - 0.5) * 10;
-    const jitterZ = (Math.abs((hash * 97) % 1000) / 1000 - 0.5) * 10;
-    
-    // Check if globalStats is valid
-    const hasValidStats = globalStats && 
-                          typeof globalStats === 'object' && 
-                          !Array.isArray(globalStats) &&
-                          Object.keys(globalStats).length > 0;
-    
-    // Helper function to get normalized position for an axis
-    const getAxisPosition = (axisKey, axisScale, jitter) => {
-        const value = getMetricValueForCustom(metrics, axisKey);
-        const opt = GALAXY_AXIS_OPTIONS[axisKey];
-        
-        if (!opt) {
-            console.warn(`Unknown axis key: ${axisKey}`);
-            return jitter;
-        }
-        
-        let min, max;
-        const rangeSpec = opt.range;
-        
-        // Check if range uses 'auto' for either bound
-        const minIsAuto = rangeSpec[0] === 'auto';
-        const maxIsAuto = rangeSpec[1] === 'auto';
-        
-        if (minIsAuto || maxIsAuto) {
-            // Use global stats from all galaxies + expanded range for individual graphs
-            const stat = hasValidStats ? globalStats[axisKey] : null;
-            
-            // Get min value
-            if (minIsAuto) {
-                if (stat && typeof stat.min === 'number' && isFinite(stat.min)) {
-                    min = stat.min * 0.9;  // 10% below
-                } else {
-                    min = 0;  // Safe default
-                }
-            } else {
-                min = rangeSpec[0];
-            }
-            
-            // Get max value
-            if (maxIsAuto) {
-                // Default ranges for auto-range metrics (used when no stats available)
-                const defaultMaxes = {
-                    'avgSpectralRadius': 15,  // Increased to handle K_n up to n=16
-                    'spectralGap': 10,
-                    'energy': 100,
-                    'avgN': 50,
-                    'avgEdges': 200,
-                    'spectralSpread': 30,
-                    'graphCount': 100
-                };
-                
-                if (stat && typeof stat.max === 'number' && isFinite(stat.max)) {
-                    // Use the larger of: stat.max * 1.5 OR the actual value * 1.1
-                    // This ensures individual graphs with large values don't get clamped
-                    const statMax = stat.max * 1.5;
-                    const valueMax = value * 1.1;
-                    max = Math.max(statMax, valueMax, defaultMaxes[axisKey] || 10);
-                } else {
-                    // No stats available - use default or actual value
-                    max = Math.max(defaultMaxes[axisKey] || 10, value * 1.1);
-                }
-            } else {
-                max = rangeSpec[1];
-            }
-        } else {
-            // Both are fixed values
-            min = rangeSpec[0];
-            max = rangeSpec[1];
-        }
-        
-        // Ensure valid numbers
-        if (typeof min !== 'number' || !isFinite(min)) min = 0;
-        if (typeof max !== 'number' || !isFinite(max)) max = 10;
-        if (max <= min) max = min + 1;
-        
-        // Normalize value to 0-1
-        const normalized = Math.max(0, Math.min(1, (value - min) / (max - min)));
-        
-        // Convert to position: -scale/2 to +scale/2, plus small jitter
-        const position = (normalized - 0.5) * axisScale + jitter;
-        
-        console.log(`  Axis ${axisKey}: value=${value.toFixed(3)}, range=[${min.toFixed(2)},${max.toFixed(2)}], norm=${normalized.toFixed(3)}, pos=${position.toFixed(1)}`);
-        
-        return position;
-    };
-    
-    // Calculate position based on selected axes (same as galaxy positioning)
-    const position = new THREE.Vector3(
-        getAxisPosition(axes.x, scales.x, jitterX),
-        getAxisPosition(axes.y, scales.y, jitterY),
-        getAxisPosition(axes.z, scales.z, jitterZ)
-    );
-    
-    console.log(`  Final position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
-    
-    return position;
-}
-
-/**
- * Calculate default position when no global stats are available
- * Uses known ranges for each metric type
- */
-function calculateDefaultPosition(metrics, axes, jitters = null) {
-    // Generate deterministic jitters if not provided
-    if (!jitters) {
-        let hash = 0;
-        const name = metrics.name || '';
-        for (let i = 0; i < name.length; i++) {
-            hash = ((hash << 5) - hash) + name.charCodeAt(i);
-            hash = hash & hash;
-        }
-        hash = ((hash << 5) - hash) + (metrics.n || 0);
-        jitters = {
-            jitterX: Math.abs(hash % 1000) / 10000,
-            jitterY: Math.abs((hash * 31) % 1000) / 10000,
-            jitterZ: Math.abs((hash * 97) % 1000) / 10000
-        };
-    }
-    
-    // Default ranges for each metric type
-    const defaultRanges = {
-        'alpha': [0, 1],
-        'rationality': [0, 1],
-        'avgSpectralRadius': [1, 10],
-        'spectralGap': [0, 5],
-        'energy': [0, 50],
-        'regularity': [0, 1],
-        'sparsity': [0, 1],
-        'avgN': [3, 20],
-        'graphCount': [1, 100],
-        'spectralSpread': [0, 20],
-        'spectralRadiusRatio': [0, 1],
-        'avgEdges': [2, 100],
-        'coefficient': [0, 5]
-    };
-    
-    const getPos = (axisKey, scale, jitter) => {
-        const value = getMetricValueForCustom(metrics, axisKey);
-        const [min, max] = defaultRanges[axisKey] || [0, 1];
-        const range = max - min || 1;
-        const normalized = Math.max(0, Math.min(1, (value - min) / range));
-        return (normalized + jitter - 0.5) * scale;
-    };
-    
-    const position = new THREE.Vector3(
-        getPos(axes.x, CONFIG.galaxyScale.x, jitters.jitterX),
-        getPos(axes.y, CONFIG.galaxyScale.y, jitters.jitterY),
-        getPos(axes.z, CONFIG.galaxyScale.z, jitters.jitterZ)
-    );
-    
-    console.log(`Default position calculated: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
-    return position;
-}
-
-function getMetricValueForCustom(metrics, key) {
-    const mapping = {
-        'alpha': metrics.alpha ?? 0.5,
-        'rationality': metrics.rationality ?? 0.3,
-        'avgSpectralRadius': metrics.avgSpectralRadius ?? metrics.spectralRadius ?? 2,
-        'spectralGap': metrics.spectralGap ?? metrics.avgSpectralGap ?? 0.5,
-        'energy': metrics.energy ?? metrics.avgEnergy ?? 5,
-        'regularity': metrics.regularity ?? 0.5,
-        'sparsity': 1 - (metrics.density ?? 0.5),
-        'avgN': metrics.n ?? 5,
-        'graphCount': 1,
-        'spectralSpread': (metrics.spectralRadius ?? 2) * 2,
-        'spectralRadiusRatio': metrics.n > 0 ? (metrics.spectralRadius ?? 2) / metrics.n : 0.3,
-        'avgEdges': metrics.edgeCount ?? 5,
-        'coefficient': 1
-    };
-    const value = mapping[key];
-    if (value === undefined) {
-        console.warn(`Unknown metric key for custom graph: ${key}, using 0.5`);
-        return 0.5;
-    }
-    return value;
-}
 
 /**
  * Create an expanded node-edge graph mesh for Universe display
@@ -4293,13 +5200,11 @@ function createExpandedGraphMesh(graphData, metrics) {
         }
     }
     
-    // Add a subtle bounding sphere for selection
-    const boundingGeom = new THREE.SphereGeometry(scale * 1.3, 16, 16);
+    // Add an invisible bounding sphere for raycasting/selection only
+    // (not visible - just for click detection)
+    const boundingGeom = new THREE.SphereGeometry(scale * 1.3, 8, 8);
     const boundingMat = new THREE.MeshBasicMaterial({
-        color: 0x00ffff,
-        transparent: true,
-        opacity: 0.05,
-        wireframe: true
+        visible: false  // Completely invisible, but still raycastable
     });
     const boundingSphere = new THREE.Mesh(boundingGeom, boundingMat);
     boundingSphere.userData.isSelectionBounds = true;
@@ -4728,15 +5633,26 @@ export function exportUniverseTable() {
     const axes = CONFIG.galaxyAxes;
     const graphs = [];
     
-    // Collect all graphs
+    // Collect all graphs with comprehensive metrics
     for (const [graphId, nodeData] of universeState.graphNodes) {
         const mesh = nodeData.mesh;
         const data = nodeData.data;
         const metrics = nodeData.metrics || {};
         
-        // Get world position
+        // Get world position (= absolute position in pure positioning)
         const worldPos = new THREE.Vector3();
         mesh.getWorldPosition(worldPos);
+        
+        const n = data.n || metrics.n || 0;
+        const rho = metrics.spectralRadius ?? 0;
+        const energy = metrics.energy ?? 0;
+        
+        // Expected position from formula
+        const expectedX = n * 8;
+        const expectedY = rho * 15;
+        const expectedZ = (energy - 8) * 8;
+        
+        const galaxyName = nodeData.galaxy || 'Unknown';
         
         // Extract eigenvalue info
         let eigenFormula = 'N/A';
@@ -4758,16 +5674,29 @@ export function exportUniverseTable() {
         graphs.push({
             name: data.name || graphId,
             family: data.family || 'Unknown',
-            n: data.n || metrics.n || 0,
+            galaxy: galaxyName,
+            n: n,
             edges: data.edges?.length || metrics.edgeCount || 0,
-            spectralRadius: metrics.spectralRadius?.toFixed(6) || data.spectralRadius?.toFixed(6) || 'N/A',
+            // Core metrics
+            spectralRadius: rho,
+            spectralGap: metrics.spectralGap ?? 0,
+            energy: energy,
+            eigenvalueRatio: metrics.eigenvalueRatio ?? 0,
+            density: metrics.density ?? 0,
+            alpha: metrics.alpha ?? data.expectedAlpha ?? 0.5,
+            rationality: metrics.rationality ?? 0,
+            // Actual position
+            x: worldPos.x,
+            y: worldPos.y,
+            z: worldPos.z,
+            // Expected position (from formula)
+            expectedX: expectedX,
+            expectedY: expectedY,
+            expectedZ: expectedZ,
+            // Formula
             formula: eigenFormula,
-            alpha: (metrics.alpha ?? data.expectedAlpha ?? 'N/A'),
-            rationality: metrics.rationality ? (metrics.rationality * 100).toFixed(0) + '%' : 'N/A',
-            x: worldPos.x.toFixed(1),
-            y: worldPos.y.toFixed(1),
-            z: worldPos.z.toFixed(1),
-            eigenvalues: eigenValues.join(', '),
+            eigenvalues: eigenValues.join('; '),
+            // Meta
             isCustom: nodeData.isCustom || mesh.userData?.isCustom || false,
             expanded: nodeData.expanded || false
         });
@@ -4779,11 +5708,11 @@ export function exportUniverseTable() {
         return a.n - b.n;
     });
     
-    // Generate formatted output
+    // Generate formatted output (condensed view)
     const header = `Universe Graph Export (${new Date().toISOString()})
-Axes: X=${axes.x}, Y=${axes.y}, Z=${axes.z}
+Position Formula: X = n×8, Y = ρ×15, Z = (E-8)×8
 Total Graphs: ${graphs.length}
-${'='.repeat(180)}`;
+${'='.repeat(140)}`;
     
     const tableHeader = [
         'Name'.padEnd(25),
@@ -4791,46 +5720,57 @@ ${'='.repeat(180)}`;
         'n'.padStart(4),
         '|E|'.padStart(5),
         'ρ(A)'.padStart(12),
-        'Formula'.padEnd(20),
-        'α'.padStart(5),
-        'Rat%'.padStart(5),
+        'Energy'.padStart(8),
         'X'.padStart(8),
         'Y'.padStart(8),
-        'Z'.padStart(8),
-        'Eigenvalues (first 5)'
+        'Z'.padStart(8)
     ].join(' | ');
     
-    const separator = '-'.repeat(180);
+    const separator = '-'.repeat(140);
     
     const rows = graphs.map(g => [
         g.name.substring(0, 24).padEnd(25),
         g.family.substring(0, 11).padEnd(12),
         String(g.n).padStart(4),
         String(g.edges).padStart(5),
-        String(g.spectralRadius).padStart(12),
-        String(g.formula).substring(0, 19).padEnd(20),
-        String(g.alpha).padStart(5),
-        String(g.rationality).padStart(5),
-        g.x.padStart(8),
-        g.y.padStart(8),
-        g.z.padStart(8),
-        g.eigenvalues.substring(0, 50)
+        g.spectralRadius.toFixed(6).padStart(12),
+        g.energy.toFixed(2).padStart(8),
+        g.x.toFixed(1).padStart(8),
+        g.y.toFixed(1).padStart(8),
+        g.z.toFixed(1).padStart(8)
     ].join(' | '));
     
     const fullTable = [header, '', tableHeader, separator, ...rows].join('\n');
     
-    // Also create CSV version
-    const csvHeader = 'Name,Family,Vertices,Edges,SpectralRadius,Formula,Alpha,Rationality,X,Y,Z,Eigenvalues';
+    // Create comprehensive CSV for analysis
+    const csvHeader = 'Name,Family,n,Edges,SpectralRadius,SpectralGap,Energy,EigRatio,Density,Alpha,Rationality,X,Y,Z,ExpectedX,ExpectedY,ExpectedZ,Formula,Eigenvalues';
     const csvRows = graphs.map(g => 
-        `"${g.name}","${g.family}",${g.n},${g.edges},${g.spectralRadius},"${g.formula}",${g.alpha},${g.rationality},${g.x},${g.y},${g.z},"${g.eigenvalues}"`
+        `"${g.name}","${g.family}",${g.n},${g.edges},${g.spectralRadius.toFixed(8)},${g.spectralGap.toFixed(8)},${g.energy.toFixed(4)},${g.eigenvalueRatio.toFixed(4)},${g.density.toFixed(4)},${g.alpha.toFixed(4)},${g.rationality.toFixed(4)},${g.x.toFixed(4)},${g.y.toFixed(4)},${g.z.toFixed(4)},${g.expectedX.toFixed(4)},${g.expectedY.toFixed(4)},${g.expectedZ.toFixed(4)},"${g.formula}","${g.eigenvalues}"`
     );
     const csvContent = [csvHeader, ...csvRows].join('\n');
     
+    // Family summary (formerly galaxy summary)
+    let familySummary = '\n\n=== FAMILY SUMMARY ===\n';
+    const familyStats = new Map();
+    for (const g of graphs) {
+        if (!familyStats.has(g.family)) {
+            familyStats.set(g.family, { count: 0, graphs: [] });
+        }
+        const stats = familyStats.get(g.family);
+        stats.count++;
+        stats.graphs.push(`${g.name}(n=${g.n})`);
+    }
+    
+    for (const [name, stats] of familyStats) {
+        familySummary += `\n${name}: ${stats.count} graphs\n`;
+        familySummary += `  Graphs: ${stats.graphs.join(', ')}\n`;
+    }
+    
     // Log to console
-    console.log('\n' + fullTable);
+    console.log('\n' + fullTable + familySummary);
     
     // Create download
-    const blob = new Blob([fullTable + '\n\n--- CSV FORMAT ---\n\n' + csvContent], { type: 'text/plain' });
+    const blob = new Blob([fullTable + familySummary + '\n\n--- CSV FORMAT (for Excel/Python/MATLAB) ---\n\n' + csvContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -4840,12 +5780,203 @@ ${'='.repeat(180)}`;
     
     // Return structured data for further processing
     return {
-        axes: { x: axes.x, y: axes.y, z: axes.z },
         count: graphs.length,
         graphs: graphs,
+        families: Array.from(familyStats.entries()).map(([name, stats]) => ({
+            name, 
+            count: stats.count
+        })),
         table: fullTable,
         csv: csvContent
     };
+}
+
+/**
+ * Verify graph positions and detect discrepancies
+ * Compares actual positions to expected positions based on configured axes
+ */
+export function verifyUniversePositions() {
+    if (!universeState.active || !universeState.graphNodes) {
+        console.error('Universe not active');
+        return null;
+    }
+    
+    const axes = CONFIG.galaxyAxes;
+    const graphs = [];
+    
+    // Collect all graphs with full metrics
+    for (const [graphId, nodeData] of universeState.graphNodes) {
+        const mesh = nodeData.mesh;
+        const data = nodeData.data;
+        const metrics = nodeData.metrics || {};
+        
+        const worldPos = new THREE.Vector3();
+        mesh.getWorldPosition(worldPos);
+        
+        // Expected position from configured axes
+        const expectedPos = computeGraphPosition(metrics);
+        
+        graphs.push({
+            id: graphId,
+            name: data.name || graphId,
+            family: data.family || 'Unknown',
+            n: data.n || metrics.n || 0,
+            edges: data.edges?.length || metrics.edgeCount || 0,
+            spectralRadius: metrics.spectralRadius ?? 0,
+            energy: metrics.energy ?? 0,
+            // Metric values for current axes
+            xMetric: getMetricValue(metrics, axes.x),
+            yMetric: getMetricValue(metrics, axes.y),
+            zMetric: getMetricValue(metrics, axes.z),
+            // Actual position
+            actualX: worldPos.x,
+            actualY: worldPos.y,
+            actualZ: worldPos.z,
+            // Expected position
+            expectedX: expectedPos.x,
+            expectedY: expectedPos.y,
+            expectedZ: expectedPos.z,
+            isCustom: nodeData.isCustom || mesh.userData?.isCustom || false
+        });
+    }
+    
+    console.log('\n' + '='.repeat(80));
+    console.log('UNIVERSE POSITION VERIFICATION');
+    console.log('='.repeat(80));
+    console.log(`\nCurrent Axes: X=${axes.x}, Y=${axes.y}, Z=${axes.z}`);
+    console.log(`Log Scale: ${CONFIG.useLogScale ? 'enabled' : 'disabled'}`);
+    console.log(`\nTotal graphs: ${graphs.length}`);
+    
+    // Check each graph
+    const discrepancies = [];
+    let perfectCount = 0;
+    
+    for (const g of graphs) {
+        const dx = Math.abs(g.actualX - g.expectedX);
+        const dy = Math.abs(g.actualY - g.expectedY);
+        const dz = Math.abs(g.actualZ - g.expectedZ);
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        
+        if (dist < 0.1) {
+            perfectCount++;
+        } else {
+            discrepancies.push({
+                name: g.name,
+                family: g.family,
+                n: g.n,
+                xMetric: g.xMetric,
+                yMetric: g.yMetric,
+                zMetric: g.zMetric,
+                expected: { x: g.expectedX, y: g.expectedY, z: g.expectedZ },
+                actual: { x: g.actualX, y: g.actualY, z: g.actualZ },
+                distance: dist,
+                isCustom: g.isCustom
+            });
+        }
+    }
+    
+    console.log(`\n✓ ${perfectCount} graphs at correct positions`);
+    
+    if (discrepancies.length > 0) {
+        console.log(`✗ ${discrepancies.length} discrepancies found:\n`);
+        for (const d of discrepancies) {
+            console.log(`  ${d.name} [${d.family}]${d.isCustom ? ' (custom)' : ''}`);
+            console.log(`    ${axes.x}=${d.xMetric?.toFixed(3)}, ${axes.y}=${d.yMetric?.toFixed(3)}, ${axes.z}=${d.zMetric?.toFixed(3)}`);
+            console.log(`    Expected: (${d.expected.x.toFixed(1)}, ${d.expected.y.toFixed(1)}, ${d.expected.z.toFixed(1)})`);
+            console.log(`    Actual:   (${d.actual.x.toFixed(1)}, ${d.actual.y.toFixed(1)}, ${d.actual.z.toFixed(1)})`);
+            console.log(`    Distance: ${d.distance.toFixed(1)} units`);
+        }
+    } else {
+        console.log(`\n✓ All graphs positioned correctly!`);
+    }
+    
+    console.log('='.repeat(80));
+    
+    return {
+        total: graphs.length,
+        correct: perfectCount,
+        discrepancies: discrepancies
+    };
+}
+
+/**
+ * Debug a specific graph by name pattern
+ */
+export function debugGraph(namePattern) {
+    if (!universeState.active || !universeState.graphNodes) {
+        console.error('Universe not active');
+        return null;
+    }
+    
+    const pattern = namePattern.toLowerCase();
+    const matches = [];
+    
+    for (const [graphId, nodeData] of universeState.graphNodes) {
+        const data = nodeData.data;
+        const name = (data.name || graphId).toLowerCase();
+        
+        if (name.includes(pattern)) {
+            const mesh = nodeData.mesh;
+            const metrics = nodeData.metrics || {};
+            
+            const worldPos = new THREE.Vector3();
+            mesh.getWorldPosition(worldPos);
+            
+            const n = data.n || metrics.n || 0;
+            const rho = metrics.spectralRadius ?? 0;
+            const energy = metrics.energy ?? 0;
+            
+            // Expected position from formula
+            const expectedX = n * 8;
+            const expectedY = rho * 15;
+            const expectedZ = (energy - 8) * 8;
+            
+            matches.push({
+                name: data.name || graphId,
+                family: data.family,
+                n: n,
+                edges: data.edges?.length || 0,
+                position: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
+                expected: { x: expectedX, y: expectedY, z: expectedZ },
+                metrics: {
+                    spectralRadius: metrics.spectralRadius,
+                    spectralGap: metrics.spectralGap,
+                    energy: metrics.energy,
+                    eigenvalueRatio: metrics.eigenvalueRatio,
+                    density: metrics.density,
+                    alpha: metrics.alpha,
+                    rationality: metrics.rationality
+                },
+                storedEigenvalues: data.eigenvalues?.slice(0, 5)
+            });
+        }
+    }
+    
+    console.log(`\n========== DEBUG: Graphs matching "${namePattern}" ==========`);
+    console.log(`Found ${matches.length} matches\n`);
+    console.log(`Position Formula: X = n×8, Y = ρ×15, Z = (E-8)×8\n`);
+    
+    for (const m of matches) {
+        console.log(`--- ${m.name} ---`);
+        console.log(`  Family: ${m.family}`);
+        console.log(`  n=${m.n}, |E|=${m.edges}`);
+        console.log(`  Position:  (${m.position.x.toFixed(2)}, ${m.position.y.toFixed(2)}, ${m.position.z.toFixed(2)})`);
+        console.log(`  Expected:  (${m.expected.x.toFixed(2)}, ${m.expected.y.toFixed(2)}, ${m.expected.z.toFixed(2)})`);
+        console.log(`  Metrics:`);
+        console.log(`    spectralRadius: ${m.metrics.spectralRadius?.toFixed(6)}`);
+        console.log(`    energy: ${m.metrics.energy?.toFixed(4)}`);
+        console.log(`    spectralGap: ${m.metrics.spectralGap?.toFixed(6)}`);
+        console.log(`    eigenvalueRatio: ${m.metrics.eigenvalueRatio?.toFixed(4)}`);
+        console.log(`    density: ${m.metrics.density?.toFixed(4)}`);
+        console.log(`    alpha: ${m.metrics.alpha?.toFixed(4)}`);
+        if (m.storedEigenvalues) {
+            console.log(`  Stored eigenvalues: ${JSON.stringify(m.storedEigenvalues)}`);
+        }
+        console.log('');
+    }
+    console.log('='.repeat(60) + '\n');
+    
+    return matches;
 }
 
 // =====================================================
