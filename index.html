@@ -125,8 +125,28 @@
                 <div id="face-options" class="sub-options hidden">
                     <div class="input-row">
                         <label>Opacity:</label>
-                        <input id="face-opacity" type="range" min="10" max="95" value="50">
-                        <span id="face-opacity-label">50%</span>
+                        <input id="face-opacity" type="range" min="10" max="95" value="70">
+                        <span id="face-opacity-label">70%</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Brightness:</label>
+                        <input id="face-brightness" type="range" min="50" max="150" value="100">
+                        <span id="face-brightness-label">100%</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Saturation:</label>
+                        <input id="face-saturation" type="range" min="50" max="150" value="100">
+                        <span id="face-saturation-label">100%</span>
+                    </div>
+                    <div class="input-row">
+                        <label>Background:</label>
+                        <select id="background-color-select">
+                            <option value="dark">Dark (default)</option>
+                            <option value="gray">Gray</option>
+                            <option value="light">Light Gray</option>
+                            <option value="white">White</option>
+                            <option value="black">Black</option>
+                        </select>
                     </div>
                     <button id="refresh-faces-btn" class="small secondary">🔄 Refresh Faces</button>
                 </div>
@@ -139,6 +159,15 @@
                 <h4>Quick Templates</h4>
                 <select id="template-select">
                     <option value="custom">Custom (manual edges)</option>
+                    <optgroup label="⚡ Realizable Systems">
+                        <option value="mass-chain">Mass-Spring Chain (grounded ends)</option>
+                        <option value="mass-star">Star Mass System (hub spring)</option>
+                        <option value="mass-tree">Tree Mass System (depth d)</option>
+                        <option value="mass-cantilever">Cantilever Beam</option>
+                        <option value="mass-bridge">Simple Bridge/Truss</option>
+                        <option value="mass-grid">Mass-Spring Grid (m×n)</option>
+                        <option value="mass-drum">Drum (n branches × m rings)</option>
+                    </optgroup>
                     <optgroup label="Basic Graphs (Table I)">
                         <option value="path">Path Graph (Pₙ)</option>
                         <option value="cycle">Cycle Graph (Cₙ)</option>
@@ -652,6 +681,186 @@
         <!-- ==================== ANALYZE TAB ==================== -->
         <div id="sidebar-analyze" class="sidebar-tab-content">
             
+            <!-- Physics Realizability Panel -->
+            <div class="control-group" id="physics-panel">
+                <details class="collapsible" open>
+                    <summary>
+                        <h4 style="display:inline;">⚛️ Linear System Realizability</h4>
+                        <span id="physics-status-badge" class="physics-badge"></span>
+                    </summary>
+                    
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <!-- INPUT SECTION: Configure the partition -->
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <div class="physics-input-section">
+                        <div class="physics-section-label">① CONFIGURE PARTITION</div>
+                        
+                        <div class="physics-n-row">
+                            <label>N (absolute states):</label>
+                            <input type="number" id="physics-n-value" min="1" value="3" style="width: 60px;">
+                            <button id="physics-auto-discover-btn" class="physics-btn discover" title="Auto-discover bipartite partition">🔮 Auto</button>
+                        </div>
+                        
+                        <!-- Clickable Partition Grid -->
+                        <div id="physics-partition-container" class="physics-partition-container">
+                            <div class="physics-partition-instructions">
+                                Click to toggle: <span class="p-label">p (momentum)</span> ↔ <span class="q-label">q (displacement)</span>
+                            </div>
+                            <div id="physics-node-grid" class="physics-node-grid"></div>
+                            <div class="physics-partition-summary">
+                                <span>p: <span id="physics-p-indices" class="p-label">-</span></span>
+                                <span>q: <span id="physics-q-indices" class="q-label">-</span></span>
+                            </div>
+                        </div>
+                        
+                        <!-- Audit Button (Primary Action) -->
+                        <div class="physics-audit-row">
+                            <button id="physics-audit-btn" class="physics-btn audit">🔍 Audit Realizability</button>
+                            <label class="physics-auto-label">
+                                <input type="checkbox" id="physics-auto-audit" checked>
+                                <span>Auto</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <!-- OUTPUT SECTION: Results and Status -->
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <div class="physics-output-section">
+                        <div class="physics-section-label">② AUDIT RESULTS</div>
+                        
+                        <!-- Status Summary Card -->
+                        <div class="physics-status-card">
+                            <div id="physics-status-indicator" class="physics-status-dot"></div>
+                            <span id="physics-status-text">Click Audit to check</span>
+                        </div>
+                        
+                        <!-- Dimensions Display -->
+                        <div class="physics-dims-grid">
+                            <div class="physics-dim-item">
+                                <span class="physics-dim-label">N (absolute)</span>
+                                <span id="physics-dim-n" class="physics-dim-value">-</span>
+                            </div>
+                            <div class="physics-dim-item">
+                                <span class="physics-dim-label">M (relative)</span>
+                                <span id="physics-dim-m" class="physics-dim-value">-</span>
+                            </div>
+                            <div class="physics-dim-item">
+                                <span class="physics-dim-label">Violations</span>
+                                <span id="physics-dim-violations" class="physics-dim-value violation-count">-</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Rectification Prompt (when non-realizable) -->
+                        <div id="physics-rectify-prompt" class="physics-rectify-prompt" style="display: none;">
+                            <div class="physics-rectify-message">
+                                <span class="physics-rectify-icon">⚠️</span>
+                                <span>Graph is <strong>not realizable</strong> for linear system.</span>
+                            </div>
+                            <div class="physics-rectify-question">
+                                Would you like to rectify the graph?
+                            </div>
+                            <div class="physics-rectify-note">
+                                Rectification adjusts edge signs to satisfy Newton's 3rd Law.
+                            </div>
+                            <button id="physics-rectify-yes-btn" class="physics-btn rectify-yes">✓ Yes, Rectify Graph</button>
+                        </div>
+                        
+                        <!-- Undo Rectification (after rectification) -->
+                        <div id="physics-undo-panel" class="physics-undo-panel" style="display: none;">
+                            <div class="physics-undo-message">
+                                <span class="physics-undo-icon">✓</span>
+                                <span>Graph <strong>rectified</strong> successfully.</span>
+                            </div>
+                            <button id="physics-undo-btn" class="physics-btn undo">↩ Undo Rectification</button>
+                        </div>
+                        
+                        <!-- Column-by-Column Analysis -->
+                        <div id="physics-column-analysis" class="physics-column-analysis">
+                            <div class="physics-column-header">Column Analysis</div>
+                            <div id="physics-column-list" class="physics-column-list"></div>
+                        </div>
+                        
+                        <!-- Violations Detail Panel -->
+                        <div id="physics-violations-panel" class="physics-violations" style="display: none;">
+                            <div class="physics-violations-header">⚠️ Newton's 3rd Law Violations</div>
+                            <ul id="physics-violations-list" class="physics-violations-list"></ul>
+                        </div>
+                    </div>
+                    
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <!-- SIMULATION SECTION: Hamiltonian Dynamics -->
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <div class="physics-simulation-section">
+                        <div class="physics-section-label">③ HAMILTONIAN DYNAMICS</div>
+                        
+                        <!-- State Space Visualization -->
+                        <div class="physics-state-section">
+                            <div class="physics-state-header">
+                                <span>State Vector x = [p | q]ᵀ</span>
+                            </div>
+                            <div class="physics-state-container">
+                                <div class="physics-state-block physics-p-block">
+                                    <div class="physics-block-label">p (momenta)</div>
+                                    <div id="physics-p-states" class="physics-state-cells"></div>
+                                </div>
+                                <div class="physics-state-divider">
+                                    <div class="physics-divider-line"></div>
+                                    <div class="physics-divider-label">|</div>
+                                    <div class="physics-divider-line"></div>
+                                </div>
+                                <div class="physics-state-block physics-q-block">
+                                    <div class="physics-block-label">q (displacements)</div>
+                                    <div id="physics-q-states" class="physics-state-cells"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Real-time Hamiltonian Plot -->
+                        <div class="physics-hamiltonian-section">
+                            <div class="physics-hamiltonian-header">
+                                <span>H(t) = T + V</span>
+                                <div class="physics-hamiltonian-controls">
+                                    <button id="physics-play-btn" class="physics-mini-btn" title="Play/Pause">▶</button>
+                                    <button id="physics-reset-btn" class="physics-mini-btn" title="Reset">↺</button>
+                                </div>
+                            </div>
+                            <div class="physics-energy-live">
+                                <div class="physics-energy-values">
+                                    <span class="physics-t-value">T = <span id="physics-live-kinetic">0.000</span></span>
+                                    <span class="physics-v-value">V = <span id="physics-live-potential">0.000</span></span>
+                                    <span class="physics-h-value">H = <span id="physics-live-total">0.000</span></span>
+                                </div>
+                                <canvas id="physics-energy-canvas" width="260" height="80"></canvas>
+                                <div class="physics-plot-legend">
+                                    <span class="legend-h">━ H (total)</span>
+                                    <span class="legend-t">━ T (kinetic)</span>
+                                    <span class="legend-v">━ V (potential)</span>
+                                </div>
+                            </div>
+                            <div class="physics-time-display">
+                                t = <span id="physics-time-value">0.00</span>s
+                                <span id="physics-conservation-status" class="physics-conservation-ok">Energy Conserved ✓</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <!-- DETAILS SECTION: System Matrix (collapsible) -->
+                    <!-- ═══════════════════════════════════════════════════════ -->
+                    <div class="physics-bmatrix-section">
+                        <div class="physics-bmatrix-header">
+                            <span>System Matrix A = [0, B; -Bᵀ, 0]</span>
+                            <button id="physics-toggle-bmatrix" class="physics-toggle-btn">Show</button>
+                        </div>
+                        <div id="physics-bmatrix-container" class="physics-bmatrix-container" style="display: none;">
+                            <pre id="physics-bmatrix-content" class="physics-bmatrix-content"></pre>
+                        </div>
+                    </div>
+                    
+                </details>
+            </div>
+            
             <div class="control-group">
                 <h4>Graph Info</h4>
                 <div id="graph-type-display">
@@ -876,6 +1085,12 @@
                                 <option value="star">Star Sₙ</option>
                                 <option value="complete">Complete Kₙ</option>
                             </optgroup>
+                            <optgroup label="⚡ Realizable Systems">
+                                <option value="mass-chain">Mass-Spring Chain</option>
+                                <option value="mass-star">Star Mass System</option>
+                                <option value="mass-cantilever">Cantilever Beam</option>
+                                <option value="mass-drum">Drum (Radial)</option>
+                            </optgroup>
                             <optgroup id="product-a-library" label="📚 From Library">
                                 <!-- Populated dynamically -->
                             </optgroup>
@@ -891,6 +1106,7 @@
                             <option value="cartesian">□ Cartesian (G□H)</option>
                             <option value="tensor">⊗ Tensor (G⊗H)</option>
                             <option value="strong">⊠ Strong (G⊠H)</option>
+                            <option value="realizable">⚡ Realizable (preserves p/q)</option>
                         </select>
                     </div>
                     
@@ -902,6 +1118,12 @@
                                 <option value="cycle">Cycle Cₙ</option>
                                 <option value="star">Star Sₙ</option>
                                 <option value="complete">Complete Kₙ</option>
+                            </optgroup>
+                            <optgroup label="⚡ Realizable Systems">
+                                <option value="mass-chain">Mass-Spring Chain</option>
+                                <option value="mass-star">Star Mass System</option>
+                                <option value="mass-cantilever">Cantilever Beam</option>
+                                <option value="mass-drum">Drum (Radial)</option>
                             </optgroup>
                             <option value="current">★ Current Graph</option>
                             <optgroup id="product-b-library" label="📚 From Library">
@@ -1104,44 +1326,9 @@
                 </div>
             </div>
             
-            <div class="control-group">
-                <h4>🔍 Search Library</h4>
-                <div class="input-row">
-                    <input id="library-search" type="text" placeholder="Search by name, family..." style="flex:1;">
-                </div>
-                <div class="filter-row">
-                    <label>n:</label>
-                    <select id="library-filter-n" style="width: 70px;">
-                        <option value="">All</option>
-                    </select>
-                    <label>Family:</label>
-                    <select id="library-filter-family" style="flex:1;">
-                        <option value="">All</option>
-                    </select>
-                </div>
-                <div class="sort-row">
-                    <label>Sort:</label>
-                    <select id="library-sort">
-                        <option value="dateAdded-desc">Newest first</option>
-                        <option value="dateAdded-asc">Oldest first</option>
-                        <option value="n-asc">Vertices ↑</option>
-                        <option value="n-desc">Vertices ↓</option>
-                        <option value="edges-asc">Edges ↑</option>
-                        <option value="edges-desc">Edges ↓</option>
-                        <option value="name-asc">Name A-Z</option>
-                    </select>
-                </div>
-            </div>
-            
             <!-- UNIVERSE NAVIGATION (shown only in universe view) -->
             <div id="universe-nav-controls" class="control-group" style="display: none;">
                 <h4>🚀 Universe Navigation</h4>
-                <div class="input-row">
-                    <label>Jump to Galaxy:</label>
-                    <select id="universe-galaxy-jump">
-                        <option value="">-- Select --</option>
-                    </select>
-                </div>
                 <div class="button-row" style="margin-top: 8px;">
                     <button id="universe-reset-view" class="secondary small">Reset View</button>
                     <button id="universe-zoom-fit" class="info small">Fit All</button>
@@ -1233,18 +1420,11 @@
             </div>
         </div>
         <div class="popup-content">
-            <!-- Top Row: Phase Plots -->
+            <!-- Phase Plot -->
             <div class="viz-row">
-                <div class="viz-panel" id="panel-phase-current">
-                    <div class="panel-header">CURRENT PHASE PLOT</div>
-                    <canvas id="enhanced-phase-current" width="280" height="250"></canvas>
-                    <div class="panel-legend">
-                        <span class="legend-item"><span class="legend-line cyan"></span> Trajectory trail</span>
-                    </div>
-                </div>
                 <div class="viz-panel" id="panel-phase-enhanced">
                     <div class="panel-header">ENHANCED PHASE PLOT</div>
-                    <canvas id="enhanced-phase-main" width="320" height="250"></canvas>
+                    <canvas id="enhanced-phase-main" width="400" height="280"></canvas>
                     <div class="panel-legend">
                         <span class="legend-item"><span class="legend-line cyan"></span> Trajectory</span>
                         <span class="legend-item"><span class="legend-dot blue"></span> √E amplitude bound</span>

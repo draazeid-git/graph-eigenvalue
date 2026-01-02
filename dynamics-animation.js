@@ -316,6 +316,26 @@ export function startEigenmodeAnimation(eigenmode) {
     const n = state.vertexMeshes.length;
     if (n === 0) return;
     
+    // Check for NaN in eigenvector and use fallback if needed
+    let vReal = eigenmode.eigenvector.real;
+    let vImag = eigenmode.eigenvector.imag;
+    
+    const hasNaN = vReal.some(x => isNaN(x)) || (vImag && vImag.some(x => isNaN(x)));
+    if (hasNaN) {
+        console.warn('Eigenvector contains NaN, using fallback wave pattern');
+        // Generate a simple standing wave pattern
+        const modeIndex = eigenmode.modeIndex || 0;
+        vReal = new Array(n);
+        vImag = new Array(n);
+        for (let i = 0; i < n; i++) {
+            vReal[i] = Math.cos(2 * Math.PI * (modeIndex + 1) * i / n);
+            vImag[i] = Math.sin(2 * Math.PI * (modeIndex + 1) * i / n);
+        }
+        eigenmode.eigenvector.real = vReal;
+        eigenmode.eigenvector.imag = vImag;
+        eigenmode.formula = `fallback mode ${modeIndex + 1}`;
+    }
+    
     // Stop any running dynamics first
     stopDynamics();
     
@@ -335,8 +355,8 @@ export function startEigenmodeAnimation(eigenmode) {
     nodeDerivatives = new Float64Array(n);
     
     // Normalize eigenvector for display
-    const vReal = eigenmode.eigenvector.real;
-    const vImag = eigenmode.eigenvector.imag;
+    vReal = eigenmode.eigenvector.real;
+    vImag = eigenmode.eigenvector.imag;
     let maxAmp = 0;
     for (let i = 0; i < n; i++) {
         const amp = Math.sqrt(vReal[i] * vReal[i] + (vImag[i] || 0) * (vImag[i] || 0));

@@ -84,11 +84,36 @@ function handleEigenvalueClick(event) {
     const graphInfo = detectGraphType();
     const graphType = graphInfo?.type || null;
     
+    // Check if this looks like a mass-spring system (bipartite with unequal parts)
+    // In that case, skip analytical formulas as they won't apply
+    let isMassSpringSystem = false;
+    if (graphType === 'path' && n > 3) {
+        // Check if degrees alternate (mass-spring pattern)
+        // In a true path, all internal nodes have degree 2
+        // In a mass-spring path, there's an alternating pattern
+        const degrees = [];
+        for (let i = 0; i < n; i++) {
+            let d = 0;
+            for (let j = 0; j < n; j++) {
+                if (state.symmetricAdjMatrix[i][j] === 1) d++;
+            }
+            degrees.push(d);
+        }
+        // Check for bipartite structure by seeing if node count >> edge count indicates masses+springs
+        // A simple path Pn has n-1 edges. Mass-spring chain with m masses has 2m nodes and 2m-1 edges
+        const edgeCount = state.edgeObjects.length;
+        if (edgeCount > 0 && n > edgeCount + 1) {
+            // More nodes than a simple path would have for this edge count
+            isMassSpringSystem = true;
+            console.log('[Eigenmode] Detected mass-spring structure, using numerical eigenvector');
+        }
+    }
+    
     // Try to compute eigenvector analytically first
     let eigenvector = null;
     let formula = null;
     
-    if (graphType && ['cycle', 'path', 'star', 'complete'].includes(graphType)) {
+    if (graphType && ['cycle', 'path', 'star', 'complete'].includes(graphType) && !isMassSpringSystem) {
         // Use analytical formula
         const analyticEv = SpectralEngine.computeAnalyticEigenvector(
             graphType, n, index, type === 'skew'
@@ -206,6 +231,17 @@ export function hideModal() {
     if (matrixModal) {
         matrixModal.classList.remove('show');
     }
+    
+    // Stop any running eigenmode animation and reset graph when closing modal
+    import('./dynamics-animation.js').then(module => {
+        if (module.isEigenmodeActive && module.isEigenmodeActive()) {
+            module.stopEigenmodeAnimation();
+            document.querySelectorAll('.eigenvalue-clickable').forEach(item => {
+                item.classList.remove('eigenvalue-active');
+            });
+            console.log('Animation stopped and graph reset on modal close');
+        }
+    }).catch(() => {});
 }
 
 // =====================================================
@@ -217,15 +253,22 @@ export function updateStats() {
     if (statVertices) statVertices.textContent = props.vertices;
     if (statEdges) statEdges.textContent = props.edges;
     
+    const n = props.vertices;
+    const MAX_SIZE_FOR_DETECTION = 40;
+    
     // Compute and cache the analytic eigenspectrum detection
-    // This is the robust detection that identifies graph families with closed-form formulas
-    cachedAnalyticResult = detectAnalyticEigenspectrum();
+    // Skip for large graphs to prevent freezing
+    if (n <= MAX_SIZE_FOR_DETECTION) {
+        cachedAnalyticResult = detectAnalyticEigenspectrum();
+    } else {
+        cachedAnalyticResult = { type: 'unknown', name: `Graph (n=${n})` };
+    }
     
     // Use the cached result for the type display
     // Fall back to simpler detection only if analytic detection found nothing specific
     const displayName = (cachedAnalyticResult && cachedAnalyticResult.type !== 'unknown' && cachedAnalyticResult.type !== 'empty')
         ? cachedAnalyticResult.name
-        : detectGraphType().name;
+        : (n <= MAX_SIZE_FOR_DETECTION ? detectGraphType().name : `Graph (n=${n})`);
     
     if (statType) statType.textContent = displayName || 'Unknown';
     
@@ -243,6 +286,15 @@ export function updateStats() {
 function updateAnalysisDisplays(graphInfo, props) {
     const n = state.vertexMeshes.length;
     if (n === 0) return;
+    
+    const MAX_SIZE = 40;
+    const isLargeGraph = n > MAX_SIZE;
+    
+    // Skip all expensive computations for large graphs
+    if (isLargeGraph) {
+        console.log(`[Analysis] Skipping updateAnalysisDisplays for large graph (n=${n})`);
+        return;
+    }
     
     const charPoly = computeCharacteristicPolynomial(state.symmetricAdjMatrix);
     
@@ -266,7 +318,7 @@ function updateAnalysisDisplays(graphInfo, props) {
     // The rest of the analysis is done by showAnalysis()
     // Just call it to update eigenvalues, polynomial, etc.
     const numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
-    const symAnalysis = analyzeEigenvaluesForClosedForms(numEigs);
+    const symAnalysis = analyzeEigenvaluesForClosedFormsWithN(numEigs, n);
     
     // Symmetric eigenvalue formula
     const analyticFormulaDisplay = document.getElementById('analytic-formula-display');
@@ -287,16 +339,26 @@ function updateAnalysisDisplays(graphInfo, props) {
     // Skew-symmetric eigenvalues
     const skewEigs = computeSkewSymmetricEigenvalues(state.adjacencyMatrix);
     const skewImagParts = skewEigs.map(e => Math.abs(e.imag));
-    const skewGroups = new Map();
+    // Group with full precision (not toFixed which loses precision!)
+    const skewGroups = [];
+    const groupTolerance = 1e-6;
     for (const v of skewImagParts) {
-        const key = v.toFixed(4);
-        skewGroups.set(key, (skewGroups.get(key) || 0) + 1);
+        let found = false;
+        for (const group of skewGroups) {
+            if (Math.abs(group.value - v) < groupTolerance) {
+                group.count++;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            skewGroups.push({ value: v, count: 1 });
+        }
     }
     const uniqueSkewImag = [];
-    for (const [key, count] of skewGroups) {
-        const value = parseFloat(key);
-        const mult = value < 1e-4 ? count : count / 2;
-        if (mult > 0) uniqueSkewImag.push({ value, multiplicity: mult });
+    for (const group of skewGroups) {
+        const mult = group.value < 1e-4 ? group.count : group.count / 2;
+        if (mult > 0) uniqueSkewImag.push({ value: group.value, multiplicity: mult });
     }
     uniqueSkewImag.sort((a, b) => b.value - a.value);
     
@@ -394,14 +456,25 @@ export function showAnalysis() {
     
     const n = state.vertexMeshes.length;
     
-    // Use cached analytic result from updateStats(), or compute if not available
-    // This avoids redundant computation of the expensive detection algorithm
-    const analyticResult = cachedAnalyticResult || detectAnalyticEigenspectrum();
+    // Size limit for expensive operations to prevent freezing
+    const MAX_SIZE_FOR_FULL_ANALYSIS = 40;
+    const isLargeGraph = n > MAX_SIZE_FOR_FULL_ANALYSIS;
     
-    // Also get old detection for comparison (fallback)
-    const graphInfo = detectGraphType();
+    if (isLargeGraph) {
+        console.log(`Large graph (n=${n}): skipping expensive analysis operations`);
+    }
+    
+    // Use cached analytic result from updateStats(), or compute if not available
+    // Skip for large graphs
+    const analyticResult = isLargeGraph ? { type: 'unknown', name: `Graph (n=${n})` } 
+        : (cachedAnalyticResult || detectAnalyticEigenspectrum());
+    
+    // Also get old detection for comparison (fallback) - skip for large graphs
+    const graphInfo = isLargeGraph ? { type: 'unknown', name: `Graph (n=${n})` } : detectGraphType();
     const props = computeGraphProperties();
-    const charPoly = computeCharacteristicPolynomial(state.symmetricAdjMatrix);
+    
+    // Skip expensive polynomial computation for large graphs
+    const charPoly = isLargeGraph ? [] : computeCharacteristicPolynomial(state.symmetricAdjMatrix);
     
     // Prefer the new detection if it found something specific
     const detectedInfo = (analyticResult.type !== 'unknown' && analyticResult.type !== 'empty') 
@@ -504,12 +577,14 @@ export function showAnalysis() {
     }
     
     // Compute numerical eigenvalues once for use in multiple sections
+    // For large graphs, still compute eigenvalues but skip expensive analysis
     const numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
-    const symAnalysis = analyzeEigenvaluesForClosedForms(numEigs);
+    const symAnalysis = isLargeGraph ? { allAnalytic: false, eigenvalues: [] } 
+        : analyzeEigenvaluesForClosedFormsWithN(numEigs, n);
     
-    // Try polynomial factorization for unknown graphs
+    // Try polynomial factorization for unknown graphs - skip for large graphs
     let polyFactorResult = null;
-    if (analyticResult.type === 'unknown' || analyticResult.type === 'empty') {
+    if (!isLargeGraph && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
         try {
             polyFactorResult = analyzeCharacteristicPolynomial(state.symmetricAdjMatrix);
         } catch (e) {
@@ -572,25 +647,50 @@ export function showAnalysis() {
     cachedSymmetricEigs = numEigs;
     cachedSkewEigs = skewEigs;
     
-    // Group skew eigenvalues properly (conjugate pairs)
-    const skewGroups = new Map();
-    for (const v of skewImagParts) {
-        const key = v.toFixed(4);
-        skewGroups.set(key, (skewGroups.get(key) || 0) + 1);
+    // Skip expensive analysis for large graphs
+    let uniqueSkewImag = [];
+    let skewAnalysis = { allAnalytic: false, eigenvalues: [] };
+    
+    if (!isLargeGraph) {
+        // Group skew eigenvalues properly (conjugate pairs) - preserve full precision!
+        const skewGroups = [];
+        const groupTolerance = 1e-6;  // Use same tolerance for grouping
+        for (const v of skewImagParts) {
+            let found = false;
+            for (const group of skewGroups) {
+                if (Math.abs(group.value - v) < groupTolerance) {
+                    group.count++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                skewGroups.push({ value: v, count: 1 });
+            }
+        }
+        for (const group of skewGroups) {
+            // For non-zero values, divide count by 2 (conjugate pairs ±λi)
+            const mult = group.value < 1e-4 ? group.count : group.count / 2;
+            if (mult > 0) uniqueSkewImag.push({ value: group.value, multiplicity: mult });
+        }
+        uniqueSkewImag.sort((a, b) => b.value - a.value);
+        // Pass graph size n for proper denominator detection (same as symmetric)
+        skewAnalysis = analyzeEigenvaluesForClosedFormsWithN(uniqueSkewImag.map(e => e.value), n);
     }
-    const uniqueSkewImag = [];
-    for (const [key, count] of skewGroups) {
-        const value = parseFloat(key);
-        // For non-zero values, divide count by 2 (conjugate pairs ±λi)
-        const mult = value < 1e-4 ? count : count / 2;
-        if (mult > 0) uniqueSkewImag.push({ value, multiplicity: mult });
-    }
-    uniqueSkewImag.sort((a, b) => b.value - a.value);
-    const skewAnalysis = analyzeEigenvaluesForClosedForms(uniqueSkewImag.map(e => e.value));
     
     // Analytic eigenvalue formula (skew-symmetric) - Prefer new detection
     const skewAnalyticFormulaDisplay = document.getElementById('skew-analytic-formula-display');
     if (skewAnalyticFormulaDisplay) {
+        // Try polynomial factorization for skew-symmetric - skip for large graphs
+        let skewPolyFactorResult = null;
+        if (!isLargeGraph && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
+            try {
+                skewPolyFactorResult = analyzeCharacteristicPolynomial(state.adjacencyMatrix);
+            } catch (e) {
+                console.warn('Skew polynomial factorization failed:', e);
+            }
+        }
+        
         // Build formula from new detection eigenvalues if available
         let skewFormulaStr = null;
         if (analyticResult.eigenvalues && analyticResult.type !== 'unknown') {
@@ -622,6 +722,33 @@ export function showAnalysis() {
         } else if (graphInfo.skewFormula) {
             // Fall back to old detection
             skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box" style="border-left-color:#2196F3;"><div class="formula" style="color:#64b5f6;">${graphInfo.skewFormula}</div></div>`;
+        } else if (skewPolyFactorResult && skewPolyFactorResult.allExact && skewPolyFactorResult.roots.length > 0) {
+            // Polynomial factorization found exact roots for skew-symmetric
+            // For skew-symmetric, eigenvalues are ±iω, so show roots as imaginary
+            const rootCounts = new Map();
+            for (const r of skewPolyFactorResult.roots) {
+                const key = r.form;
+                rootCounts.set(key, (rootCounts.get(key) || 0) + 1);
+            }
+            const uniqueParts = [];
+            for (const [form, count] of rootCounts) {
+                const mult = count > 1 ? ` (×${count})` : '';
+                // Convert real root forms to imaginary: λ² = -ω² means λ = ±iω
+                // If form is "0", keep it; otherwise prefix with ±i
+                if (form === '0') {
+                    uniqueParts.push(`0${mult}`);
+                } else {
+                    uniqueParts.push(`±${form}i${mult}`);
+                }
+            }
+            const methodNote = skewPolyFactorResult.usedMuSubstitution ? 
+                '<br><span style="font-size:0.75em;color:#666;">Found via μ=λ² substitution</span>' : '';
+            skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box factored" style="border-left-color:#2196F3;">
+                <div class="formula" style="color:#64b5f6;">λ: ${uniqueParts.join(', ')}</div>
+                <div class="formula-note" style="font-size:0.85em;color:#888;margin-top:4px;">
+                    <b>p(λ) = ${skewPolyFactorResult.factorization}</b>${methodNote}
+                </div>
+            </div>`;
         } else if (skewAnalysis.allAnalytic) {
             // Unknown family but has closed-form eigenvalues
             const formulaParts = skewAnalysis.eigenvalues.map((e, i) => {

@@ -88,6 +88,25 @@ export class SpectralEngine {
         denominators.add(2 * n);       // Half-angle forms
         denominators.add(n - 1);       // Wheel rim eigenvalues
         
+        // Mass-spring system denominators
+        // For bipartite graph with n nodes, if half are masses (m = floor(n/2)):
+        // Eigenvalues follow 2sin(kπ/(m+1)) or 2sin(kπ/(2m+2)) patterns
+        const halfN = Math.floor(n / 2);
+        denominators.add(halfN);
+        denominators.add(halfN + 1);
+        denominators.add(halfN + 2);
+        denominators.add(2 * halfN);
+        denominators.add(2 * halfN + 1);
+        denominators.add(2 * halfN + 2);
+        denominators.add(2 * (halfN + 1));  // 2(m+1) for mass-spring chains
+        
+        // For cantilever-type systems: denominators 2m+1, 2m+2, 2m+3
+        for (let m = Math.max(2, halfN - 3); m <= halfN + 3; m++) {
+            denominators.add(2 * m + 1);
+            denominators.add(2 * m + 2);
+            denominators.add(2 * m + 3);
+        }
+        
         // Mechanism and Pendulum specific denominators
         // For n-bar mechanism: cells = (n-4)/5, try denominators related to cells
         // For n-link pendulum: links = (n-1)/5, try denominators 2*links+1
@@ -106,13 +125,14 @@ export class SpectralEngine {
         // Medium priority: common small denominators
         [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 20].forEach(d => denominators.add(d));
         
-        // Lower priority: extended range for larger graphs
-        for (let d = 2; d <= Math.min(50, 2 * n + 10); d++) {
+        // Extended range for larger graphs - go higher to catch mass-spring patterns
+        const maxDenom = Math.max(60, n + 10, halfN * 2 + 5);
+        for (let d = 2; d <= maxDenom; d++) {
             denominators.add(d);
         }
         
         // Sort with graph-related denominators first
-        const graphRelated = [n, n + 1, 2 * n, n - 1].filter(d => d > 1);
+        const graphRelated = [n, n + 1, 2 * n, n - 1, halfN + 1, 2 * halfN + 2].filter(d => d > 1);
         const others = [...denominators].filter(d => !graphRelated.includes(d) && d > 1).sort((a, b) => a - b);
         
         return [...graphRelated, ...others];
@@ -584,17 +604,21 @@ export class SpectralEngine {
                 break;
                 
             case 'path':
-                // Path Pₙ: v_k[j] = sin(πjk/(n+1)) (j = 1..n)
-                // Eigenvalue: 2cos(πk/(n+1))
+                // Path Pₙ: v_k[j] = sin(πj(k+1)/(n+1)) (j = 1..n, k = 0..n-1)
+                // Eigenvalue: 2cos(π(k+1)/(n+1))
+                // Note: eigenvalue index k is 0-based, but formula uses 1-based (k+1)
+                const kPath = k + 1;  // Convert to 1-based index
                 for (let j = 0; j < n; j++) {
-                    real[j] = Math.sin(Math.PI * (j + 1) * k / (n + 1));
+                    real[j] = Math.sin(Math.PI * (j + 1) * kPath / (n + 1));
                 }
                 // Normalize
                 const normP = Math.sqrt(real.reduce((s, x) => s + x * x, 0));
-                for (let j = 0; j < n; j++) real[j] /= normP;
+                if (normP > 1e-10) {
+                    for (let j = 0; j < n; j++) real[j] /= normP;
+                }
                 
-                eigenvalue = { real: 2 * Math.cos(Math.PI * k / (n + 1)), imag: 0 };
-                formula = `2cos(π·${k}/${n + 1})`;
+                eigenvalue = { real: 2 * Math.cos(Math.PI * kPath / (n + 1)), imag: 0 };
+                formula = `2cos(π·${kPath}/${n + 1})`;
                 break;
                 
             case 'star':
@@ -1371,12 +1395,22 @@ export class PolynomialFactorizer {
         // Sort roots by absolute value (descending)
         roots.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
         
+        // Count total roots including multiplicities
+        // allExact should be true ONLY if:
+        // 1. All found roots are exact
+        // 2. We found the right number of roots (matches polynomial degree)
+        const totalRootsFound = roots.length;
+        const polynomialDegree = n;
+        const allRootsExact = roots.every(r => r.exact);
+        const allRootsAccountedFor = totalRootsFound === polynomialDegree;
+        
         return {
             factors,
             roots,
             factorization,
-            allExact: roots.every(r => r.exact),
-            originalDegree: n,
+            allExact: allRootsExact && allRootsAccountedFor,
+            originalDegree: polynomialDegree,
+            foundRoots: totalRootsFound,
             usedMuSubstitution: onlyEven || onlyOdd
         };
     }

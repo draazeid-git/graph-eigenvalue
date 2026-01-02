@@ -18,9 +18,15 @@ import {
     VERTEX_RADIUS, Arrow3D,
     removeVertex, addNewVertex, arrangeOnGrid, arrangeOnCircle,
     toggleFaces, setFaceOpacity, updateFaceMeshes, createFaceMeshes,
+    setFaceColorBrightness, setFaceColorSaturation, getFaceColorSettings,
+    setBackgroundColor, getBackgroundPreset,
     // Snap grid and projection functions (v49)
     showSnapGrid, hideSnapGrid, setSnapToGrid, setSnapGridSize, snapToGrid, getSnapGridState,
-    setCameraProjection, getCurrentProjection, getCurrentGridPlane
+    setCameraProjection, getCurrentProjection, getCurrentGridPlane,
+    // Rectification support
+    rebuildEdgesFromMatrix,
+    // Partition coloring (v7.8)
+    updateNodePartitionColors, resetNodeColors
 } from './graph-core.js';
 
 import {
@@ -66,6 +72,15 @@ import {
     exportGraphToJSON, exportLibraryToJSON, importFromJSON,
     downloadGraphJSON, downloadLibraryJSON, downloadGraphHTML, downloadLibrarySummaryHTML
 } from './graph-library.js';
+
+// Physics Engine for realizability analysis
+import {
+    PhysicsEngine,
+    auditCurrentGraph,
+    rectifyCurrentGraph,
+    getPhysicsEngine,
+    isPhysicallyRealizable
+} from './physics-engine.js';
 
 // =====================================================
 // DOM ELEMENT REFERENCES
@@ -188,6 +203,37 @@ let libraryViewTableBtn, libraryViewUniverseBtn;
 let universeContainer;
 let universeNavControls, universeGalaxyJump, universeResetView, universeZoomFit;
 
+// Physics Engine UI
+let physicsPanel, physicsStatusBadge, physicsStatusIndicator, physicsStatusText;
+let physicsDimN, physicsDimM, physicsDimViolations;
+let physicsViolationsPanel, physicsViolationsList;
+let physicsAuditBtn, physicsAutoDiscoverBtn;
+let physicsAutoAuditCheckbox;
+let physicsBMatrixContainer, physicsBMatrixContent, physicsToggleBMatrixBtn;
+let physicsColumnAnalysis, physicsColumnList;
+let physicsNValue;
+// Rectification UI
+let physicsRectifyPrompt, physicsRectifyYesBtn;
+let physicsUndoPanel, physicsUndoBtn;
+let originalMatrixBackup = null; // Store original matrix for undo
+// State visualization
+let physicsPStates, physicsQStates;
+let physicsNodeGrid, physicsPIndices, physicsQIndices, physicsPartitionContainer;
+// Energy plot
+let physicsPlayBtn, physicsResetBtn;
+let physicsLiveKinetic, physicsLivePotential, physicsLiveTotal;
+let physicsEnergyCanvas, physicsTimeValue, physicsConservationStatus;
+let currentPhysicsEngine = null;
+// Animation state
+let physicsAnimationId = null;
+let physicsIsPlaying = false;
+let physicsTime = 0;
+let physicsEnergyHistory = { t: [], T: [], V: [], H: [] };
+const PHYSICS_DT = 0.016; // ~60fps timestep
+const PHYSICS_HISTORY_LENGTH = 200;
+// Custom partition state
+let physicsPartition = { pIndices: [], qIndices: [] };
+
 // =====================================================
 // INITIALIZATION
 // =====================================================
@@ -262,6 +308,7 @@ export function init() {
     setupKeyboardShortcuts();
     setupMobileToggle();
     setupLibraryEventListeners();
+    setupPhysicsPanel();
     
     // Generate initial graph
     generateGraph();
@@ -567,6 +614,47 @@ function grabDOMElements() {
     universeGalaxyJump = document.getElementById('universe-galaxy-jump');
     universeResetView = document.getElementById('universe-reset-view');
     universeZoomFit = document.getElementById('universe-zoom-fit');
+    
+    // Physics Engine UI
+    physicsPanel = document.getElementById('physics-panel');
+    physicsStatusBadge = document.getElementById('physics-status-badge');
+    physicsStatusIndicator = document.getElementById('physics-status-indicator');
+    physicsStatusText = document.getElementById('physics-status-text');
+    physicsDimN = document.getElementById('physics-dim-n');
+    physicsDimM = document.getElementById('physics-dim-m');
+    physicsDimViolations = document.getElementById('physics-dim-violations');
+    physicsViolationsPanel = document.getElementById('physics-violations-panel');
+    physicsViolationsList = document.getElementById('physics-violations-list');
+    physicsAuditBtn = document.getElementById('physics-audit-btn');
+    physicsAutoDiscoverBtn = document.getElementById('physics-auto-discover-btn');
+    physicsAutoAuditCheckbox = document.getElementById('physics-auto-audit');
+    physicsBMatrixContainer = document.getElementById('physics-bmatrix-container');
+    physicsBMatrixContent = document.getElementById('physics-bmatrix-content');
+    physicsToggleBMatrixBtn = document.getElementById('physics-toggle-bmatrix');
+    physicsColumnAnalysis = document.getElementById('physics-column-analysis');
+    physicsColumnList = document.getElementById('physics-column-list');
+    physicsNValue = document.getElementById('physics-n-value');
+    // Rectification UI
+    physicsRectifyPrompt = document.getElementById('physics-rectify-prompt');
+    physicsRectifyYesBtn = document.getElementById('physics-rectify-yes-btn');
+    physicsUndoPanel = document.getElementById('physics-undo-panel');
+    physicsUndoBtn = document.getElementById('physics-undo-btn');
+    // State visualization
+    physicsPStates = document.getElementById('physics-p-states');
+    physicsQStates = document.getElementById('physics-q-states');
+    physicsNodeGrid = document.getElementById('physics-node-grid');
+    physicsPIndices = document.getElementById('physics-p-indices');
+    physicsQIndices = document.getElementById('physics-q-indices');
+    physicsPartitionContainer = document.getElementById('physics-partition-container');
+    // Energy plot
+    physicsPlayBtn = document.getElementById('physics-play-btn');
+    physicsResetBtn = document.getElementById('physics-reset-btn');
+    physicsLiveKinetic = document.getElementById('physics-live-kinetic');
+    physicsLivePotential = document.getElementById('physics-live-potential');
+    physicsLiveTotal = document.getElementById('physics-live-total');
+    physicsEnergyCanvas = document.getElementById('physics-energy-canvas');
+    physicsTimeValue = document.getElementById('physics-time-value');
+    physicsConservationStatus = document.getElementById('physics-conservation-status');
 }
 
 // =====================================================
@@ -627,6 +715,9 @@ function setupEventListeners() {
         if (state.facesVisible) {
             setTimeout(() => createFaceMeshes(), 50);
         }
+        
+        // Trigger physics audit after template is applied
+        onGraphChanged();
     });
     
     // Sync template-n with main vertices input
@@ -750,6 +841,43 @@ function setupEventListeners() {
         });
     }
     
+    // Face brightness slider
+    const faceBrightnessEl = document.getElementById('face-brightness');
+    const faceBrightnessLabelEl = document.getElementById('face-brightness-label');
+    if (faceBrightnessEl) {
+        faceBrightnessEl.addEventListener('input', () => {
+            const brightness = parseInt(faceBrightnessEl.value) / 100;
+            setFaceColorBrightness(brightness);
+            if (faceBrightnessLabelEl) {
+                faceBrightnessLabelEl.textContent = faceBrightnessEl.value + '%';
+            }
+            console.log('Face brightness set to:', brightness);
+        });
+    }
+    
+    // Face saturation slider
+    const faceSaturationEl = document.getElementById('face-saturation');
+    const faceSaturationLabelEl = document.getElementById('face-saturation-label');
+    if (faceSaturationEl) {
+        faceSaturationEl.addEventListener('input', () => {
+            const saturation = parseInt(faceSaturationEl.value) / 100;
+            setFaceColorSaturation(saturation);
+            if (faceSaturationLabelEl) {
+                faceSaturationLabelEl.textContent = faceSaturationEl.value + '%';
+            }
+            console.log('Face saturation set to:', saturation);
+        });
+    }
+    
+    // Background color selector
+    const backgroundColorSelect = document.getElementById('background-color-select');
+    if (backgroundColorSelect) {
+        backgroundColorSelect.addEventListener('change', () => {
+            const preset = backgroundColorSelect.value;
+            setBackgroundColor(preset);
+        });
+    }
+    
     // Refresh faces button
     const refreshFacesBtnEl = document.getElementById('refresh-faces-btn');
     if (refreshFacesBtnEl) {
@@ -858,12 +986,14 @@ function setupEventListeners() {
     autoGenerateBtn.addEventListener('click', () => {
         generateRandomEdges(parseInt(autoEdgesInput.value));
         updateStats();
+        onGraphChanged();
     });
     
     clearEdgesBtn.addEventListener('click', () => {
         stopDynamics();
         clearAllEdges();
         updateStats();
+        onGraphChanged();
     });
     
     // Matrix modal
@@ -1015,6 +1145,18 @@ function setupTabs() {
     // Sidebar tabs
     document.querySelectorAll('.sidebar-tab').forEach(tab => {
         tab.addEventListener('click', () => {
+            // Stop any running eigenmode animation and reset graph when switching tabs
+            import('./dynamics-animation.js').then(module => {
+                if (module.isEigenmodeActive && module.isEigenmodeActive()) {
+                    module.stopEigenmodeAnimation();
+                    // Clear active eigenvalue highlight
+                    document.querySelectorAll('.eigenvalue-clickable').forEach(item => {
+                        item.classList.remove('eigenvalue-active');
+                    });
+                    console.log('Animation stopped and graph reset on tab switch');
+                }
+            }).catch(() => {});  // Ignore if module not available
+            
             document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             document.querySelectorAll('.sidebar-tab-content').forEach(c => c.classList.remove('active'));
@@ -1132,6 +1274,17 @@ function setupTabs() {
     // Modal tabs (for backward compatibility)
     document.querySelectorAll('.modal-tab').forEach(tab => {
         tab.addEventListener('click', () => {
+            // Stop any running eigenmode animation and reset graph when switching tabs
+            import('./dynamics-animation.js').then(module => {
+                if (module.isEigenmodeActive && module.isEigenmodeActive()) {
+                    module.stopEigenmodeAnimation();
+                    document.querySelectorAll('.eigenvalue-clickable').forEach(item => {
+                        item.classList.remove('eigenvalue-active');
+                    });
+                    console.log('Animation stopped and graph reset on modal tab switch');
+                }
+            }).catch(() => {});
+            
             document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             document.querySelectorAll('.modal-tab-content').forEach(c => c.classList.remove('active'));
@@ -1916,6 +2069,9 @@ function generateGraph() {
     // Update statistics and analyze tab
     updateStats();
     updateAnalyzeTabIfVisible();
+    
+    // Trigger physics audit
+    onGraphChanged();
 }
 
 // Helper to update analyze tab if it's currently visible
@@ -1955,7 +2111,8 @@ function updateTemplateParams() {
         'prism', 'antiprism', 'crown', 'bipartite', 'cocktail', 'circulant',
         'ladder', 'mobius-ladder', 'circular-ladder',
         'helm', 'gear', 'sun', 'friendship', 'web',
-        'book', 'pan', 'stacked-prism'
+        'book', 'pan', 'stacked-prism',
+        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid', 'mass-drum'
     ];
     
     if (basicFamilies.includes(template)) {
@@ -2044,6 +2201,15 @@ function updateTemplateParams() {
 // Template metadata for preview
 const TEMPLATE_INFO = {
     'custom': { name: 'Custom Graph', nodes: '—', edges: '—', formula: 'Build manually' },
+    // Realizable Systems (mass-spring configurations)
+    'mass-chain': { name: 'Mass-Spring Chain', nodes: '2n+1', edges: '2n', formula: 'Grounded at both ends', realizable: true },
+    'mass-star': { name: 'Star Mass System', nodes: '2n+1', edges: '2n', formula: 'Hub spring + n masses', realizable: true },
+    'mass-tree': { name: 'Tree Mass System', nodes: 'varies', edges: 'n-1', formula: 'Bipartite tree structure', realizable: true },
+    'mass-cantilever': { name: 'Cantilever Beam', nodes: '3n', edges: '3n-1', formula: 'Fixed end, free end', realizable: true },
+    'mass-bridge': { name: 'Simple Bridge', nodes: '2n+2', edges: '3n+1', formula: 'Supported at ends', realizable: true },
+    'mass-grid': { name: 'Mass-Spring Grid', nodes: 'm×n+(m-1)×n+m×(n-1)', edges: 'varies', formula: 'Checkerboard pattern', realizable: true },
+    'mass-drum': { name: 'Drum (Radial)', nodes: '1+3nm', edges: '4nm', formula: 'n branches × m rings', realizable: true },
+    // Basic graphs
     'path': { name: 'Path Graph Pₙ', nodes: 'n', edges: 'n-1', formula: 'λₖ = 2cos(kπ/(n+1))' },
     'cycle': { name: 'Cycle Graph Cₙ', nodes: 'n', edges: 'n', formula: 'λₖ = 2cos(2kπ/n)' },
     'star': { name: 'Star Graph Sₙ', nodes: 'n', edges: 'n-1', formula: 'λ = ±√(n-1), 0^(n-2)' },
@@ -2126,6 +2292,131 @@ function getPreviewGraph(template) {
     switch (template) {
         case 'custom':
             return { positions: [], edges: [], n: 0 };
+        
+        // ===== REALIZABLE SYSTEMS =====
+        case 'mass-chain': {
+            // Alternating masses (blue) and springs (orange), grounded at ends
+            // Pattern: [ground]-spring-mass-spring-mass-...-spring-[ground]
+            const nMasses = 3;
+            for (let i = 0; i < nMasses; i++) {
+                // Mass (p-node)
+                positions.push({ x: i * 2 - (nMasses - 1), y: 0 });
+            }
+            // Springs between masses (q-nodes)
+            for (let i = 0; i < nMasses - 1; i++) {
+                positions.push({ x: i * 2 - (nMasses - 1) + 1, y: 0.3 });
+                edges.push([i, nMasses + i]); // mass to spring
+                edges.push([nMasses + i, i + 1]); // spring to next mass
+            }
+            // Grounded springs at ends
+            positions.push({ x: -(nMasses - 1) - 1, y: 0.3 }); // left ground spring
+            positions.push({ x: (nMasses - 1) + 1, y: 0.3 }); // right ground spring
+            edges.push([positions.length - 2, 0]); // left ground to first mass
+            edges.push([positions.length - 1, nMasses - 1]); // right ground to last mass
+            break;
+        }
+        
+        case 'mass-star': {
+            // Central spring connected to multiple masses
+            const nArms = 4;
+            positions.push({ x: 0, y: 0 }); // Central spring (q-node)
+            for (let i = 0; i < nArms; i++) {
+                const angle = (2 * Math.PI * i) / nArms;
+                positions.push({ x: Math.cos(angle) * 1.2, y: Math.sin(angle) * 1.2 }); // Mass (p-node)
+                edges.push([0, i + 1]);
+            }
+            break;
+        }
+        
+        case 'mass-tree': {
+            // Binary tree: masses at even levels, springs at odd levels
+            // Root spring, two masses, four springs (grounded)
+            positions.push({ x: 0, y: 1 }); // Root spring (q)
+            positions.push({ x: -1, y: 0 }); // Mass 1 (p)
+            positions.push({ x: 1, y: 0 }); // Mass 2 (p)
+            edges.push([0, 1]); edges.push([0, 2]);
+            // Grounded springs
+            positions.push({ x: -1.5, y: -0.8 }); positions.push({ x: -0.5, y: -0.8 });
+            positions.push({ x: 0.5, y: -0.8 }); positions.push({ x: 1.5, y: -0.8 });
+            edges.push([1, 3]); edges.push([1, 4]);
+            edges.push([2, 5]); edges.push([2, 6]);
+            break;
+        }
+        
+        case 'mass-cantilever': {
+            // Fixed at left, free at right
+            const nSections = 3;
+            for (let i = 0; i < nSections; i++) {
+                positions.push({ x: i * 1.5, y: 0 }); // Mass (p)
+                if (i < nSections - 1) {
+                    positions.push({ x: i * 1.5 + 0.75, y: 0.3 }); // Connecting spring (q)
+                }
+            }
+            // Connect masses via springs
+            for (let i = 0; i < nSections - 1; i++) {
+                edges.push([i, nSections + i]); // mass to spring
+                edges.push([nSections + i, i + 1]); // spring to next mass
+            }
+            // Grounded spring at fixed end
+            positions.push({ x: -0.75, y: 0.3 });
+            edges.push([positions.length - 1, 0]);
+            break;
+        }
+        
+        case 'mass-bridge': {
+            // Simple truss: two rows with diagonal bracing
+            // Top row: masses, Bottom supports: grounded springs
+            const span = 3;
+            // Top masses (p-nodes)
+            for (let i = 0; i < span; i++) {
+                positions.push({ x: i - 1, y: 0.5 });
+            }
+            // Connecting springs between top masses (q-nodes)
+            for (let i = 0; i < span - 1; i++) {
+                positions.push({ x: i - 0.5, y: 0.7 });
+                edges.push([i, span + i]);
+                edges.push([span + i, i + 1]);
+            }
+            // Support springs at ends (grounded q-nodes)
+            positions.push({ x: -1, y: -0.3 });
+            positions.push({ x: span - 2, y: -0.3 });
+            edges.push([positions.length - 2, 0]);
+            edges.push([positions.length - 1, span - 1]);
+            break;
+        }
+        
+        case 'mass-grid': {
+            // Checkerboard: masses at (even+even) or (odd+odd), springs elsewhere
+            const rows = 3, cols = 3;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    positions.push({ x: c - 1, y: r - 1 });
+                    const idx = r * cols + c;
+                    if (c < cols - 1) edges.push([idx, idx + 1]);
+                    if (r < rows - 1) edges.push([idx, idx + cols]);
+                }
+            }
+            break;
+        }
+        
+        case 'mass-drum': {
+            // Simple preview: center + 5 points on a circle with radial and circumferential edges
+            const branches = 5;
+            positions.push({ x: 0, y: 0 });  // Center
+            for (let i = 0; i < branches; i++) {
+                const angle = (2 * Math.PI * i) / branches - Math.PI / 2;
+                positions.push({ x: Math.cos(angle) * 1.5, y: Math.sin(angle) * 1.5 });
+            }
+            // Radial edges from center
+            for (let i = 1; i <= branches; i++) {
+                edges.push([0, i]);
+            }
+            // Circumferential edges
+            for (let i = 1; i <= branches; i++) {
+                edges.push([i, (i % branches) + 1]);
+            }
+            break;
+        }
             
         case 'path':
             for (let i = 0; i < previewSize; i++) {
@@ -3163,7 +3454,8 @@ function applyTemplate(template) {
         'prism', 'antiprism', 'crown', 'bipartite', 'cocktail', 'circulant',
         'ladder', 'mobius-ladder', 'circular-ladder',
         'helm', 'gear', 'sun', 'friendship', 'web',
-        'book', 'pan', 'stacked-prism'
+        'book', 'pan', 'stacked-prism',
+        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid', 'mass-drum'
     ];
     
     // Use template-n input for basic families, otherwise use num-vertices
@@ -3202,6 +3494,462 @@ function applyTemplate(template) {
     };
     
     switch (template) {
+        // ===== REALIZABLE SYSTEMS =====
+        // These graphs are guaranteed to be realizable as mass-spring systems
+        
+        case 'mass-chain': {
+            // Linear chain: n masses connected by n-1 springs, grounded at both ends
+            // Total nodes: n masses + (n-1) internal springs + 2 ground springs = 2n+1
+            // p-nodes: masses (indices 0 to n-1)
+            // q-nodes: internal springs (n to 2n-2), ground springs (2n-1, 2n)
+            const nMasses = n;
+            const totalNodes = 2 * nMasses + 1;
+            
+            clearGraph();
+            const spacing = 15;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Masses in a row
+            for (let i = 0; i < nMasses; i++) {
+                const x = (i - (nMasses - 1) / 2) * spacing * 2;
+                createVertex(new THREE.Vector3(x, 0, 0), i);
+            }
+            
+            // Internal springs (between masses)
+            for (let i = 0; i < nMasses - 1; i++) {
+                const x = (i - (nMasses - 1) / 2) * spacing * 2 + spacing;
+                createVertex(new THREE.Vector3(x, spacing * 0.5, 0), nMasses + i);
+            }
+            
+            // Ground springs at ends
+            createVertex(new THREE.Vector3(-(nMasses - 1) / 2 * spacing * 2 - spacing, spacing * 0.5, 0), 2 * nMasses - 1);
+            createVertex(new THREE.Vector3((nMasses - 1) / 2 * spacing * 2 + spacing, spacing * 0.5, 0), 2 * nMasses);
+            
+            // Connect masses via internal springs
+            for (let i = 0; i < nMasses - 1; i++) {
+                addBi(i, nMasses + i);           // mass i to spring i
+                addBi(nMasses + i, i + 1);       // spring i to mass i+1
+            }
+            
+            // Ground springs
+            addBi(2 * nMasses - 1, 0);           // left ground to first mass
+            addBi(2 * nMasses, nMasses - 1);    // right ground to last mass
+            
+            updateStats();
+            console.log(`Built mass-chain: ${nMasses} masses, ${nMasses + 1} springs (2 grounded)`);
+            break;
+        }
+        
+        case 'mass-star': {
+            // Central spring connected to n masses (star configuration)
+            // p-nodes: masses (1 to n)
+            // q-nodes: central spring (0), grounded springs (n+1 to 2n)
+            const nMasses = n;
+            const totalNodes = 2 * nMasses + 1;
+            
+            clearGraph();
+            const radius = 20;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Central spring (q-node)
+            createVertex(new THREE.Vector3(0, 0, 0), 0);
+            
+            // Masses around the center
+            for (let i = 0; i < nMasses; i++) {
+                const angle = (2 * Math.PI * i) / nMasses - Math.PI / 2;
+                const x = Math.cos(angle) * radius;
+                const y = Math.sin(angle) * radius;
+                createVertex(new THREE.Vector3(x, y, 0), i + 1);
+            }
+            
+            // Grounded springs (one per mass, on outer edge)
+            for (let i = 0; i < nMasses; i++) {
+                const angle = (2 * Math.PI * i) / nMasses - Math.PI / 2;
+                const x = Math.cos(angle) * radius * 1.4;
+                const y = Math.sin(angle) * radius * 1.4;
+                createVertex(new THREE.Vector3(x, y, 0), nMasses + 1 + i);
+            }
+            
+            // Connect center to masses
+            for (let i = 0; i < nMasses; i++) {
+                addBi(0, i + 1);
+            }
+            
+            // Connect masses to grounded springs
+            for (let i = 0; i < nMasses; i++) {
+                addBi(i + 1, nMasses + 1 + i);
+            }
+            
+            updateStats();
+            console.log(`Built mass-star: ${nMasses} masses, ${nMasses + 1} springs (${nMasses} grounded)`);
+            break;
+        }
+        
+        case 'mass-tree': {
+            // Binary tree of depth d: alternating masses and springs
+            // Masses at even depth, springs at odd depth
+            const depth = n;
+            
+            clearGraph();
+            
+            const levelHeight = 20;
+            const baseWidth = 60;
+            let nodeIndex = 0;
+            
+            // Count total nodes first
+            let totalNodes = 0;
+            for (let d = 0; d <= depth; d++) {
+                totalNodes += Math.pow(2, d);
+            }
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Build tree level by level
+            for (let d = 0; d <= depth; d++) {
+                const nodesAtLevel = Math.pow(2, d);
+                const levelWidth = baseWidth / Math.pow(2, Math.max(0, d - 1));
+                
+                for (let i = 0; i < nodesAtLevel; i++) {
+                    const x = (i - (nodesAtLevel - 1) / 2) * levelWidth;
+                    const y = -d * levelHeight;
+                    createVertex(new THREE.Vector3(x, y, 0), nodeIndex);
+                    nodeIndex++;
+                }
+            }
+            
+            // Connect parent to children
+            let parentStart = 0;
+            for (let d = 0; d < depth; d++) {
+                const parentsAtLevel = Math.pow(2, d);
+                const childStart = parentStart + parentsAtLevel;
+                
+                for (let i = 0; i < parentsAtLevel; i++) {
+                    const parent = parentStart + i;
+                    const leftChild = childStart + 2 * i;
+                    const rightChild = childStart + 2 * i + 1;
+                    addBi(parent, leftChild);
+                    addBi(parent, rightChild);
+                }
+                parentStart = childStart;
+            }
+            
+            updateStats();
+            console.log(`Built mass-tree: depth ${depth}, ${nodeIndex} nodes`);
+            break;
+        }
+        
+        case 'mass-cantilever': {
+            // Cantilever beam: fixed at one end, free at other
+            // n sections: n masses, n-1 connecting springs, 1 grounded spring at fixed end
+            const nSections = n;
+            const totalNodes = 2 * nSections;
+            
+            clearGraph();
+            const spacing = 15;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Masses in a row
+            for (let i = 0; i < nSections; i++) {
+                createVertex(new THREE.Vector3(i * spacing * 1.5, 0, 0), i);
+            }
+            
+            // Internal springs between masses
+            for (let i = 0; i < nSections - 1; i++) {
+                createVertex(new THREE.Vector3(i * spacing * 1.5 + spacing * 0.75, spacing * 0.4, 0), nSections + i);
+            }
+            
+            // Grounded spring at fixed end
+            createVertex(new THREE.Vector3(-spacing * 0.75, spacing * 0.4, 0), 2 * nSections - 1);
+            
+            // Connect masses via springs
+            for (let i = 0; i < nSections - 1; i++) {
+                addBi(i, nSections + i);
+                addBi(nSections + i, i + 1);
+            }
+            
+            // Ground spring to first mass
+            addBi(2 * nSections - 1, 0);
+            
+            updateStats();
+            console.log(`Built mass-cantilever: ${nSections} masses, ${nSections} springs (1 grounded)`);
+            break;
+        }
+        
+        case 'mass-bridge': {
+            // Simple bridge: n masses in a row, supported at ends
+            // n masses + (n-1) connecting springs + 2 support springs
+            const nMasses = n;
+            const totalNodes = 2 * nMasses + 1;
+            
+            clearGraph();
+            const spacing = 15;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Masses
+            for (let i = 0; i < nMasses; i++) {
+                createVertex(new THREE.Vector3((i - (nMasses - 1) / 2) * spacing * 2, 0, 0), i);
+            }
+            
+            // Internal springs
+            for (let i = 0; i < nMasses - 1; i++) {
+                createVertex(new THREE.Vector3((i - (nMasses - 1) / 2) * spacing * 2 + spacing, spacing * 0.5, 0), nMasses + i);
+            }
+            
+            // Support springs at ends (below the masses)
+            createVertex(new THREE.Vector3(-(nMasses - 1) / 2 * spacing * 2, -spacing, 0), 2 * nMasses - 1);
+            createVertex(new THREE.Vector3((nMasses - 1) / 2 * spacing * 2, -spacing, 0), 2 * nMasses);
+            
+            // Connect masses
+            for (let i = 0; i < nMasses - 1; i++) {
+                addBi(i, nMasses + i);
+                addBi(nMasses + i, i + 1);
+            }
+            
+            // Support springs
+            addBi(0, 2 * nMasses - 1);
+            addBi(nMasses - 1, 2 * nMasses);
+            
+            updateStats();
+            console.log(`Built mass-bridge: ${nMasses} masses, ${nMasses + 1} springs (2 supports)`);
+            break;
+        }
+        
+        case 'mass-grid': {
+            // m×n grid of masses with springs between adjacent masses
+            const gridSize = n;
+            const rows = gridSize, cols = gridSize;
+            const nMasses = rows * cols;
+            
+            // Springs: horizontal (rows * (cols-1)) + vertical ((rows-1) * cols)
+            const hSprings = rows * (cols - 1);
+            const vSprings = (rows - 1) * cols;
+            const totalNodes = nMasses + hSprings + vSprings;
+            
+            clearGraph();
+            const spacing = 15;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Create masses
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const idx = r * cols + c;
+                    createVertex(new THREE.Vector3(
+                        (c - (cols - 1) / 2) * spacing * 2,
+                        (r - (rows - 1) / 2) * spacing * 2,
+                        0
+                    ), idx);
+                }
+            }
+            
+            // Create horizontal springs
+            let springIdx = nMasses;
+            const hSpringStart = springIdx;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols - 1; c++) {
+                    createVertex(new THREE.Vector3(
+                        (c - (cols - 1) / 2) * spacing * 2 + spacing,
+                        (r - (rows - 1) / 2) * spacing * 2 + spacing * 0.3,
+                        0
+                    ), springIdx++);
+                }
+            }
+            
+            // Create vertical springs
+            const vSpringStart = springIdx;
+            for (let r = 0; r < rows - 1; r++) {
+                for (let c = 0; c < cols; c++) {
+                    createVertex(new THREE.Vector3(
+                        (c - (cols - 1) / 2) * spacing * 2 + spacing * 0.3,
+                        (r - (rows - 1) / 2) * spacing * 2 + spacing,
+                        0
+                    ), springIdx++);
+                }
+            }
+            
+            // Connect horizontal springs
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols - 1; c++) {
+                    const massLeft = r * cols + c;
+                    const massRight = r * cols + c + 1;
+                    const spring = hSpringStart + r * (cols - 1) + c;
+                    addBi(massLeft, spring);
+                    addBi(spring, massRight);
+                }
+            }
+            
+            // Connect vertical springs
+            for (let r = 0; r < rows - 1; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const massTop = r * cols + c;
+                    const massBottom = (r + 1) * cols + c;
+                    const spring = vSpringStart + r * cols + c;
+                    addBi(massTop, spring);
+                    addBi(spring, massBottom);
+                }
+            }
+            
+            updateStats();
+            console.log(`Built mass-grid: ${rows}×${cols} = ${nMasses} masses, ${hSprings + vSprings} springs`);
+            break;
+        }
+        
+        case 'mass-drum': {
+            // Drum structure: n branches (radial spokes), m rings (circles)
+            // Uses the 'n' parameter for branches, defaults to 2 rings (can be extended)
+            const branches = n;  // Number of radial branches
+            const rings = 2;     // Number of concentric rings (can make this configurable later)
+            
+            // Masses: center + n per ring = 1 + n*m
+            const nMasses = 1 + branches * rings;
+            
+            // Springs: radial (n*m connecting layers) + circumferential (n*m around rings)
+            const radialSprings = branches * rings;  // From center to ring1, ring1 to ring2, etc.
+            const circumSprings = branches * rings;  // Around each ring
+            const nSprings = radialSprings + circumSprings;
+            
+            const totalNodes = nMasses + nSprings;
+            
+            clearGraph();
+            const baseRadius = 20;
+            const ringSpacing = 25;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // === CREATE MASS NODES ===
+            // Center mass (index 0)
+            createVertex(new THREE.Vector3(0, 0, 0), 0);
+            
+            // Masses on each ring
+            let massIdx = 1;
+            const massPositions = [[0, 0]];  // Center at index 0
+            for (let r = 1; r <= rings; r++) {
+                const radius = baseRadius + (r - 1) * ringSpacing;
+                for (let b = 0; b < branches; b++) {
+                    const angle = (2 * Math.PI * b) / branches - Math.PI / 2;
+                    const x = radius * Math.cos(angle);
+                    const y = radius * Math.sin(angle);
+                    createVertex(new THREE.Vector3(x, y, 0), massIdx);
+                    massPositions.push([x, y]);
+                    massIdx++;
+                }
+            }
+            
+            // === CREATE SPRING NODES ===
+            // Radial springs (connecting center to ring1, ring1 to ring2, etc.)
+            let springIdx = nMasses;
+            const radialSpringIndices = [];  // [ring][branch] -> spring index
+            
+            for (let r = 0; r < rings; r++) {
+                radialSpringIndices[r] = [];
+                for (let b = 0; b < branches; b++) {
+                    // Position spring between the two masses it connects
+                    let innerMass, outerMass;
+                    if (r === 0) {
+                        innerMass = 0;  // Center
+                        outerMass = 1 + b;  // First ring
+                    } else {
+                        innerMass = 1 + (r - 1) * branches + b;  // Previous ring
+                        outerMass = 1 + r * branches + b;  // Current ring
+                    }
+                    
+                    const innerPos = massPositions[innerMass];
+                    const outerPos = massPositions[outerMass];
+                    const midX = (innerPos[0] + outerPos[0]) / 2;
+                    const midY = (innerPos[1] + outerPos[1]) / 2;
+                    
+                    // Offset slightly for visibility
+                    const offsetAngle = (2 * Math.PI * b) / branches - Math.PI / 2 + 0.1;
+                    const offsetX = midX + 2 * Math.cos(offsetAngle);
+                    const offsetY = midY + 2 * Math.sin(offsetAngle);
+                    
+                    createVertex(new THREE.Vector3(offsetX, offsetY, 0), springIdx);
+                    radialSpringIndices[r][b] = springIdx;
+                    springIdx++;
+                }
+            }
+            
+            // Circumferential springs (around each ring)
+            const circumSpringIndices = [];  // [ring][branch] -> spring index
+            
+            for (let r = 0; r < rings; r++) {
+                circumSpringIndices[r] = [];
+                const radius = baseRadius + r * ringSpacing;
+                for (let b = 0; b < branches; b++) {
+                    // Position between adjacent masses on this ring
+                    const mass1 = 1 + r * branches + b;
+                    const mass2 = 1 + r * branches + ((b + 1) % branches);
+                    
+                    const pos1 = massPositions[mass1];
+                    const pos2 = massPositions[mass2];
+                    const midX = (pos1[0] + pos2[0]) / 2;
+                    const midY = (pos1[1] + pos2[1]) / 2;
+                    
+                    // Offset outward slightly
+                    const dist = Math.sqrt(midX * midX + midY * midY);
+                    const normX = dist > 0 ? midX / dist : 0;
+                    const normY = dist > 0 ? midY / dist : 1;
+                    const offsetX = midX + 3 * normX;
+                    const offsetY = midY + 3 * normY;
+                    
+                    createVertex(new THREE.Vector3(offsetX, offsetY, 0), springIdx);
+                    circumSpringIndices[r][b] = springIdx;
+                    springIdx++;
+                }
+            }
+            
+            // === CONNECT EDGES ===
+            // Radial connections: mass - spring - mass
+            for (let r = 0; r < rings; r++) {
+                for (let b = 0; b < branches; b++) {
+                    let innerMass, outerMass;
+                    if (r === 0) {
+                        innerMass = 0;  // Center
+                        outerMass = 1 + b;
+                    } else {
+                        innerMass = 1 + (r - 1) * branches + b;
+                        outerMass = 1 + r * branches + b;
+                    }
+                    const spring = radialSpringIndices[r][b];
+                    addBi(innerMass, spring);
+                    addBi(spring, outerMass);
+                }
+            }
+            
+            // Circumferential connections: mass - spring - mass (around each ring)
+            for (let r = 0; r < rings; r++) {
+                for (let b = 0; b < branches; b++) {
+                    const mass1 = 1 + r * branches + b;
+                    const mass2 = 1 + r * branches + ((b + 1) % branches);
+                    const spring = circumSpringIndices[r][b];
+                    addBi(mass1, spring);
+                    addBi(spring, mass2);
+                }
+            }
+            
+            updateStats();
+            console.log(`Built mass-drum: ${branches} branches × ${rings} rings = ${nMasses} masses, ${nSprings} springs, ${totalNodes} total nodes`);
+            break;
+        }
+        
         case 'cycle':
             generateGraph();
             for (let i = 0; i < n; i++) {
@@ -5331,6 +6079,7 @@ function onMouseClick(event) {
                 setVertexMaterial(state.selectedVertex, 'default');
                 state.selectedVertex = null;
                 updateStats();
+                onGraphChanged();
             }
         } else if (state.selectedVertex) {
             // Clicked empty space - deselect
@@ -5353,6 +6102,7 @@ function onMouseClick(event) {
             }
             
             updateStats();
+            onGraphChanged();
         }
     } else if (addVertexMode) {
         // Add vertex: click empty space to place a new vertex
@@ -5611,6 +6361,7 @@ function loadSelectedAnalyticGraph() {
     updateStats();
     updatePhaseNodeSelectors();
     invalidateCaches();  // Reset dynamics caches for new graph
+    onGraphChanged();
     
     // Optionally show analysis
     setTimeout(() => showAnalysis(), 100);
@@ -6551,44 +7302,293 @@ function computeStrongProduct(adjA, adjB) {
     return adj;
 }
 
-// Generate base graph adjacency matrices (skew-symmetric)
-function generateBaseGraph(type, n) {
-    const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+/**
+ * Compute Realizable Product of two graphs.
+ * 
+ * This product preserves physical realizability by ensuring every mass-mass
+ * connection goes through an explicit spring node.
+ * 
+ * Algorithm:
+ * 1. Identify p-nodes (masses) and q-nodes (springs) in each graph via bipartite partition
+ * 2. Extract "mass adjacency" - which masses connect via springs
+ * 3. Form Cartesian product of mass sets
+ * 4. For each edge in the product, insert an explicit spring node
+ * 
+ * @param {number[][]} adjA - Adjacency matrix of first graph
+ * @param {number[][]} adjB - Adjacency matrix of second graph
+ * @returns {Object} { adj: adjacency matrix, pIndices: mass indices, qIndices: spring indices }
+ */
+function computeRealizableProduct(adjA, adjB) {
+    // Step 1: Find bipartite partitions (p=masses, q=springs)
+    const partA = findBipartitePartition(adjA);
+    const partB = findBipartitePartition(adjB);
     
-    switch (type) {
-        case 'path':
-            for (let i = 0; i < n - 1; i++) {
-                adj[i][i + 1] = 1;
-                adj[i + 1][i] = -1;
-            }
-            break;
-            
-        case 'cycle':
-            for (let i = 0; i < n; i++) {
-                const next = (i + 1) % n;
-                adj[i][next] = 1;
-                adj[next][i] = -1;
-            }
-            break;
-            
-        case 'star':
-            for (let i = 1; i < n; i++) {
-                adj[0][i] = 1;
-                adj[i][0] = -1;
-            }
-            break;
-            
-        case 'complete':
-            for (let i = 0; i < n; i++) {
-                for (let j = i + 1; j < n; j++) {
-                    adj[i][j] = 1;
-                    adj[j][i] = -1;
-                }
-            }
-            break;
+    if (!partA || !partB) {
+        console.warn('[RealizableProduct] One or both graphs are not bipartite');
+        return null;
     }
     
-    return adj;
+    // Ensure we have the correct orientation (more p-nodes = masses typically)
+    // For mass-spring systems, we usually have fewer masses than springs
+    // But let's just use the partition as-is
+    const massesA = partA.setA;  // p-nodes in A
+    const massesB = partB.setA;  // p-nodes in B
+    
+    console.log(`[RealizableProduct] Graph A: ${massesA.length} masses, ${partA.setB.length} springs`);
+    console.log(`[RealizableProduct] Graph B: ${massesB.length} masses, ${partB.setB.length} springs`);
+    
+    // Step 2: Build mass adjacency (which masses connect via springs)
+    // Two masses are "adjacent" if there exists a spring connecting them
+    const massAdjA = buildMassAdjacency(adjA, massesA, partA.setB);
+    const massAdjB = buildMassAdjacency(adjB, massesB, partB.setB);
+    
+    console.log(`[RealizableProduct] Mass adjacency A:`, massAdjA);
+    console.log(`[RealizableProduct] Mass adjacency B:`, massAdjB);
+    
+    // Step 3: Form Cartesian product of mass indices
+    // Product masses: (mA, mB) for all mA in massesA, mB in massesB
+    const nMassesA = massesA.length;
+    const nMassesB = massesB.length;
+    const nProductMasses = nMassesA * nMassesB;
+    
+    // Collect edges in the product (before inserting springs)
+    const productEdges = [];
+    
+    // Edges from A structure (vary mass in A, fix mass in B)
+    for (let iA = 0; iA < nMassesA; iA++) {
+        for (let iB = 0; iB < nMassesB; iB++) {
+            const v1 = iA * nMassesB + iB;  // Product vertex index
+            
+            // Check adjacency in A
+            for (const jA of massAdjA[iA] || []) {
+                const v2 = jA * nMassesB + iB;
+                if (v1 < v2) {  // Avoid duplicates
+                    productEdges.push([v1, v2, 'A']);  // Tag source
+                }
+            }
+            
+            // Check adjacency in B
+            for (const jB of massAdjB[iB] || []) {
+                const v2 = iA * nMassesB + jB;
+                if (v1 < v2) {
+                    productEdges.push([v1, v2, 'B']);
+                }
+            }
+        }
+    }
+    
+    console.log(`[RealizableProduct] Product has ${nProductMasses} masses, ${productEdges.length} edges to mediate`);
+    
+    // Step 4: Build final graph with explicit spring nodes
+    // Total nodes: product masses + one spring per edge
+    const nSprings = productEdges.length;
+    const totalNodes = nProductMasses + nSprings;
+    
+    const adj = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+    
+    // p-indices: 0 to nProductMasses-1 (masses)
+    // q-indices: nProductMasses to totalNodes-1 (springs)
+    const pIndices = Array.from({ length: nProductMasses }, (_, i) => i);
+    const qIndices = Array.from({ length: nSprings }, (_, i) => nProductMasses + i);
+    
+    // Connect masses through springs
+    for (let e = 0; e < productEdges.length; e++) {
+        const [m1, m2, source] = productEdges[e];
+        const springIdx = nProductMasses + e;
+        
+        // m1 -> spring -> m2 (skew-symmetric)
+        adj[m1][springIdx] = 1;
+        adj[springIdx][m1] = -1;
+        adj[springIdx][m2] = 1;
+        adj[m2][springIdx] = -1;
+    }
+    
+    return {
+        adj,
+        pIndices,
+        qIndices,
+        nMasses: nProductMasses,
+        nSprings,
+        massesA,
+        massesB,
+        productEdges
+    };
+}
+
+/**
+ * Find bipartite partition of a graph using BFS 2-coloring
+ */
+function findBipartitePartition(adj) {
+    const n = adj.length;
+    const color = new Array(n).fill(-1);
+    const setA = [];
+    const setB = [];
+    
+    for (let start = 0; start < n; start++) {
+        if (color[start] !== -1) continue;
+        
+        const queue = [start];
+        color[start] = 0;
+        
+        while (queue.length > 0) {
+            const u = queue.shift();
+            
+            for (let v = 0; v < n; v++) {
+                if (adj[u][v] !== 0 || adj[v][u] !== 0) {
+                    if (color[v] === -1) {
+                        color[v] = 1 - color[u];
+                        queue.push(v);
+                    } else if (color[v] === color[u]) {
+                        return null;  // Not bipartite
+                    }
+                }
+            }
+        }
+    }
+    
+    for (let i = 0; i < n; i++) {
+        if (color[i] === 0) setA.push(i);
+        else setB.push(i);
+    }
+    
+    return { setA, setB };
+}
+
+/**
+ * Build mass adjacency list: which masses connect through springs
+ */
+function buildMassAdjacency(adj, masses, springs) {
+    const massSet = new Set(masses);
+    const springSet = new Set(springs);
+    const n = adj.length;
+    
+    // For each mass, find which other masses it connects to via springs
+    const massAdj = {};
+    for (const m of masses) {
+        massAdj[masses.indexOf(m)] = [];
+    }
+    
+    // For each spring, find the two masses it connects
+    for (const s of springs) {
+        const connectedMasses = [];
+        for (let i = 0; i < n; i++) {
+            if ((adj[s][i] !== 0 || adj[i][s] !== 0) && massSet.has(i)) {
+                connectedMasses.push(masses.indexOf(i));
+            }
+        }
+        
+        // If spring connects exactly 2 masses, they're adjacent
+        if (connectedMasses.length === 2) {
+            const [m1, m2] = connectedMasses;
+            if (!massAdj[m1].includes(m2)) massAdj[m1].push(m2);
+            if (!massAdj[m2].includes(m1)) massAdj[m2].push(m1);
+        }
+        // If spring connects 1 mass (grounded), no adjacency added
+    }
+    
+    return massAdj;
+}
+
+// Generate base graph adjacency matrices (skew-symmetric)
+function generateBaseGraph(type, n) {
+    // For realizable systems, n represents the number of masses
+    // The actual graph size will be larger (masses + springs)
+    
+    switch (type) {
+        case 'mass-chain': {
+            // n masses + (n-1) internal springs + 2 ground springs = 2n+1 nodes
+            const nMasses = n;
+            const totalNodes = 2 * nMasses + 1;
+            const adj = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Connect masses via internal springs (masses: 0 to n-1, springs: n to 2n-2)
+            for (let i = 0; i < nMasses - 1; i++) {
+                const spring = nMasses + i;
+                adj[i][spring] = 1; adj[spring][i] = -1;
+                adj[spring][i + 1] = 1; adj[i + 1][spring] = -1;
+            }
+            
+            // Ground springs at ends (indices 2n-1 and 2n)
+            adj[2 * nMasses - 1][0] = 1; adj[0][2 * nMasses - 1] = -1;
+            adj[2 * nMasses][nMasses - 1] = 1; adj[nMasses - 1][2 * nMasses] = -1;
+            
+            return adj;
+        }
+        
+        case 'mass-star': {
+            // Central spring + n masses + n ground springs = 2n+1 nodes
+            const nMasses = n;
+            const totalNodes = 2 * nMasses + 1;
+            const adj = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Central spring at index 0, masses at 1 to n, ground springs at n+1 to 2n
+            for (let i = 0; i < nMasses; i++) {
+                adj[0][i + 1] = 1; adj[i + 1][0] = -1;  // center to mass
+                adj[i + 1][nMasses + 1 + i] = 1; adj[nMasses + 1 + i][i + 1] = -1;  // mass to ground
+            }
+            
+            return adj;
+        }
+        
+        case 'mass-cantilever': {
+            // n masses + (n-1) internal springs + 1 ground spring = 2n nodes
+            const nMasses = n;
+            const totalNodes = 2 * nMasses;
+            const adj = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // Internal springs between masses
+            for (let i = 0; i < nMasses - 1; i++) {
+                const spring = nMasses + i;
+                adj[i][spring] = 1; adj[spring][i] = -1;
+                adj[spring][i + 1] = 1; adj[i + 1][spring] = -1;
+            }
+            
+            // Ground spring at fixed end (index 2n-1 connects to mass 0)
+            adj[2 * nMasses - 1][0] = 1; adj[0][2 * nMasses - 1] = -1;
+            
+            return adj;
+        }
+        
+        default: {
+            // Standard graphs (path, cycle, star, complete)
+            const adj = Array(n).fill(null).map(() => Array(n).fill(0));
+            
+            switch (type) {
+                case 'path':
+                    for (let i = 0; i < n - 1; i++) {
+                        adj[i][i + 1] = 1;
+                        adj[i + 1][i] = -1;
+                    }
+                    break;
+                    
+                case 'cycle':
+                    for (let i = 0; i < n; i++) {
+                        const next = (i + 1) % n;
+                        adj[i][next] = 1;
+                        adj[next][i] = -1;
+                    }
+                    break;
+                    
+                case 'star':
+                    for (let i = 1; i < n; i++) {
+                        adj[0][i] = 1;
+                        adj[i][0] = -1;
+                    }
+                    break;
+                    
+                case 'complete':
+                    for (let i = 0; i < n; i++) {
+                        for (let j = i + 1; j < n; j++) {
+                            adj[i][j] = 1;
+                            adj[j][i] = -1;
+                        }
+                    }
+                    break;
+            }
+            
+            return adj;
+        }
+    }
 }
 
 // Parameterized family builders
@@ -6757,7 +7757,7 @@ function addVertex(x, y, z) {
 }
 
 // Apply built graph to the visualization
-function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
+function applyBuiltGraph(adjMatrix, name, layoutType = 'circle', layoutParams = null) {
     const n = adjMatrix.length;
     
     // Clear current graph
@@ -6766,7 +7766,18 @@ function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
     // Generate vertices in appropriate layout
     const radius = 40;
     
-    if (layoutType === 'grid' && Math.sqrt(n) === Math.floor(Math.sqrt(n))) {
+    if (layoutType === 'product-grid' && layoutParams) {
+        // Product graph grid layout - lay out as nA × nB grid
+        const { nA, nB } = layoutParams;
+        const spacing = 25;
+        for (let i = 0; i < n; i++) {
+            const iA = Math.floor(i / nB);
+            const iB = i % nB;
+            const x = (iA - (nA - 1) / 2) * spacing;
+            const y = (iB - (nB - 1) / 2) * spacing;
+            addVertex(x, y, 0);
+        }
+    } else if (layoutType === 'grid' && Math.sqrt(n) === Math.floor(Math.sqrt(n))) {
         // Square grid layout
         const side = Math.floor(Math.sqrt(n));
         const spacing = radius * 2 / (side - 1);
@@ -6844,6 +7855,117 @@ function applyBuiltGraph(adjMatrix, name, layoutType = 'circle') {
     console.log(`Built: ${name} with ${n} vertices, ${state.edgeObjects.length} edges`);
 }
 
+/**
+ * Apply a realizable product result with proper layout
+ * Masses in grid, springs offset along edges
+ */
+function applyRealizableProduct(result, name) {
+    const { adj, pIndices, qIndices, nMasses, nSprings, massesA, massesB, productEdges } = result;
+    const n = adj.length;
+    
+    // Clear current graph
+    clearGraph();
+    
+    // Calculate grid dimensions for mass layout
+    const nA = massesA.length;
+    const nB = massesB.length;
+    const spacing = 25;
+    
+    // Position masses in a grid pattern
+    const massPositions = [];
+    for (let iA = 0; iA < nA; iA++) {
+        for (let iB = 0; iB < nB; iB++) {
+            const x = (iA - (nA - 1) / 2) * spacing;
+            const y = (iB - (nB - 1) / 2) * spacing;
+            massPositions.push(new THREE.Vector3(x, y, 0));
+        }
+    }
+    
+    // Create mass vertices (p-nodes)
+    for (let i = 0; i < nMasses; i++) {
+        addVertex(massPositions[i].x, massPositions[i].y, massPositions[i].z);
+    }
+    
+    // Position springs at midpoints of edges, slightly offset
+    for (let e = 0; e < productEdges.length; e++) {
+        const [m1, m2, source] = productEdges[e];
+        const p1 = massPositions[m1];
+        const p2 = massPositions[m2];
+        
+        // Midpoint with slight offset perpendicular to edge
+        const mid = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5);
+        const dir = new THREE.Vector3().subVectors(p2, p1).normalize();
+        const perp = new THREE.Vector3(-dir.y, dir.x, 0);  // 2D perpendicular
+        
+        // Offset based on source (A edges go one way, B edges go other way)
+        const offset = source === 'A' ? 3 : -3;
+        mid.add(perp.multiplyScalar(offset));
+        
+        addVertex(mid.x, mid.y, mid.z);
+    }
+    
+    // Initialize adjacency matrices
+    state.adjacencyMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    state.symmetricAdjMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    
+    // Copy the adjacency matrix
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            state.adjacencyMatrix[i][j] = adj[i][j];
+            state.symmetricAdjMatrix[i][j] = Math.abs(adj[i][j]);
+        }
+    }
+    
+    // Create visual edges
+    const scaleFactor = n <= 5 ? 1.0 : n <= 20 ? 1.0 - (n - 5) * 0.025 : 0.625;
+    
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            if (adj[i][j] !== 0 || adj[j][i] !== 0) {
+                const fromPos = state.vertexMeshes[i].position;
+                const toPos = state.vertexMeshes[j].position;
+                
+                const direction = new THREE.Vector3().subVectors(toPos, fromPos);
+                const length = direction.length();
+                direction.normalize();
+                
+                const arrowStart = fromPos.clone().add(direction.clone().multiplyScalar(VERTEX_RADIUS));
+                const arrowLength = length - 2 * VERTEX_RADIUS - 1;
+                
+                if (arrowLength > 0) {
+                    const arrow = new Arrow3D(
+                        direction,
+                        arrowStart,
+                        arrowLength,
+                        0xe57373,
+                        Math.min(arrowLength * 0.35 * scaleFactor, 5 * scaleFactor),
+                        Math.min(arrowLength * 0.18 * scaleFactor, 2.5 * scaleFactor)
+                    );
+                    state.graphGroup.add(arrow);
+                    state.edgeObjects.push({ from: i, to: j, arrow });
+                }
+            }
+        }
+    }
+    
+    // Store partition info for physics
+    if (typeof physicsPartition !== 'undefined') {
+        physicsPartition.pIndices = [...pIndices];
+        physicsPartition.qIndices = [...qIndices];
+    }
+    
+    updateStats();
+    
+    // Trigger physics audit with the known partition
+    if (typeof onGraphChanged === 'function') {
+        onGraphChanged();
+    }
+    
+    console.log(`Built Realizable Product: ${name}`);
+    console.log(`  ${nMasses} masses (p-nodes): [${pIndices.join(', ')}]`);
+    console.log(`  ${nSprings} springs (q-nodes): [${qIndices.join(', ')}]`);
+}
+
 // Setup Advanced Build tab event listeners
 function setupAdvancedBuildTab() {
     // Product graph controls
@@ -6886,7 +8008,9 @@ function setupAdvancedBuildTab() {
         
         const nameA = typeA === 'current' ? `G(${nA})` : `${typeA.charAt(0).toUpperCase()}${subscript(nA)}`;
         const nameB = typeB === 'current' ? `G(${nB})` : `${typeB.charAt(0).toUpperCase()}${subscript(nB)}`;
-        const symbol = prodType === 'cartesian' ? '□' : prodType === 'tensor' ? '⊗' : '⊠';
+        const symbol = prodType === 'cartesian' ? '□' : 
+                      prodType === 'tensor' ? '⊗' : 
+                      prodType === 'realizable' ? '⚡' : '⊠';
         
         // Can't use current graph for both A and B
         if (typeA === 'current' && typeB === 'current') {
@@ -6901,7 +8025,9 @@ function setupAdvancedBuildTab() {
         if (productResultName) {
             let resultName = `${nameA} ${symbol} ${nameB}`;
             // Special names for common products
-            if (typeA === 'current' && typeB === 'path' && prodType === 'cartesian') {
+            if (prodType === 'realizable') {
+                resultName += ` (Mass-Spring)`;
+            } else if (typeA === 'current' && typeB === 'path' && prodType === 'cartesian') {
                 resultName += ` = Extrusion`;
             } else if (typeA === 'cycle' && typeB === 'path' && prodType === 'cartesian') {
                 resultName += ` = Cylinder`;
@@ -6916,6 +8042,12 @@ function setupAdvancedBuildTab() {
         if (productResultVertices) {
             if (typeA === 'current' && nA < 2) {
                 productResultVertices.textContent = 'Build a graph first';
+            } else if (prodType === 'realizable') {
+                // For realizable product, estimate masses and springs
+                // Masses = nA × nB, Springs = edges in Cartesian product of mass skeletons
+                // For paths: edges = (nA-1)*nB + nA*(nB-1) for grid
+                // This is approximate since we don't know exact structure
+                productResultVertices.textContent = `≈ ${totalN} masses + springs (bipartite req.)`;
             } else {
                 productResultVertices.textContent = `Vertices: ${totalN}`;
             }
@@ -6926,6 +8058,8 @@ function setupAdvancedBuildTab() {
                 productResultFormula.textContent = 'λᵢⱼ = λᵢ(A) + μⱼ(B)';
             } else if (prodType === 'tensor') {
                 productResultFormula.textContent = 'λᵢⱼ = λᵢ(A) · μⱼ(B)';
+            } else if (prodType === 'realizable') {
+                productResultFormula.textContent = 'Preserves p/q partition';
             } else {
                 productResultFormula.textContent = 'λᵢⱼ = (1+λᵢ)(1+μⱼ) - 1';
             }
@@ -6981,19 +8115,36 @@ function setupAdvancedBuildTab() {
             }
             
             let productAdj;
+            let productResult = null;
+            
             if (prodType === 'cartesian') {
                 productAdj = computeCartesianProduct(adjA, adjB);
             } else if (prodType === 'tensor') {
                 productAdj = computeTensorProduct(adjA, adjB);
+            } else if (prodType === 'realizable') {
+                productResult = computeRealizableProduct(adjA, adjB);
+                if (!productResult) {
+                    alert('Realizable product requires both graphs to be bipartite.\nTry using graphs from the "⚡ Realizable Systems" templates.');
+                    return;
+                }
+                productAdj = productResult.adj;
             } else {
                 productAdj = computeStrongProduct(adjA, adjB);
             }
             
-            const symbol = prodType === 'cartesian' ? '□' : prodType === 'tensor' ? '⊗' : '⊠';
+            const symbol = prodType === 'cartesian' ? '□' : 
+                          prodType === 'tensor' ? '⊗' : 
+                          prodType === 'realizable' ? '⚡' : '⊠';
             const nameA = typeA === 'current' ? `G${subscript(actualNA)}` : `${typeA.charAt(0).toUpperCase()}${subscript(actualNA)}`;
             const nameB = typeB === 'current' ? `G${subscript(actualNB)}` : `${typeB.charAt(0).toUpperCase()}${subscript(actualNB)}`;
             
-            applyBuiltGraph(productAdj, `${nameA} ${symbol} ${nameB}`);
+            // For realizable product, use custom graph building to preserve partition info
+            if (prodType === 'realizable' && productResult) {
+                applyRealizableProduct(productResult, `${nameA} ${symbol} ${nameB}`);
+            } else {
+                // Use product-grid layout for better visualization
+                applyBuiltGraph(productAdj, `${nameA} ${symbol} ${nameB}`, 'product-grid', { nA: actualNA, nB: actualNB });
+            }
         });
     }
     
@@ -7999,6 +9150,7 @@ function loadGraphFromLibrary(graphId) {
         updateStats();
         updatePhaseNodeSelectors();
         invalidateCaches();
+        onGraphChanged();
         setTimeout(() => showAnalysis(), 100);
         showLibraryToast(`Loaded "${graph.name}"`, 'success');
     } else {
@@ -8398,6 +9550,7 @@ function loadGraphFromLibraryData(graphData) {
     updateAllEdges();
     updateVertexLabels();
     updateStats();
+    onGraphChanged();
     
     // Switch to build tab
     const buildTab = document.querySelector('[data-tab="build"]');
@@ -10231,6 +11384,1293 @@ function generateDodecahedronGraph() {
         analyticalRho: '3',
         expectedAlpha: 0  // Bounded (3-regular)
     };
+}
+
+// =====================================================
+// PHYSICS ENGINE PANEL
+// =====================================================
+
+/**
+ * Setup physics panel event listeners and initialization
+ */
+function setupPhysicsPanel() {
+    // Audit button
+    if (physicsAuditBtn) {
+        physicsAuditBtn.addEventListener('click', performPhysicsAudit);
+    }
+    
+    // Auto-discover partition button
+    if (physicsAutoDiscoverBtn) {
+        physicsAutoDiscoverBtn.addEventListener('click', autoDiscoverPartition);
+    }
+    
+    // Rectify Yes button
+    if (physicsRectifyYesBtn) {
+        physicsRectifyYesBtn.addEventListener('click', performPhysicsRectification);
+    }
+    
+    // Undo button
+    if (physicsUndoBtn) {
+        physicsUndoBtn.addEventListener('click', undoPhysicsRectification);
+    }
+    
+    // Toggle B-matrix button
+    if (physicsToggleBMatrixBtn) {
+        physicsToggleBMatrixBtn.addEventListener('click', toggleBMatrixDisplay);
+    }
+    
+    // N value input (always visible now)
+    if (physicsNValue) {
+        physicsNValue.addEventListener('change', () => {
+            // Reset partition and re-audit
+            physicsPartition = { pIndices: [], qIndices: [] };
+            originalMatrixBackup = null; // Clear backup
+            hideRectificationUI();
+            performPhysicsAudit();
+        });
+    }
+    
+    // Play/Pause button
+    if (physicsPlayBtn) {
+        physicsPlayBtn.addEventListener('click', togglePhysicsAnimation);
+    }
+    
+    // Reset button
+    if (physicsResetBtn) {
+        physicsResetBtn.addEventListener('click', resetPhysicsAnimation);
+    }
+    
+    // Auto-audit checkbox
+    if (physicsAutoAuditCheckbox) {
+        physicsAutoAuditCheckbox.addEventListener('change', (e) => {
+            console.log('[Physics] Auto-audit:', e.target.checked ? 'enabled' : 'disabled');
+        });
+    }
+    
+    // Initial audit
+    setTimeout(() => {
+        if (state.adjacencyMatrix && state.adjacencyMatrix.length > 0) {
+            performPhysicsAudit();
+        }
+    }, 500);
+    
+    console.log('[Physics] Panel initialized with rectification support');
+}
+
+/**
+ * Hide rectification UI elements
+ */
+function hideRectificationUI() {
+    if (physicsRectifyPrompt) physicsRectifyPrompt.style.display = 'none';
+    if (physicsUndoPanel) physicsUndoPanel.style.display = 'none';
+}
+
+/**
+ * Show rectification prompt (when non-realizable)
+ */
+function showRectifyPrompt() {
+    if (physicsRectifyPrompt) physicsRectifyPrompt.style.display = 'block';
+    if (physicsUndoPanel) physicsUndoPanel.style.display = 'none';
+}
+
+/**
+ * Show undo panel (after rectification)
+ */
+function showUndoPanel() {
+    if (physicsRectifyPrompt) physicsRectifyPrompt.style.display = 'none';
+    if (physicsUndoPanel) physicsUndoPanel.style.display = 'block';
+}
+
+/**
+ * Toggle B-matrix display
+ */
+function toggleBMatrixDisplay() {
+    if (!physicsBMatrixContainer) return;
+    
+    const isVisible = physicsBMatrixContainer.style.display !== 'none';
+    
+    if (isVisible) {
+        physicsBMatrixContainer.style.display = 'none';
+        if (physicsToggleBMatrixBtn) physicsToggleBMatrixBtn.textContent = 'Show';
+    } else {
+        physicsBMatrixContainer.style.display = 'block';
+        if (physicsToggleBMatrixBtn) physicsToggleBMatrixBtn.textContent = 'Hide';
+        
+        if (currentPhysicsEngine && physicsBMatrixContent) {
+            physicsBMatrixContent.textContent = currentPhysicsEngine.formatBMatrix();
+        }
+    }
+}
+
+/**
+ * Get current physics settings (N value)
+ */
+function getPhysicsN() {
+    return physicsNValue ? parseInt(physicsNValue.value) : Math.floor(state.adjacencyMatrix.length / 2);
+}
+
+/**
+ * Perform physics audit and update UI
+ */
+function performPhysicsAudit() {
+    if (!state.adjacencyMatrix || state.adjacencyMatrix.length === 0) {
+        updatePhysicsUINoGraph();
+        return null;
+    }
+    
+    const matrixSize = state.adjacencyMatrix.length;
+    
+    // Skip expensive operations for large graphs to prevent freezing
+    const MAX_SIZE_FOR_PHYSICS_AUDIT = 40;
+    if (matrixSize > MAX_SIZE_FOR_PHYSICS_AUDIT) {
+        console.log(`[Physics] Graph too large (n=${matrixSize}) for auto-audit, skipping`);
+        if (physicsAuditResult) {
+            physicsAuditResult.innerHTML = `<span style="color:#ff9800;">Graph too large (n=${matrixSize}) for automatic physics audit.<br>Limit: ${MAX_SIZE_FOR_PHYSICS_AUDIT} nodes.</span>`;
+        }
+        return null;
+    }
+    
+    try {
+        
+        // Reset partition if it doesn't match current matrix size
+        const partitionTotal = physicsPartition.pIndices.length + physicsPartition.qIndices.length;
+        const partitionMax = Math.max(
+            ...physicsPartition.pIndices, 
+            ...physicsPartition.qIndices, 
+            -1
+        );
+        
+        const needsNewPartition = partitionTotal !== matrixSize || partitionMax >= matrixSize;
+        
+        if (needsNewPartition) {
+            console.log('[Physics] Partition invalid, attempting auto-discovery...');
+            
+            // Try automatic bipartite partition discovery with realizability check
+            const { engine: testEngine, discovery } = PhysicsEngine.createWithOptimalPartition(state.adjacencyMatrix);
+            
+            if (discovery.isBipartite) {
+                console.log('[Physics] Bipartite partition found:', discovery.reason);
+                console.log('[Physics] Mode:', testEngine.mode);
+                
+                // Use the partition from the engine (may have been swapped for realizability)
+                physicsPartition.pIndices = [...testEngine.pIndices];
+                physicsPartition.qIndices = [...testEngine.qIndices];
+                
+                // Update N input to match discovered partition
+                if (physicsNValue) {
+                    physicsNValue.value = testEngine.pIndices.length;
+                }
+            } else {
+                console.log('[Physics] Graph not bipartite:', discovery.reason);
+                // Fall back to sequential partition
+                const N = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
+                physicsPartition.pIndices = Array.from({ length: N }, (_, i) => i);
+                physicsPartition.qIndices = Array.from({ length: matrixSize - N }, (_, i) => N + i);
+            }
+        }
+        
+        // Build partition grid
+        buildPartitionGrid(matrixSize);
+        
+        // Create engine with current partition
+        if (physicsPartition.pIndices.length > 0 && physicsPartition.qIndices.length > 0) {
+            currentPhysicsEngine = new PhysicsEngine(
+                state.adjacencyMatrix,
+                null,
+                physicsPartition.pIndices,
+                physicsPartition.qIndices
+            );
+        } else {
+            // Fallback
+            const actualN = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
+            currentPhysicsEngine = new PhysicsEngine(state.adjacencyMatrix, actualN);
+            physicsPartition.pIndices = [...currentPhysicsEngine.pIndices];
+            physicsPartition.qIndices = [...currentPhysicsEngine.qIndices];
+        }
+        
+        updatePartitionGrid();
+        
+        // Initialize state with random perturbation
+        currentPhysicsEngine.initializeState('random', 1.0);
+        
+        const report = currentPhysicsEngine.audit();
+        const energy = currentPhysicsEngine.getHamiltonian();
+        
+        // Update node colors based on partition and grounded status
+        // p=blue, q=orange, grounded q=teal
+        const groundedQIndices = [];
+        if (report.columnAnalysis) {
+            for (const col of report.columnAnalysis) {
+                if (col.isGrounded) {
+                    // Get the global q-node index for this grounded column
+                    groundedQIndices.push(col.globalIndex);
+                }
+            }
+        }
+        updateNodePartitionColors(physicsPartition.pIndices, physicsPartition.qIndices, groundedQIndices);
+        
+        updatePhysicsUI(report, energy);
+        
+        // Update B-matrix if visible
+        if (physicsBMatrixContainer && physicsBMatrixContainer.style.display !== 'none') {
+            if (physicsBMatrixContent) {
+                physicsBMatrixContent.textContent = currentPhysicsEngine.formatBMatrix();
+            }
+        }
+        
+        // Update column analysis
+        updateColumnAnalysis(report.columnAnalysis);
+        
+        // Build state cells
+        buildStateCells();
+        
+        // Reset energy history
+        resetEnergyHistory();
+        
+        // Show/hide rectification UI based on result
+        if (!report.isPhysical && !originalMatrixBackup) {
+            // Show rectification prompt (only if not already rectified)
+            showRectifyPrompt();
+        } else if (originalMatrixBackup) {
+            // Show undo panel (if we have a backup, graph was rectified)
+            showUndoPanel();
+        } else {
+            // Physical - hide all rectification UI
+            hideRectificationUI();
+        }
+        
+        console.log('[Physics] Audit complete:', report.isPhysical ? 'REALIZABLE' : 'NOT REALIZABLE');
+        console.log('[Physics] Mode:', currentPhysicsEngine.mode);
+        console.log('[Physics] N =', currentPhysicsEngine.N, ', M =', currentPhysicsEngine.M);
+        console.log('[Physics] p =', currentPhysicsEngine.pIndices, ', q =', currentPhysicsEngine.qIndices);
+        return report;
+    } catch (e) {
+        console.error('[Physics] Audit error:', e);
+        return null;
+    }
+}
+
+/**
+ * Force auto-discovery of optimal bipartite partition
+ */
+function autoDiscoverPartition() {
+    if (!state.adjacencyMatrix || state.adjacencyMatrix.length === 0) {
+        showPhysicsToast('No graph loaded', 'warning');
+        return;
+    }
+    
+    const discovery = PhysicsEngine.discoverBipartitePartition(state.adjacencyMatrix);
+    
+    if (discovery.isBipartite) {
+        // Apply discovered partition
+        physicsPartition.pIndices = [...discovery.pIndices];
+        physicsPartition.qIndices = [...discovery.qIndices];
+        
+        // Update N input
+        if (physicsNValue) {
+            physicsNValue.value = discovery.pIndices.length;
+        }
+        
+        // Clear rectification state
+        originalMatrixBackup = null;
+        
+        // Re-run audit with new partition
+        performPhysicsAudit();
+        
+        showPhysicsToast(`✓ Found bipartite partition: ${discovery.pIndices.length}p + ${discovery.qIndices.length}q`);
+    } else {
+        showPhysicsToast(`Graph not bipartite: ${discovery.reason}`, 'warning');
+    }
+}
+
+/**
+ * Build the clickable partition grid
+ */
+function buildPartitionGrid(matrixSize) {
+    if (!physicsNodeGrid) return;
+    
+    // Skip for large graphs to prevent UI slowdown
+    const MAX_GRID_SIZE = 40;
+    if (matrixSize > MAX_GRID_SIZE) {
+        physicsNodeGrid.innerHTML = `<span style="color:#888;font-size:0.85em;">Grid disabled for n>${MAX_GRID_SIZE}</span>`;
+        return;
+    }
+    
+    // Initialize partition if empty
+    if (physicsPartition.pIndices.length === 0 && physicsPartition.qIndices.length === 0) {
+        const N = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
+        physicsPartition.pIndices = [];
+        physicsPartition.qIndices = [];
+        for (let i = 0; i < N; i++) {
+            physicsPartition.pIndices.push(i);
+        }
+        for (let i = N; i < matrixSize; i++) {
+            physicsPartition.qIndices.push(i);
+        }
+    }
+    
+    // Use Set for O(1) lookup instead of includes() which is O(n)
+    const pSet = new Set(physicsPartition.pIndices);
+    
+    // Build buttons
+    let html = '';
+    for (let i = 0; i < matrixSize; i++) {
+        const isP = pSet.has(i);
+        const cls = isP ? 'is-p' : 'is-q';
+        html += `<button class="physics-node-btn ${cls}" data-index="${i}" onclick="toggleNodePartition(${i})">${i}</button>`;
+    }
+    physicsNodeGrid.innerHTML = html;
+    
+    updatePartitionSummary();
+}
+
+/**
+ * Update the partition grid button states
+ */
+function updatePartitionGrid() {
+    if (!physicsNodeGrid) return;
+    
+    const buttons = physicsNodeGrid.querySelectorAll('.physics-node-btn');
+    buttons.forEach(btn => {
+        const idx = parseInt(btn.dataset.index);
+        const isP = physicsPartition.pIndices.includes(idx);
+        btn.className = `physics-node-btn ${isP ? 'is-p' : 'is-q'}`;
+    });
+    
+    updatePartitionSummary();
+}
+
+/**
+ * Update the partition summary display
+ */
+function updatePartitionSummary() {
+    if (physicsPIndices) {
+        physicsPIndices.textContent = physicsPartition.pIndices.length > 0 
+            ? `{${physicsPartition.pIndices.sort((a,b) => a-b).join(', ')}}` 
+            : '∅';
+    }
+    if (physicsQIndices) {
+        physicsQIndices.textContent = physicsPartition.qIndices.length > 0 
+            ? `{${physicsPartition.qIndices.sort((a,b) => a-b).join(', ')}}` 
+            : '∅';
+    }
+}
+
+/**
+ * Toggle a node between p (momentum) and q (displacement)
+ */
+window.toggleNodePartition = function(nodeIndex) {
+    const pIdx = physicsPartition.pIndices.indexOf(nodeIndex);
+    const qIdx = physicsPartition.qIndices.indexOf(nodeIndex);
+    
+    if (pIdx !== -1) {
+        // Move from p to q
+        physicsPartition.pIndices.splice(pIdx, 1);
+        physicsPartition.qIndices.push(nodeIndex);
+    } else if (qIdx !== -1) {
+        // Move from q to p
+        physicsPartition.qIndices.splice(qIdx, 1);
+        physicsPartition.pIndices.push(nodeIndex);
+    }
+    
+    // Update UI
+    updatePartitionGrid();
+    
+    // Re-run audit with new partition (this will also update colors with grounded info)
+    if (physicsPartition.pIndices.length > 0 && physicsPartition.qIndices.length > 0) {
+        runAuditWithCustomPartition();
+    } else {
+        // No valid partition yet - just color without grounded info
+        updateNodePartitionColors(physicsPartition.pIndices, physicsPartition.qIndices);
+    }
+};
+
+/**
+ * Run audit with the current custom partition
+ */
+function runAuditWithCustomPartition() {
+    if (!state.adjacencyMatrix || state.adjacencyMatrix.length === 0) return;
+    
+    try {
+        currentPhysicsEngine = new PhysicsEngine(
+            state.adjacencyMatrix, 
+            null,
+            physicsPartition.pIndices,
+            physicsPartition.qIndices
+        );
+        
+        currentPhysicsEngine.initializeState('random', 1.0);
+        
+        const report = currentPhysicsEngine.audit();
+        const energy = currentPhysicsEngine.getHamiltonian();
+        
+        // Update node colors with grounded info (p=blue, q=orange, grounded=teal)
+        const groundedQIndices = [];
+        if (report.columnAnalysis) {
+            for (const col of report.columnAnalysis) {
+                if (col.isGrounded) {
+                    groundedQIndices.push(col.globalIndex);
+                }
+            }
+        }
+        updateNodePartitionColors(physicsPartition.pIndices, physicsPartition.qIndices, groundedQIndices);
+        
+        updatePhysicsUI(report, energy);
+        
+        if (physicsBMatrixContainer && physicsBMatrixContainer.style.display !== 'none') {
+            if (physicsBMatrixContent) {
+                physicsBMatrixContent.textContent = currentPhysicsEngine.formatBMatrix();
+            }
+        }
+        
+        updateColumnAnalysis(report.columnAnalysis);
+        buildStateCells();
+        resetEnergyHistory();
+        
+        console.log('[Physics] Custom partition audit:', report.isPhysical ? 'PHYSICAL' : 'NON-PHYSICAL');
+        console.log('[Physics] p =', physicsPartition.pIndices, ', q =', physicsPartition.qIndices);
+        if (groundedQIndices.length > 0) {
+            console.log('[Physics] Grounded q-nodes:', groundedQIndices);
+        }
+    } catch (e) {
+        console.error('[Physics] Custom partition audit error:', e);
+    }
+}
+
+/**
+ * Build state cells for p and q visualization
+ */
+function buildStateCells() {
+    if (!currentPhysicsEngine) return;
+    
+    const N = currentPhysicsEngine.N;
+    const M = currentPhysicsEngine.M;
+    const pIndices = currentPhysicsEngine.pIndices || Array.from({length: N}, (_, i) => i);
+    const qIndices = currentPhysicsEngine.qIndices || Array.from({length: M}, (_, i) => N + i);
+    
+    // Build p cells (momentum) - show actual indices
+    if (physicsPStates) {
+        let html = '';
+        for (let i = 0; i < N; i++) {
+            const actualIdx = pIndices[i];
+            html += `<div class="physics-state-cell p-cell" id="p-cell-${i}" title="p[${actualIdx}]">${actualIdx}</div>`;
+        }
+        physicsPStates.innerHTML = html;
+    }
+    
+    // Build q cells (displacement) - show actual indices
+    if (physicsQStates) {
+        let html = '';
+        for (let j = 0; j < M; j++) {
+            const actualIdx = qIndices[j];
+            html += `<div class="physics-state-cell q-cell" id="q-cell-${j}" title="q[${actualIdx}]">${actualIdx}</div>`;
+        }
+        physicsQStates.innerHTML = html;
+    }
+}
+
+/**
+ * Update state cell visualization based on current state vector
+ */
+function updateStateCells() {
+    if (!currentPhysicsEngine) return;
+    
+    const x = currentPhysicsEngine.stateVector;
+    const N = currentPhysicsEngine.N;
+    const M = currentPhysicsEngine.M;
+    
+    // Find max value for normalization
+    const maxVal = Math.max(...x.map(Math.abs), 0.001);
+    
+    // Update p cells (momentum states - full size, vibrant)
+    for (let i = 0; i < N; i++) {
+        const cell = document.getElementById(`p-cell-${i}`);
+        if (cell) {
+            const val = x[i];
+            const intensity = Math.abs(val) / maxVal;
+            const alpha = 0.2 + intensity * 0.6;
+            cell.style.background = `rgba(248, 113, 113, ${alpha})`;
+            cell.style.transform = `scale(${0.9 + intensity * 0.2})`;
+            cell.title = `p${i} = ${val.toFixed(3)}`;
+        }
+    }
+    
+    // Update q cells (displacement states - smaller, more subtle animation)
+    for (let j = 0; j < M; j++) {
+        const cell = document.getElementById(`q-cell-${j}`);
+        if (cell) {
+            const val = x[N + j];
+            const intensity = Math.abs(val) / maxVal;
+            // More subtle opacity range for q cells
+            const alpha = 0.15 + intensity * 0.45;
+            cell.style.background = `rgba(79, 209, 197, ${alpha})`;
+            // Smaller scale range for smaller cells
+            cell.style.transform = `scale(${0.92 + intensity * 0.12})`;
+            cell.title = `q${j} = ${val.toFixed(3)}`;
+        }
+    }
+}
+
+/**
+ * Reset energy history
+ */
+function resetEnergyHistory() {
+    physicsEnergyHistory = { t: [], T: [], V: [], H: [] };
+    physicsTime = 0;
+    if (physicsTimeValue) physicsTimeValue.textContent = '0.00';
+}
+
+/**
+ * Toggle physics animation play/pause
+ */
+function togglePhysicsAnimation() {
+    if (physicsIsPlaying) {
+        stopPhysicsAnimation();
+    } else {
+        startPhysicsAnimation();
+    }
+}
+
+/**
+ * Start physics animation
+ */
+function startPhysicsAnimation() {
+    if (!currentPhysicsEngine) {
+        performPhysicsAudit();
+    }
+    
+    physicsIsPlaying = true;
+    if (physicsPlayBtn) {
+        physicsPlayBtn.textContent = '⏸';
+        physicsPlayBtn.classList.add('playing');
+    }
+    
+    physicsAnimationLoop();
+}
+
+/**
+ * Stop physics animation
+ */
+function stopPhysicsAnimation() {
+    physicsIsPlaying = false;
+    if (physicsAnimationId) {
+        cancelAnimationFrame(physicsAnimationId);
+        physicsAnimationId = null;
+    }
+    if (physicsPlayBtn) {
+        physicsPlayBtn.textContent = '▶';
+        physicsPlayBtn.classList.remove('playing');
+    }
+}
+
+/**
+ * Reset physics animation
+ */
+function resetPhysicsAnimation() {
+    stopPhysicsAnimation();
+    
+    if (currentPhysicsEngine) {
+        currentPhysicsEngine.initializeState('random', 1.0);
+    }
+    
+    resetEnergyHistory();
+    updateStateCells();
+    
+    const energy = currentPhysicsEngine ? currentPhysicsEngine.getHamiltonian() : null;
+    if (energy) {
+        updatePhysicsEnergyValues(energy);
+    }
+    
+    clearEnergyCanvas();
+}
+
+/**
+ * Physics animation loop
+ */
+function physicsAnimationLoop() {
+    if (!physicsIsPlaying || !currentPhysicsEngine) return;
+    
+    // Step the simulation
+    physicsSimulationStep();
+    
+    // Update visualization
+    updateStateCells();
+    
+    // Update energy display
+    const energy = currentPhysicsEngine.getHamiltonian();
+    updatePhysicsEnergyValues(energy);
+    
+    // Record history and plot
+    recordEnergyHistory(energy);
+    plotEnergyHistory();
+    
+    // Update time
+    physicsTime += PHYSICS_DT;
+    if (physicsTimeValue) {
+        physicsTimeValue.textContent = physicsTime.toFixed(2);
+    }
+    
+    // Check conservation
+    checkEnergyConservation();
+    
+    // Continue loop
+    physicsAnimationId = requestAnimationFrame(physicsAnimationLoop);
+}
+
+/**
+ * Single simulation step using Cayley transform (energy-conserving)
+ * The Cayley transform is orthogonal for skew-symmetric matrices,
+ * exactly preserving ||x||² and thus the Hamiltonian H = ½||x||²
+ */
+function physicsSimulationStep() {
+    if (!currentPhysicsEngine) return;
+    
+    const dt = PHYSICS_DT * 2; // Simulation speed factor
+    
+    // Use Cayley integrator (energy-conserving)
+    currentPhysicsEngine.stepCayley(dt);
+}
+
+/**
+ * Update physics panel energy display values
+ */
+function updatePhysicsEnergyValues(energy) {
+    if (!energy) return;
+    
+    if (physicsLiveKinetic) {
+        physicsLiveKinetic.textContent = energy.kinetic.toFixed(3);
+    }
+    if (physicsLivePotential) {
+        physicsLivePotential.textContent = energy.potential.toFixed(3);
+    }
+    if (physicsLiveTotal) {
+        physicsLiveTotal.textContent = energy.total.toFixed(3);
+    }
+}
+
+/**
+ * Record energy to history
+ */
+function recordEnergyHistory(energy) {
+    if (!energy) return;
+    
+    physicsEnergyHistory.t.push(physicsTime);
+    physicsEnergyHistory.T.push(energy.kinetic);
+    physicsEnergyHistory.V.push(energy.potential);
+    physicsEnergyHistory.H.push(energy.total);
+    
+    // Trim to max length
+    if (physicsEnergyHistory.t.length > PHYSICS_HISTORY_LENGTH) {
+        physicsEnergyHistory.t.shift();
+        physicsEnergyHistory.T.shift();
+        physicsEnergyHistory.V.shift();
+        physicsEnergyHistory.H.shift();
+    }
+}
+
+/**
+ * Plot energy history on canvas
+ */
+function plotEnergyHistory() {
+    if (!physicsEnergyCanvas) return;
+    
+    const ctx = physicsEnergyCanvas.getContext('2d');
+    const width = physicsEnergyCanvas.width;
+    const height = physicsEnergyCanvas.height;
+    
+    // Clear canvas
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, width, height);
+    
+    const history = physicsEnergyHistory;
+    if (history.t.length < 2) return;
+    
+    // Find Y range
+    const allValues = [...history.T, ...history.V, ...history.H];
+    const maxY = Math.max(...allValues, 0.1);
+    const minY = Math.min(...allValues, 0);
+    const rangeY = maxY - minY || 1;
+    
+    // Draw grid lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+        const y = height * i / 4;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+    }
+    
+    // Scale functions
+    const scaleX = (i) => (i / (PHYSICS_HISTORY_LENGTH - 1)) * width;
+    const scaleY = (v) => height - ((v - minY) / rangeY) * (height - 10) - 5;
+    
+    // Draw T (kinetic) - red
+    ctx.strokeStyle = '#F87171';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    history.T.forEach((v, i) => {
+        const x = scaleX(i);
+        const y = scaleY(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    
+    // Draw V (potential) - cyan
+    ctx.strokeStyle = '#4FD1C5';
+    ctx.beginPath();
+    history.V.forEach((v, i) => {
+        const x = scaleX(i);
+        const y = scaleY(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    
+    // Draw H (total) - yellow, thicker
+    ctx.strokeStyle = '#FBBF24';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    history.H.forEach((v, i) => {
+        const x = scaleX(i);
+        const y = scaleY(v);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+}
+
+/**
+ * Clear energy canvas
+ */
+function clearEnergyCanvas() {
+    if (!physicsEnergyCanvas) return;
+    const ctx = physicsEnergyCanvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, physicsEnergyCanvas.width, physicsEnergyCanvas.height);
+}
+
+/**
+ * Check and display energy conservation status
+ */
+function checkEnergyConservation() {
+    if (!physicsConservationStatus || physicsEnergyHistory.H.length < 10) return;
+    
+    const H = physicsEnergyHistory.H;
+    const initial = H[0];
+    const current = H[H.length - 1];
+    const drift = Math.abs(current - initial) / (initial || 1);
+    
+    if (drift < 0.01) {
+        physicsConservationStatus.textContent = 'Energy Conserved ✓';
+        physicsConservationStatus.className = 'physics-conservation-ok';
+    } else if (drift < 0.05) {
+        physicsConservationStatus.textContent = `Drift: ${(drift * 100).toFixed(1)}%`;
+        physicsConservationStatus.className = 'physics-conservation-warning';
+    } else {
+        physicsConservationStatus.textContent = `Drift: ${(drift * 100).toFixed(1)}%`;
+        physicsConservationStatus.className = 'physics-conservation-warning';
+    }
+}
+
+/**
+ * Update column analysis display
+ */
+function updateColumnAnalysis(columnAnalysis) {
+    if (!physicsColumnAnalysis || !physicsColumnList || !columnAnalysis || !currentPhysicsEngine) {
+        return;
+    }
+    
+    // Count violations
+    const violationCount = columnAnalysis.filter(c => !c.isValid).length;
+    const totalCount = columnAnalysis.length;
+    
+    // Update header with violation count
+    const header = physicsColumnAnalysis.querySelector('.physics-column-header');
+    if (header) {
+        if (violationCount > 0) {
+            header.innerHTML = `Column Analysis <span class="violation-count">(${violationCount}/${totalCount} violations)</span>`;
+        } else {
+            header.innerHTML = `Column Analysis <span class="all-valid">(all ${totalCount} valid ✓)</span>`;
+        }
+    }
+    
+    // Show the section
+    physicsColumnAnalysis.style.display = 'block';
+    
+    // Build column list HTML - show invalid columns first
+    const sortedAnalysis = [...columnAnalysis].sort((a, b) => {
+        if (a.isValid === b.isValid) return a.columnIndex - b.columnIndex;
+        return a.isValid ? 1 : -1;  // Invalid first
+    });
+    
+    let html = '';
+    for (const col of sortedAnalysis) {
+        const statusIcon = col.isValid ? '✓' : '✗';
+        const statusClass = col.isValid ? 'valid' : 'invalid';
+        const sumClass = col.sum === 0 ? 'zero' : 'nonzero';
+        
+        // Get the actual column index (from qIndices if custom partition)
+        const actualColIndex = currentPhysicsEngine.qIndices 
+            ? currentPhysicsEngine.qIndices[col.columnIndex] 
+            : col.globalIndex;
+        
+        // Format the column values with actual p indices
+        const values = [];
+        for (let i = 0; i < currentPhysicsEngine.N; i++) {
+            // Safety check for B matrix bounds
+            if (!currentPhysicsEngine.B || !currentPhysicsEngine.B[i]) {
+                values.push('?');
+                continue;
+            }
+            const val = currentPhysicsEngine.B[i][col.columnIndex];
+            if (val === undefined || val === null) {
+                values.push('?');
+            } else if (val === 1) {
+                values.push(`+1`);
+            } else if (val === -1) {
+                values.push(`-1`);
+            } else if (val === 0) {
+                values.push(` 0`);
+            } else {
+                values.push(val.toString().padStart(2));
+            }
+        }
+        
+        // Add violation reason for invalid columns
+        const violationReason = !col.isValid ? 
+            `<div class="physics-column-violation">${col.violation || 'Newton violation'}</div>` : '';
+        
+        html += `<div class="physics-column-item ${statusClass}">
+            <div class="physics-column-main">
+                <span class="physics-column-index">q[${actualColIndex !== undefined ? actualColIndex : '?'}]:</span>
+                <span class="physics-column-values">[${values.join(', ')}]ᵀ</span>
+            </div>
+            <div class="physics-column-info">
+                <span class="physics-column-sum ${sumClass}">Σ = ${col.sum}</span>
+                <span class="physics-column-status">${statusIcon}</span>
+            </div>
+            ${violationReason}
+        </div>`;
+    }
+    
+    physicsColumnList.innerHTML = html;
+}
+
+/**
+ * Perform physics rectification
+ * Stores the original matrix for undo and applies rectification
+ */
+function performPhysicsRectification() {
+    if (!currentPhysicsEngine || !state.adjacencyMatrix) {
+        console.error('[Physics] No engine or matrix available for rectification');
+        return null;
+    }
+    
+    try {
+        // Set flag to prevent auto-audit from overwriting our results
+        window._skipPhysicsAutoAudit = true;
+        
+        // Store backup of original matrix (deep copy)
+        originalMatrixBackup = state.adjacencyMatrix.map(row => [...row]);
+        
+        const result = currentPhysicsEngine.autoRectify();
+        
+        // Check for disconnection
+        if (result.connectivity && !result.connectivity.isConnected) {
+            console.warn('[Physics] Rectification would disconnect the graph!');
+            console.log('[Physics] Components:', result.connectivity.componentCount);
+            
+            // Restore original matrix
+            state.adjacencyMatrix = originalMatrixBackup.map(row => [...row]);
+            originalMatrixBackup = null;
+            
+            showPhysicsToast(`Rectification failed: would create ${result.connectivity.componentCount} disconnected components`, 'warning');
+            
+            // Reset flag
+            window._skipPhysicsAutoAudit = false;
+            
+            // Hide rectification UI, re-run audit with original
+            hideRectificationUI();
+            performPhysicsAudit();
+            
+            return null;
+        }
+        
+        if (result.success) {
+            const edgesRectified = result.summary ? result.summary.edgesRectified : result.changes.length;
+            const edgesPruned = result.summary ? result.summary.edgesPruned : (result.pruned ? result.pruned.length : 0);
+            const diagonalCleared = result.summary ? result.summary.diagonalCleared : (result.clearedDiagonal ? result.clearedDiagonal.length : 0);
+            
+            console.log('[Physics] Rectification complete');
+            console.log('[Physics] Changes:', edgesRectified, 'edges rectified,', edgesPruned, 'connections pruned,', diagonalCleared, 'diagonal entries cleared');
+            
+            // Get the rectified matrix and update graph state
+            const rectifiedMatrix = currentPhysicsEngine.getRectifiedMatrix();
+            
+            // Deep copy to state
+            state.adjacencyMatrix = rectifiedMatrix.map(row => [...row]);
+            
+            // Verify the rectification worked by creating a test engine WITH the same partition
+            const verifyEngine = new PhysicsEngine(
+                state.adjacencyMatrix, 
+                null,
+                currentPhysicsEngine.pIndices,
+                currentPhysicsEngine.qIndices
+            );
+            const verifyReport = verifyEngine.audit();
+            console.log('[Physics] Verification audit:', verifyReport.isPhysical ? 'REALIZABLE ✓' : 'STILL NOT REALIZABLE');
+            
+            if (!verifyReport.isPhysical) {
+                console.warn('[Physics] Verification failed! Debugging info:');
+                console.log('[Physics] state.adjacencyMatrix size:', state.adjacencyMatrix.length);
+                console.log('[Physics] N:', verifyEngine.N, 'M:', verifyEngine.M);
+                console.log('[Physics] Verify B-matrix:');
+                for (let i = 0; i < verifyEngine.N; i++) {
+                    console.log(`  Row ${i}:`, verifyEngine.B[i]);
+                }
+                console.log('[Physics] Original engine B-matrix (post-rectify):');
+                for (let i = 0; i < currentPhysicsEngine.N; i++) {
+                    console.log(`  Row ${i}:`, currentPhysicsEngine.B[i]);
+                }
+                
+                // Check column analysis for violations
+                console.log('[Physics] Column analysis violations:');
+                for (const col of verifyReport.columnAnalysis) {
+                    if (!col.isValid) {
+                        console.log(`  Col ${col.columnIndex}: sum=${col.sum}, nonZero=${col.nonZeroCount}, violation: ${col.violation}`);
+                    }
+                }
+                
+                // Verify B-matrix consistency
+                const consistency = currentPhysicsEngine.verifyBMatrixConsistency();
+                console.log('[Physics] B-matrix consistency:', consistency.isConsistent ? 'OK' : 'MISMATCH');
+                if (!consistency.isConsistent) {
+                    console.log('[Physics] Consistency issues:', consistency.issues);
+                }
+            }
+            
+            // Rebuild the 3D edge visualization from the new matrix
+            rebuildEdgesFromMatrix();
+            
+            // Update the overall display (eigenvalues, stats, etc.)
+            if (typeof updateStats === 'function') {
+                updateStats();
+            }
+            
+            // Use the verified report for UI (or the original if verification passed)
+            const finalReport = verifyReport.isPhysical ? verifyReport : result.auditAfter;
+            const finalEngine = verifyReport.isPhysical ? verifyEngine : currentPhysicsEngine;
+            
+            // Update the current engine to the verified one
+            currentPhysicsEngine = finalEngine;
+            currentPhysicsEngine.initializeState('random', 1.0);
+            
+            // Update UI with results
+            const energy = currentPhysicsEngine.getHamiltonian();
+            updatePhysicsUI(finalReport, energy);
+            if (finalReport.columnAnalysis) {
+                updateColumnAnalysis(finalReport.columnAnalysis);
+            }
+            buildStateCells();
+            resetEnergyHistory();
+            
+            // Update node colors with grounded info (p=blue, q=orange, grounded=gold)
+            const groundedQIndices = [];
+            if (finalReport.columnAnalysis) {
+                for (const col of finalReport.columnAnalysis) {
+                    if (col.isGrounded) {
+                        groundedQIndices.push(col.globalIndex);
+                    }
+                }
+            }
+            updateNodePartitionColors(
+                currentPhysicsEngine.pIndices || physicsPartition.pIndices,
+                currentPhysicsEngine.qIndices || physicsPartition.qIndices,
+                groundedQIndices
+            );
+            
+            if (physicsBMatrixContainer && physicsBMatrixContainer.style.display !== 'none') {
+                if (physicsBMatrixContent) {
+                    physicsBMatrixContent.textContent = currentPhysicsEngine.formatBMatrix();
+                }
+            }
+            
+            // Show undo panel
+            showUndoPanel();
+            
+            // Build informative toast message
+            let toastMsg = `✓ Graph rectified`;
+            const parts = [];
+            if (edgesRectified > 0) parts.push(`${edgesRectified} edges adjusted`);
+            if (edgesPruned > 0) parts.push(`${edgesPruned} pruned`);
+            if (diagonalCleared > 0) parts.push(`${diagonalCleared} diagonal cleared`);
+            if (parts.length > 0) toastMsg += ` (${parts.join(', ')})`;
+            showPhysicsToast(toastMsg);
+            
+            // Clear the skip flag after a delay to allow pending events to settle
+            setTimeout(() => {
+                window._skipPhysicsAutoAudit = false;
+            }, 300);
+            
+        } else if (result.alreadyPhysical) {
+            // Already physical - no changes needed
+            originalMatrixBackup = null;
+            window._skipPhysicsAutoAudit = false;
+            showPhysicsToast('Graph is already realizable', 'info');
+        } else {
+            // Rectification failed - clear backup
+            originalMatrixBackup = null;
+            window._skipPhysicsAutoAudit = false;
+            
+            const unrectCount = result.summary ? result.summary.unrectifiable : 0;
+            showPhysicsToast(`⚠ Rectification incomplete (${unrectCount} issues remain)`, 'warning');
+        }
+        
+        return result;
+    } catch (e) {
+        console.error('[Physics] Rectification error:', e);
+        originalMatrixBackup = null;
+        window._skipPhysicsAutoAudit = false;
+        return null;
+    }
+}
+
+// Expose to window for onclick handler
+window.performPhysicsRectification = performPhysicsRectification;
+
+/**
+ * Undo physics rectification
+ * Restores the original matrix from backup
+ */
+function undoPhysicsRectification() {
+    if (!originalMatrixBackup) {
+        console.warn('[Physics] No backup available for undo');
+        return;
+    }
+    
+    try {
+        // Restore original matrix
+        state.adjacencyMatrix = originalMatrixBackup.map(row => [...row]);
+        originalMatrixBackup = null;
+        
+        // Rebuild the 3D edge visualization from the restored matrix
+        rebuildEdgesFromMatrix();
+        
+        // Update the display
+        if (typeof updateStats === 'function') {
+            updateStats();
+        }
+        
+        // Reset partition and re-audit
+        physicsPartition = { pIndices: [], qIndices: [] };
+        performPhysicsAudit();
+        
+        showPhysicsToast('↩ Rectification undone');
+        
+        console.log('[Physics] Rectification undone, original matrix restored');
+    } catch (e) {
+        console.error('[Physics] Undo error:', e);
+    }
+}
+
+// Expose to window for onclick handler
+window.undoPhysicsRectification = undoPhysicsRectification;
+
+/**
+ * Update physics UI when no graph is loaded
+ */
+function updatePhysicsUINoGraph() {
+    if (physicsStatusIndicator) {
+        physicsStatusIndicator.className = 'physics-status-dot';
+    }
+    if (physicsStatusText) {
+        physicsStatusText.textContent = 'No graph loaded';
+    }
+    if (physicsStatusBadge) {
+        physicsStatusBadge.textContent = '';
+        physicsStatusBadge.className = 'physics-badge';
+    }
+    
+    if (physicsDimN) physicsDimN.textContent = '-';
+    if (physicsDimM) physicsDimM.textContent = '-';
+    if (physicsDimViolations) {
+        physicsDimViolations.textContent = '-';
+        physicsDimViolations.className = 'physics-dim-value violation-count';
+    }
+    
+    if (physicsViolationsPanel) {
+        physicsViolationsPanel.style.display = 'none';
+    }
+    
+    if (physicsBMatrixContent) {
+        physicsBMatrixContent.textContent = '';
+    }
+    
+    if (physicsColumnAnalysis) {
+        physicsColumnAnalysis.style.display = 'none';
+    }
+    if (physicsColumnList) {
+        physicsColumnList.innerHTML = '';
+    }
+    
+    // Clear partition grid
+    if (physicsNodeGrid) physicsNodeGrid.innerHTML = '';
+    if (physicsPIndices) physicsPIndices.textContent = '-';
+    if (physicsQIndices) physicsQIndices.textContent = '-';
+    
+    if (physicsPStates) physicsPStates.innerHTML = '';
+    if (physicsQStates) physicsQStates.innerHTML = '';
+    
+    // Hide rectification UI
+    hideRectificationUI();
+    originalMatrixBackup = null;
+    
+    stopPhysicsAnimation();
+    clearEnergyCanvas();
+}
+
+/**
+ * Update physics UI with audit results
+ */
+function updatePhysicsUI(report, energy) {
+    // Status indicator and badge
+    if (physicsStatusIndicator) {
+        physicsStatusIndicator.className = 'physics-status-dot ' + 
+            (report.isPhysical ? 'physical' : 'non-physical');
+    }
+    
+    if (physicsStatusText) {
+        // Check for connectivity violation specifically
+        const connectivityViolation = report.violations.find(v => v.type === 'CONNECTIVITY_VIOLATION');
+        
+        if (connectivityViolation) {
+            physicsStatusText.textContent = `Disconnected: ${connectivityViolation.componentCount} components`;
+        } else if (report.isPhysical) {
+            const grounded = report.summary.groundedSprings || 0;
+            const standard = report.summary.standardSprings || 0;
+            if (grounded > 0) {
+                physicsStatusText.textContent = `Realizable ✓ (${standard} springs, ${grounded} grounded)`;
+            } else {
+                physicsStatusText.textContent = 'Realizable for Linear System ✓';
+            }
+        } else {
+            physicsStatusText.textContent = `${report.violations.length} violation(s) found`;
+        }
+    }
+    
+    if (physicsStatusBadge) {
+        physicsStatusBadge.textContent = report.isPhysical ? 'REALIZABLE' : 'NOT REALIZABLE';
+        physicsStatusBadge.className = 'physics-badge ' + 
+            (report.isPhysical ? 'physical' : 'non-physical');
+    }
+    
+    // Dimensions and Violations
+    if (physicsDimN) physicsDimN.textContent = report.summary.nodeCount;
+    if (physicsDimM) physicsDimM.textContent = report.summary.edgeCount;
+    if (physicsDimViolations) {
+        const violationCount = report.violations.length;
+        physicsDimViolations.textContent = violationCount === 0 ? '0 ✓' : violationCount;
+        physicsDimViolations.className = 'physics-dim-value violation-count' + 
+            (violationCount === 0 ? ' zero' : '');
+    }
+    
+    // Energy display
+    if (energy) {
+        updatePhysicsEnergyValues(energy);
+    }
+    
+    // Violations detail panel
+    if (physicsViolationsPanel && physicsViolationsList) {
+        if (report.violations.length > 0) {
+            physicsViolationsPanel.style.display = 'block';
+            physicsViolationsList.innerHTML = report.violations
+                .map(v => `<li>${v.message}</li>`)
+                .join('');
+        } else {
+            physicsViolationsPanel.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Show a toast notification for physics actions
+ */
+function showPhysicsToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    
+    const bgGradient = type === 'warning' 
+        ? 'linear-gradient(135deg, #F59E0B, #D97706)'
+        : 'linear-gradient(135deg, #10B981, #059669)';
+    const shadowColor = type === 'warning'
+        ? 'rgba(245, 158, 11, 0.4)'
+        : 'rgba(16, 185, 129, 0.4)';
+    
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 320px;
+        background: ${bgGradient};
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        box-shadow: 0 4px 12px ${shadowColor};
+        z-index: 10000;
+        animation: slideInToast 0.3s ease;
+    `;
+    toast.textContent = message;
+    
+    // Add animation keyframes if not already present
+    if (!document.getElementById('physics-toast-style')) {
+        const style = document.createElement('style');
+        style.id = 'physics-toast-style';
+        style.textContent = `
+            @keyframes slideInToast {
+                from { transform: translateY(20px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(20px)';
+        toast.style.transition = 'all 0.3s';
+        setTimeout(() => toast.remove(), 300);
+    }, 2500);
+}
+
+/**
+ * Trigger physics audit on graph change (called from graph modification functions)
+ */
+function onGraphChanged() {
+    // Skip auto-audit if we just rectified (the rectification handles its own UI update)
+    if (window._skipPhysicsAutoAudit) {
+        console.log('[Physics] Skipping auto-audit (rectification in progress)');
+        return;
+    }
+    
+    // Clear rectification state - this is a new/modified graph
+    // The backup from a previous graph is no longer relevant
+    originalMatrixBackup = null;
+    hideRectificationUI();
+    
+    if (physicsAutoAuditCheckbox && physicsAutoAuditCheckbox.checked) {
+        // Debounce the audit
+        if (window._physicsAuditTimeout) {
+            clearTimeout(window._physicsAuditTimeout);
+        }
+        window._physicsAuditTimeout = setTimeout(() => {
+            performPhysicsAudit();
+        }, 100);
+    }
 }
 
 // =====================================================

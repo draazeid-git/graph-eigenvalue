@@ -24,7 +24,7 @@ export const state = {
     // Face rendering (v21)
     faceMeshes: [],
     facesVisible: false,
-    faceOpacity: 0.5
+    faceOpacity: 0.7  // Default 70% opacity for better visibility
 };
 
 export let scene, camera, renderer, controls, raycaster, mouse;
@@ -392,9 +392,36 @@ export class Arrow3D extends THREE.Group {
 // SCENE INITIALIZATION
 // =====================================================
 
+// Background color presets
+const BACKGROUND_PRESETS = {
+    dark: 0x0d1117,      // Original dark blue-black
+    gray: 0x404040,      // Medium gray
+    light: 0x808080,     // Light gray
+    white: 0xcccccc,     // Near white
+    black: 0x000000      // Pure black
+};
+
+let currentBackground = 'dark';
+
+export function setBackgroundColor(preset) {
+    if (!scene) return;
+    
+    if (typeof preset === 'string' && BACKGROUND_PRESETS[preset]) {
+        currentBackground = preset;
+        scene.background = new THREE.Color(BACKGROUND_PRESETS[preset]);
+    } else if (typeof preset === 'number') {
+        scene.background = new THREE.Color(preset);
+    }
+    console.log('Background set to:', preset);
+}
+
+export function getBackgroundPreset() {
+    return currentBackground;
+}
+
 export function initScene(container) {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d1117);  // Softer dark background
+    scene.background = new THREE.Color(BACKGROUND_PRESETS.dark);
     
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 30, 80);
@@ -531,18 +558,152 @@ export function updateVertexLabels() {
     }
 }
 
+/**
+ * Update node colors based on p/q partition
+ * p-nodes (momentum/masses): Blue
+ * q-nodes (displacement/springs): Orange
+ * 
+ * @param {number[]} pIndices - Array of p-node indices
+ * @param {number[]} qIndices - Array of q-node indices
+ */
+/**
+ * Update node colors based on p/q partition
+ * p-nodes (momentum/masses): Blue
+ * q-nodes (displacement/springs): Orange
+ * q-nodes (grounded springs): Green-teal
+ * 
+ * @param {number[]} pIndices - Array of p-node indices
+ * @param {number[]} qIndices - Array of q-node indices
+ * @param {number[]} groundedQIndices - Optional array of q-node indices that are grounded
+ */
+export function updateNodePartitionColors(pIndices, qIndices, groundedQIndices = []) {
+    if (!state.vertexMeshes || state.vertexMeshes.length === 0) {
+        console.log('[NodeColor] No vertex meshes to color');
+        return;
+    }
+    
+    const pSet = new Set(pIndices || []);
+    const qSet = new Set(qIndices || []);
+    const groundedSet = new Set(groundedQIndices || []);
+    
+    console.log(`[NodeColor] Coloring ${state.vertexMeshes.length} nodes: p=[${[...pSet].join(',')}], q=[${[...qSet].join(',')}], grounded=[${[...groundedSet].join(',')}]`);
+    
+    // Colors for p and q nodes
+    const pColor = new THREE.Color(0x5dade2);  // Blue (masses)
+    const pEmissive = new THREE.Color(0x1a5276);
+    const qColor = new THREE.Color(0xf5a623);  // Orange (standard springs)
+    const qEmissive = new THREE.Color(0x8b5a00);
+    const groundedColor = new THREE.Color(0xF1C40F);  // Gold (grounded springs)
+    const groundedEmissive = new THREE.Color(0x8B7000);
+    
+    for (let i = 0; i < state.vertexMeshes.length; i++) {
+        const mesh = state.vertexMeshes[i];
+        if (!mesh || !mesh.material) continue;
+        
+        if (groundedSet.has(i)) {
+            // Grounded q-node: gold
+            mesh.material.color.copy(groundedColor);
+            mesh.material.emissive.copy(groundedEmissive);
+        } else if (qSet.has(i)) {
+            // Standard q-node: orange
+            mesh.material.color.copy(qColor);
+            mesh.material.emissive.copy(qEmissive);
+        } else if (pSet.has(i)) {
+            // p-node: blue
+            mesh.material.color.copy(pColor);
+            mesh.material.emissive.copy(pEmissive);
+        } else {
+            // Default: blue
+            mesh.material.color.copy(pColor);
+            mesh.material.emissive.copy(pEmissive);
+        }
+        
+        mesh.material.needsUpdate = true;
+        
+        // Reset power ring to hidden state (avoid orphaned visible rings)
+        const ring = mesh.userData.powerRing;
+        if (ring && ring.material) {
+            ring.material.opacity = 0;
+        }
+    }
+    
+    console.log('[NodeColor] Coloring complete');
+}
+
+/**
+ * Reset all node colors to default (blue) and hide power rings
+ */
+export function resetNodeColors() {
+    if (!state.vertexMeshes || state.vertexMeshes.length === 0) return;
+    
+    const defaultColor = new THREE.Color(0x5dade2);
+    const defaultEmissive = new THREE.Color(0x1a5276);
+    
+    for (const mesh of state.vertexMeshes) {
+        if (!mesh || !mesh.material) continue;
+        mesh.material.color.copy(defaultColor);
+        mesh.material.emissive.copy(defaultEmissive);
+        mesh.material.needsUpdate = true;
+        
+        // Reset power ring to hidden
+        const ring = mesh.userData.powerRing;
+        if (ring && ring.material) {
+            ring.material.opacity = 0;
+        }
+    }
+}
+
+/**
+ * Hide all power rings (call before graph modifications)
+ */
+export function hideAllPowerRings() {
+    if (!state.vertexMeshes) return;
+    
+    for (const mesh of state.vertexMeshes) {
+        if (!mesh) continue;
+        const ring = mesh.userData.powerRing;
+        if (ring && ring.material) {
+            ring.material.opacity = 0;
+        }
+    }
+}
+
+/**
+ * Recursively dispose of an object and all its children
+ */
+function disposeObject(obj) {
+    if (!obj) return;
+    
+    // First dispose all children recursively
+    while (obj.children && obj.children.length > 0) {
+        disposeObject(obj.children[0]);
+        obj.remove(obj.children[0]);
+    }
+    
+    // Dispose geometry
+    if (obj.geometry) {
+        obj.geometry.dispose();
+    }
+    
+    // Dispose material(s)
+    if (obj.material) {
+        if (Array.isArray(obj.material)) {
+            obj.material.forEach(m => {
+                if (m.map) m.map.dispose();
+                m.dispose();
+            });
+        } else {
+            if (obj.material.map) obj.material.map.dispose();
+            obj.material.dispose();
+        }
+    }
+}
+
 export function clearGraph() {
-    // Remove all meshes from the graph group
+    // Remove and dispose all objects from the graph group recursively
     while (state.graphGroup.children.length > 0) {
         const child = state.graphGroup.children[0];
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-            if (Array.isArray(child.material)) {
-                child.material.forEach(m => m.dispose());
-            } else {
-                child.material.dispose();
-            }
-        }
+        disposeObject(child);
         state.graphGroup.remove(child);
     }
     
@@ -705,6 +866,70 @@ export function clearAllEdges() {
     }
 }
 
+/**
+ * Rebuild edge objects from the current adjacency matrix
+ * This clears all visual edges and recreates them from the matrix data
+ * Used after operations that modify the matrix (like rectification)
+ */
+export function rebuildEdgesFromMatrix() {
+    // First, clear all edge objects (visual only)
+    for (const edge of state.edgeObjects) {
+        state.graphGroup.remove(edge.arrow);
+    }
+    state.edgeObjects = [];
+    
+    const n = state.vertexMeshes.length;
+    if (n === 0) return;
+    
+    // Ensure matrices are properly sized
+    while (state.adjacencyMatrix.length < n) {
+        state.adjacencyMatrix.push(Array(n).fill(0));
+    }
+    while (state.symmetricAdjMatrix.length < n) {
+        state.symmetricAdjMatrix.push(Array(n).fill(0));
+    }
+    
+    // Rebuild symmetric matrix and edges from adjacency matrix
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            // Check for positive edge (i -> j)
+            if (state.adjacencyMatrix[i] && state.adjacencyMatrix[i][j] === 1) {
+                // Update symmetric matrix
+                state.symmetricAdjMatrix[i][j] = 1;
+                state.symmetricAdjMatrix[j][i] = 1;
+                
+                // Create the visual edge
+                const fromPos = state.vertexMeshes[i].position;
+                const toPos = state.vertexMeshes[j].position;
+                
+                const direction = new THREE.Vector3().subVectors(toPos, fromPos);
+                const length = direction.length();
+                direction.normalize();
+                
+                const arrowStart = fromPos.clone().add(direction.clone().multiplyScalar(VERTEX_RADIUS));
+                const arrowLength = length - 2 * VERTEX_RADIUS - 1;
+                
+                const scaleFactor = getArrowScaleFactor();
+                
+                if (arrowLength > 0) {
+                    const arrow = new Arrow3D(
+                        direction,
+                        arrowStart,
+                        arrowLength,
+                        0xe57373,  // Soft coral/salmon
+                        Math.min(arrowLength * 0.35 * scaleFactor, 5 * scaleFactor),
+                        Math.min(arrowLength * 0.18 * scaleFactor, 2.5 * scaleFactor)
+                    );
+                    state.graphGroup.add(arrow);
+                    state.edgeObjects.push({ from: i, to: j, arrow });
+                }
+            }
+        }
+    }
+    
+    console.log(`[Graph] Rebuilt ${state.edgeObjects.length} edges from matrix`);
+}
+
 // Remove a vertex and all its connected edges
 export function removeVertex(index) {
     const n = state.vertexMeshes.length;
@@ -721,6 +946,14 @@ export function removeVertex(index) {
     const mesh = state.vertexMeshes[index];
     const label = state.vertexLabels[index];
     if (mesh) {
+        // First dispose power ring (child of mesh)
+        const ring = mesh.userData.powerRing;
+        if (ring) {
+            if (ring.geometry) ring.geometry.dispose();
+            if (ring.material) ring.material.dispose();
+            mesh.remove(ring);
+        }
+        // Then dispose mesh itself
         if (mesh.geometry) mesh.geometry.dispose();
         if (mesh.material) mesh.material.dispose();
         state.graphGroup.remove(mesh);
@@ -1110,6 +1343,19 @@ export function startForceLayout(forceSpeedInput, force3DCheckbox, onUpdate) {
     state.forceSimulationRunning = true;
     state.velocities = state.vertexMeshes.map(() => new THREE.Vector3(0, 0, 0));
     
+    // Add small z-perturbation to kick-start 3D force simulation
+    // Without this, coplanar graphs stay flat even with 3D enabled
+    const use3D = force3DCheckbox.checked;
+    if (use3D) {
+        const n = state.vertexMeshes.length;
+        for (let i = 0; i < n; i++) {
+            const pos = state.vertexMeshes[i].position;
+            // Add small random z-offset to break coplanarity
+            pos.z += (Math.random() - 0.5) * 5;
+        }
+        console.log('[Force Layout] Added z-perturbation for 3D simulation');
+    }
+    
     // Debug: count edges in matrix
     const n = state.vertexMeshes.length;
     let edgeCount = 0;
@@ -1284,41 +1530,120 @@ export function getIntersectedEdge(event) {
 // =====================================================
 
 // Scene background is 0x0d1117 (very dark blue-black, ~5% luminance)
-// We need colors with HIGH luminance and avoid dark blues/purples
+// ALL face colors must have HIGH luminance to be visible
 
-// Face color palette - "JEWEL TONE" with Emissive Glow
-// Expanded palette (14 colors) to avoid adjacent duplicates
-const FACE_COLORS = [
-    0x00f2ff,  // Electric Cyan
-    0xff5e00,  // Sunset Orange
-    0x00ff88,  // Emerald Glass
-    0xff007f,  // Vivid Rose
-    0xf9d423,  // Bright Gold
-    0x7000ff,  // Neon Purple
-    0x4facfe,  // Sky Blue
-    0xff3366,  // Coral Pink
-    0x00ffcc,  // Aqua
-    0xff9900,  // Tangerine
-    0x88ff00,  // Lime
-    0xff00ff,  // Magenta
-    0x00ccff,  // Azure
-    0xffcc00,  // Amber
+// Face color settings - user adjustable
+let faceColorBrightness = 1.0;  // 0.5 to 1.5
+let faceColorSaturation = 1.0;  // 0.5 to 1.5
+
+// Base hues for face colors (evenly distributed around color wheel)
+const FACE_HUES = [
+    0,      // Red
+    30,     // Orange  
+    55,     // Yellow-Gold
+    120,    // Green
+    175,    // Cyan
+    200,    // Sky Blue
+    280,    // Purple
+    310,    // Magenta
+    340,    // Pink
+    85,     // Lime
+    150,    // Teal
+    230,    // Blue
 ];
+
+/**
+ * Generate a bright face color from hue index
+ * Uses HSL with MINIMUM 60% lightness to guarantee visibility
+ */
+function generateFaceColor(index) {
+    const hue = FACE_HUES[index % FACE_HUES.length];
+    // High saturation and HIGH lightness (60-80%) ensures visibility against dark bg
+    const saturation = Math.min(100, Math.max(50, 80 * faceColorSaturation));
+    // MINIMUM 60% lightness - this is the key to avoiding dark colors
+    const lightness = Math.min(90, Math.max(60, 70 * faceColorBrightness));
+    
+    // Convert HSL to RGB
+    const h = hue / 360;
+    const s = saturation / 100;
+    const l = lightness / 100;
+    
+    let r, g, b;
+    if (s === 0) {
+        r = g = b = l;
+    } else {
+        const hue2rgb = (p, q, t) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+    }
+    
+    return (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
+}
+
+/**
+ * Set face color brightness (0.5 to 1.5)
+ */
+export function setFaceColorBrightness(value) {
+    faceColorBrightness = Math.max(0.5, Math.min(1.5, value));
+    regenerateFaceColors();
+}
+
+/**
+ * Set face color saturation (0.5 to 1.5)  
+ */
+export function setFaceColorSaturation(value) {
+    faceColorSaturation = Math.max(0.5, Math.min(1.5, value));
+    regenerateFaceColors();
+}
+
+/**
+ * Get current face color settings
+ */
+export function getFaceColorSettings() {
+    return { brightness: faceColorBrightness, saturation: faceColorSaturation };
+}
+
+/**
+ * Regenerate all face colors with current settings
+ */
+function regenerateFaceColors() {
+    if (!state.faceMeshes || state.faceMeshes.length === 0) return;
+    
+    state.faceMeshes.forEach((mesh, index) => {
+        const color = generateFaceColor(index);
+        const colorObj = new THREE.Color(color);
+        mesh.material.color.copy(colorObj);
+        // MeshBasicMaterial doesn't have emissive, so check first
+        if (mesh.material.emissive) {
+            mesh.material.emissive.copy(colorObj);
+        }
+        mesh.userData.faceColor = color;
+    });
+}
 
 // Track assigned colors per face for smarter assignment
 let faceColorAssignments = [];
 
 /**
  * Get a face color that avoids adjacent face duplicates
- * Uses prime-based distribution for better spread
+ * Uses golden ratio distribution for better spread
  */
 function getFaceColor(faceIndex, faceVertices = null) {
     // Use golden ratio-based distribution for better color spread
-    // This ensures colors are well-distributed even for sequential faces
     const goldenRatio = 0.618033988749895;
-    const baseIndex = Math.floor(faceIndex * goldenRatio * FACE_COLORS.length) % FACE_COLORS.length;
+    const baseIndex = Math.floor(faceIndex * goldenRatio * FACE_HUES.length) % FACE_HUES.length;
     
-    return FACE_COLORS[baseIndex];
+    return generateFaceColor(baseIndex);
 }
 
 /**
@@ -1328,6 +1653,13 @@ function getFaceColor(faceIndex, faceVertices = null) {
 export function detectFaces() {
     const n = state.vertexMeshes.length;
     if (n < 3) return [];
+    
+    // Global size limit to prevent freezing
+    const MAX_FACE_DETECTION_SIZE = 40;
+    if (n > MAX_FACE_DETECTION_SIZE) {
+        console.log(`[Face Detection] Skipping - graph too large (n=${n} > ${MAX_FACE_DETECTION_SIZE})`);
+        return [];
+    }
     
     // Build adjacency list and edge set
     const adj = Array(n).fill(null).map(() => []);
@@ -1501,28 +1833,30 @@ export function detectFaces() {
     }
     
     // Method 4: Pentagon (5-cycle) detection
-    // Important for graphs like Petersen, Möbius-Kantor
-    for (let a = 0; a < n; a++) {
-        for (const b of adj[a]) {
-            if (b <= a) continue;
-            for (const c of adj[b]) {
-                if (c === a) continue;
-                for (const d of adj[c]) {
-                    if (d === b || d === a) continue;
-                    for (const e of adj[d]) {
-                        if (e === c || e === b) continue;
-                        // Check if e-a edge exists (completing the pentagon)
-                        if (hasEdge(e, a)) {
-                            const pent = [a, b, c, d, e];
-                            const sortedPent = [...pent].sort((x, y) => x - y).join(',');
-                            
-                            if (!faceSignatures.has(sortedPent)) {
-                                // Verify all edges exist and no diagonals
-                                const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
-                                                   hasEdge(c, d) && hasEdge(d, e) && hasEdge(e, a);
-                                if (hasAllEdges && isMinimalCycle(pent)) {
-                                    faceSignatures.add(sortedPent);
-                                    faces.push(pent);
+    // Only for small graphs due to O(n * d^4) complexity
+    if (n <= 40) {
+        for (let a = 0; a < n; a++) {
+            for (const b of adj[a]) {
+                if (b <= a) continue;
+                for (const c of adj[b]) {
+                    if (c === a) continue;
+                    for (const d of adj[c]) {
+                        if (d === b || d === a) continue;
+                        for (const e of adj[d]) {
+                            if (e === c || e === b) continue;
+                            // Check if e-a edge exists (completing the pentagon)
+                            if (hasEdge(e, a)) {
+                                const pent = [a, b, c, d, e];
+                                const sortedPent = [...pent].sort((x, y) => x - y).join(',');
+                                
+                                if (!faceSignatures.has(sortedPent)) {
+                                    // Verify all edges exist and no diagonals
+                                    const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                                       hasEdge(c, d) && hasEdge(d, e) && hasEdge(e, a);
+                                    if (hasAllEdges && isMinimalCycle(pent)) {
+                                        faceSignatures.add(sortedPent);
+                                        faces.push(pent);
+                                    }
                                 }
                             }
                         }
@@ -1532,32 +1866,33 @@ export function detectFaces() {
         }
     }
     
-    // Method 5: Hexagon (6-cycle) detection
-    // Important for graphs like truncated polyhedra, fullerenes
-    for (let a = 0; a < n; a++) {
-        for (const b of adj[a]) {
-            if (b <= a) continue;
-            for (const c of adj[b]) {
-                if (c === a) continue;
-                for (const d of adj[c]) {
-                    if (d === b || d === a) continue;
-                    for (const e of adj[d]) {
-                        if (e === c || e === b || e === a) continue;
-                        for (const f of adj[e]) {
-                            if (f === d || f === c || f === b) continue;
-                            // Check if f-a edge exists (completing the hexagon)
-                            if (hasEdge(f, a)) {
-                                const hex = [a, b, c, d, e, f];
-                                const sortedHex = [...hex].sort((x, y) => x - y).join(',');
-                                
-                                if (!faceSignatures.has(sortedHex)) {
-                                    // Verify all edges exist and no diagonals
-                                    const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
-                                                       hasEdge(c, d) && hasEdge(d, e) && 
-                                                       hasEdge(e, f) && hasEdge(f, a);
-                                    if (hasAllEdges && isMinimalCycle(hex)) {
-                                        faceSignatures.add(sortedHex);
-                                        faces.push(hex);
+    // Method 5: Hexagon (6-cycle) detection - for small graphs only
+    // O(n * d^5) complexity - expensive!
+    if (n <= 40) {
+        for (let a = 0; a < n; a++) {
+            for (const b of adj[a]) {
+                if (b <= a) continue;
+                for (const c of adj[b]) {
+                    if (c === a) continue;
+                    for (const d of adj[c]) {
+                        if (d === b || d === a) continue;
+                        for (const e of adj[d]) {
+                            if (e === c || e === b || e === a) continue;
+                            for (const f of adj[e]) {
+                                if (f === d || f === c || f === b) continue;
+                                // Check if f-a edge exists (completing the hexagon)
+                                if (hasEdge(f, a)) {
+                                    const hex = [a, b, c, d, e, f];
+                                    const sortedHex = [...hex].sort((x, y) => x - y).join(',');
+                                    
+                                    if (!faceSignatures.has(sortedHex)) {
+                                        const hasAllEdges = hasEdge(a, b) && hasEdge(b, c) && 
+                                                           hasEdge(c, d) && hasEdge(d, e) && 
+                                                           hasEdge(e, f) && hasEdge(f, a);
+                                        if (hasAllEdges && isMinimalCycle(hex)) {
+                                            faceSignatures.add(sortedHex);
+                                            faces.push(hex);
+                                        }
                                     }
                                 }
                             }
@@ -1569,9 +1904,9 @@ export function detectFaces() {
     }
     
     // Method 6: Octagon (8-cycle) detection
-    // Important for Möbius-Kantor graph which has 8-gon faces
-    // Only run for smaller graphs (n <= 30) due to O(n * d^7) complexity
-    if (n <= 30) {
+    // Important for Mass-Spring grids which have 8-cycle faces
+    // Only for small graphs due to O(n * d^7) complexity
+    if (n <= 40) {
         for (let a = 0; a < n; a++) {
             for (const b of adj[a]) {
                 if (b <= a) continue;
@@ -1612,13 +1947,20 @@ export function detectFaces() {
                 }
             }
         }
-    }  // End of n <= 30 check for octagon detection
+    }
     
     // Filter out smaller faces that are subsets of larger faces
     // This prevents triangles from appearing inside pentagons/hexagons/etc.
     const filteredFaces = filterRedundantFaces(faces);
     
+    // Log face sizes for debugging
+    const sizeCounts = {};
+    for (const face of filteredFaces) {
+        const size = face.length;
+        sizeCounts[size] = (sizeCounts[size] || 0) + 1;
+    }
     console.log(`Detected ${filteredFaces.length} faces (filtered from ${faces.length} candidates)`);
+    console.log(`Face sizes:`, sizeCounts);
     return filteredFaces;
 }
 
@@ -1811,23 +2153,12 @@ export function createFaceMeshes(faces = null, colors = null) {
         const colorObj = new THREE.Color(color);
         
         // EMISSIVE GLOW material - color emits its own light
-        // This bypasses transparency/background blending issues entirely
-        const material = new THREE.MeshStandardMaterial({
+        // High emissive ensures faces are ALWAYS visible against dark background
+        const material = new THREE.MeshBasicMaterial({
             color: colorObj,
-            
-            // HIGH emissive intensity - faces glow from within
-            emissive: colorObj,
-            emissiveIntensity: 0.6,  // Increased from 0.3 for stronger glow
-            
             transparent: true,
             opacity: state.faceOpacity,
             side: THREE.DoubleSide,
-            
-            // Physical properties
-            metalness: 0.1,
-            roughness: 0.2,
-            
-            // Render settings
             depthWrite: false
         });
         
@@ -2356,6 +2687,38 @@ function animateCameraTo(targetPos, targetLookAt) {
  */
 export function getCurrentProjection() {
     return currentProjection;
+}
+
+/**
+ * Debug: List all objects in the scene (for finding orphaned objects)
+ */
+export function debugSceneObjects() {
+    console.log('=== SCENE DEBUG ===');
+    console.log('Scene children:', scene.children.length);
+    
+    scene.traverse((obj) => {
+        const type = obj.type;
+        const name = obj.name || '(unnamed)';
+        const geo = obj.geometry ? obj.geometry.type : 'none';
+        const mat = obj.material ? (obj.material.type || 'material') : 'none';
+        const parent = obj.parent ? (obj.parent.name || obj.parent.type) : 'root';
+        
+        // Highlight potential orphans (rings not under a vertex)
+        if (geo === 'RingGeometry' && parent !== 'Mesh') {
+            console.warn(`ORPHAN RING: ${name} parent=${parent}`);
+        }
+        
+        console.log(`  ${type}: "${name}" geo=${geo} mat=${mat} parent=${parent}`);
+    });
+    
+    console.log('GraphGroup children:', state.graphGroup.children.length);
+    console.log('VertexMeshes tracked:', state.vertexMeshes.length);
+    console.log('===================');
+}
+
+// Expose to window for debugging
+if (typeof window !== 'undefined') {
+    window.debugSceneObjects = debugSceneObjects;
 }
 
 // =====================================================
