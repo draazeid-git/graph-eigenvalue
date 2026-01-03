@@ -27,6 +27,16 @@ import {
     isEigenmodeActive
 } from './dynamics-animation.js';
 
+// Import Web Worker manager for large graph eigenvalue computation
+import {
+    computeSymmetricEigenvalues,
+    computeSkewEigenvalues,
+    computeBothEigenvalues,
+    getComputationTier,
+    workersSupported,
+    getWorkerStatus
+} from './worker-manager.js';
+
 // =====================================================
 // DOM ELEMENT REFERENCES
 // =====================================================
@@ -448,7 +458,7 @@ function updateAnalysisDisplays(graphInfo, props) {
 // MATRIX & EIGENVALUE ANALYSIS
 // =====================================================
 
-export function showAnalysis() {
+export async function showAnalysis() {
     // Show modal if it exists (backward compatibility)
     if (matrixModal) {
         matrixModal.classList.add('show');
@@ -456,25 +466,53 @@ export function showAnalysis() {
     
     const n = state.vertexMeshes.length;
     
-    // Size limit for expensive operations to prevent freezing
-    const MAX_SIZE_FOR_FULL_ANALYSIS = 40;
-    const isLargeGraph = n > MAX_SIZE_FOR_FULL_ANALYSIS;
+    // Get tier info from worker manager
+    const tierInfo = getComputationTier(n);
+    const isSmallGraph = tierInfo.tier === 1;
+    const isMediumGraph = tierInfo.tier === 2 || tierInfo.tier === 3;
+    const isVeryLargeGraph = tierInfo.tier === 4;
     
-    if (isLargeGraph) {
-        console.log(`Large graph (n=${n}): skipping expensive analysis operations`);
+    // For polynomial factorization and graph type detection
+    const MAX_SIZE_FOR_DETECTION = 200;
+    const skipExpensiveAnalysis = n > MAX_SIZE_FOR_DETECTION;
+    
+    if (!isSmallGraph) {
+        console.log(`[Analysis] Graph size n=${n}, tier=${tierInfo.tier}: ${tierInfo.description}`);
+    }
+    
+    // Show loading indicator for large graphs
+    const analyticFormulaDisplay = document.getElementById('analytic-formula-display');
+    const skewAnalyticFormulaDisplay = document.getElementById('skew-analytic-formula-display');
+    const eigenvalueListDisplay = document.getElementById('eigenvalue-list-display');
+    const skewEigenvalueListDisplay = document.getElementById('skew-eigenvalue-list-display');
+    
+    if (!isSmallGraph) {
+        // Show "Computing..." messages
+        if (analyticFormulaDisplay) {
+            analyticFormulaDisplay.innerHTML = '<div class="formula-box"><div class="formula computing">Computing eigenvalues...</div></div>';
+        }
+        if (skewAnalyticFormulaDisplay) {
+            skewAnalyticFormulaDisplay.innerHTML = '<div class="formula-box" style="border-left-color:#2196F3;"><div class="formula computing" style="color:#64b5f6;">Computing eigenvalues...</div></div>';
+        }
+        if (eigenvalueListDisplay) {
+            eigenvalueListDisplay.innerHTML = '<div class="computing-hint">Computing... (Tier ' + tierInfo.tier + ')</div>';
+        }
+        if (skewEigenvalueListDisplay) {
+            skewEigenvalueListDisplay.innerHTML = '<div class="computing-hint">Computing... (Tier ' + tierInfo.tier + ')</div>';
+        }
     }
     
     // Use cached analytic result from updateStats(), or compute if not available
-    // Skip for large graphs
-    const analyticResult = isLargeGraph ? { type: 'unknown', name: `Graph (n=${n})` } 
+    // Skip for very large graphs
+    const analyticResult = skipExpensiveAnalysis ? { type: 'unknown', name: `Graph (n=${n})` } 
         : (cachedAnalyticResult || detectAnalyticEigenspectrum());
     
     // Also get old detection for comparison (fallback) - skip for large graphs
-    const graphInfo = isLargeGraph ? { type: 'unknown', name: `Graph (n=${n})` } : detectGraphType();
+    const graphInfo = skipExpensiveAnalysis ? { type: 'unknown', name: `Graph (n=${n})` } : detectGraphType();
     const props = computeGraphProperties();
     
     // Skip expensive polynomial computation for large graphs
-    const charPoly = isLargeGraph ? [] : computeCharacteristicPolynomial(state.symmetricAdjMatrix);
+    const charPoly = skipExpensiveAnalysis ? [] : computeCharacteristicPolynomial(state.symmetricAdjMatrix);
     
     // Prefer the new detection if it found something specific
     const detectedInfo = (analyticResult.type !== 'unknown' && analyticResult.type !== 'empty') 
@@ -577,14 +615,76 @@ export function showAnalysis() {
     }
     
     // Compute numerical eigenvalues once for use in multiple sections
-    // For large graphs, still compute eigenvalues but skip expensive analysis
-    const numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
-    const symAnalysis = isLargeGraph ? { allAnalytic: false, eigenvalues: [] } 
+    // Use cached values if available and graph hasn't changed
+    let numEigs = [];
+    let skewEigs = [];
+    
+    // Check if we have valid cached eigenvalues (same matrix size)
+    const haveCachedEigs = cachedSymmetricEigs && cachedSkewEigs && 
+                           cachedSymmetricEigs.length === n &&
+                           cachedSkewEigs.length > 0;
+    
+    if (haveCachedEigs && isSmallGraph) {
+        // Use cached values - no recomputation needed
+        console.log('[Analysis] Using cached eigenvalues');
+        numEigs = cachedSymmetricEigs;
+        skewEigs = cachedSkewEigs;
+    } else if (isSmallGraph) {
+        // Tier 1: Synchronous computation (instant for small graphs)
+        numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
+        skewEigs = computeSkewSymmetricEigenvalues(state.adjacencyMatrix);
+    } else {
+        // Tier 2-4: Use Web Workers for larger graphs
+        try {
+            const startTime = performance.now();
+            
+            // Compute both in parallel using workers
+            const [symResult, skewResult] = await Promise.all([
+                computeSymmetricEigenvalues(state.symmetricAdjMatrix),
+                computeSkewEigenvalues(state.adjacencyMatrix)
+            ]);
+            
+            const elapsed = performance.now() - startTime;
+            console.log(`[Analysis] Eigenvalue computation took ${elapsed.toFixed(0)}ms (${symResult.method}/${skewResult.method})`);
+            
+            // Extract eigenvalues from results
+            numEigs = symResult.eigenvalues || [];
+            skewEigs = skewResult.eigenvalues || [];
+            
+            // For Tier 4 (very large graphs), we only have spectral radius
+            if (isVeryLargeGraph) {
+                // Show limited info for very large graphs
+                if (analyticFormulaDisplay) {
+                    analyticFormulaDisplay.innerHTML = `<div class="formula-box">
+                        <div class="formula">Spectral Radius ρ ≈ ${symResult.spectralRadius?.toFixed(6) || 'N/A'}</div>
+                        <div class="formula-note" style="font-size:0.85em;color:#888;margin-top:4px;">
+                            Full eigenvalue computation disabled for n>${MAX_SIZE_FOR_DETECTION}
+                        </div>
+                    </div>`;
+                }
+                if (skewAnalyticFormulaDisplay) {
+                    skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box" style="border-left-color:#2196F3;">
+                        <div class="formula" style="color:#64b5f6;">Spectral Radius ρ ≈ ${skewResult.spectralRadius?.toFixed(6) || 'N/A'}</div>
+                        <div class="formula-note" style="font-size:0.85em;color:#888;margin-top:4px;">
+                            Full eigenvalue computation disabled for n>${MAX_SIZE_FOR_DETECTION}
+                        </div>
+                    </div>`;
+                }
+            }
+        } catch (err) {
+            console.warn('[Analysis] Worker eigenvalue computation failed, falling back to sync:', err);
+            // Fallback to synchronous computation
+            numEigs = computeEigenvaluesNumerical(state.symmetricAdjMatrix);
+            skewEigs = computeSkewSymmetricEigenvalues(state.adjacencyMatrix);
+        }
+    }
+    
+    const symAnalysis = skipExpensiveAnalysis ? { allAnalytic: false, eigenvalues: [] } 
         : analyzeEigenvaluesForClosedFormsWithN(numEigs, n);
     
     // Try polynomial factorization for unknown graphs - skip for large graphs
     let polyFactorResult = null;
-    if (!isLargeGraph && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
+    if (!skipExpensiveAnalysis && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
         try {
             polyFactorResult = analyzeCharacteristicPolynomial(state.symmetricAdjMatrix);
         } catch (e) {
@@ -593,7 +693,7 @@ export function showAnalysis() {
     }
     
     // Analytic eigenvalue formula (symmetric) - Use new detection first
-    const analyticFormulaDisplay = document.getElementById('analytic-formula-display');
+    // (analyticFormulaDisplay already defined above)
     if (analyticFormulaDisplay) {
         if (analyticResult.formula && analyticResult.type !== 'unknown') {
             // New robust detection found a match
@@ -639,9 +739,8 @@ export function showAnalysis() {
         }
     }
     
-    // Skew-symmetric eigenvalues for formula section
-    const skewEigs = computeSkewSymmetricEigenvalues(state.adjacencyMatrix);
-    const skewImagParts = skewEigs.map(e => Math.abs(e.imag));
+    // Skew-symmetric eigenvalues for formula section (already computed above)
+    const skewImagParts = skewEigs.map(e => Math.abs(e.imag || 0));
     
     // Cache eigenvalues for eigenmode animation
     cachedSymmetricEigs = numEigs;
@@ -651,7 +750,7 @@ export function showAnalysis() {
     let uniqueSkewImag = [];
     let skewAnalysis = { allAnalytic: false, eigenvalues: [] };
     
-    if (!isLargeGraph) {
+    if (!skipExpensiveAnalysis) {
         // Group skew eigenvalues properly (conjugate pairs) - preserve full precision!
         const skewGroups = [];
         const groupTolerance = 1e-6;  // Use same tolerance for grouping
@@ -679,11 +778,11 @@ export function showAnalysis() {
     }
     
     // Analytic eigenvalue formula (skew-symmetric) - Prefer new detection
-    const skewAnalyticFormulaDisplay = document.getElementById('skew-analytic-formula-display');
+    // (skewAnalyticFormulaDisplay already defined above)
     if (skewAnalyticFormulaDisplay) {
         // Try polynomial factorization for skew-symmetric - skip for large graphs
         let skewPolyFactorResult = null;
-        if (!isLargeGraph && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
+        if (!skipExpensiveAnalysis && (analyticResult.type === 'unknown' || analyticResult.type === 'empty')) {
             try {
                 skewPolyFactorResult = analyzeCharacteristicPolynomial(state.adjacencyMatrix);
             } catch (e) {

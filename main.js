@@ -26,7 +26,9 @@ import {
     // Rectification support
     rebuildEdgesFromMatrix,
     // Partition coloring (v7.8)
-    updateNodePartitionColors, resetNodeColors
+    updateNodePartitionColors, resetNodeColors,
+    // Pin/freeze nodes (v7.19)
+    togglePinNode, isNodePinned, unpinAllNodes, getPinnedNodeCount
 } from './graph-core.js';
 
 import {
@@ -39,7 +41,7 @@ import {
 
 import {
     initMatrixAnalysis, updateStats, showAnalysis, showModal, hideModal, initModalPosition,
-    initComplexPlane, drawComplexPlane
+    initComplexPlane, drawComplexPlane, clearAnalyticCache
 } from './matrix-analysis-ui.js';
 
 import {
@@ -63,6 +65,17 @@ import {
     computeSkewSymmetricEigenvalues,
     computeSkewSymmetricEigenvaluesWithMultiplicity
 } from './spectral-analysis.js';
+
+// Web Worker manager for eigenvalue computation (large graphs)
+import {
+    initWorkerPool,
+    terminateWorkers,
+    computeEigenvalues as computeEigenvaluesAsync,
+    computeSkewSymmetricEigenvaluesAsync,
+    getPerformanceStats,
+    getTierInfo,
+    workersAvailable
+} from './eigenvalue-worker-manager.js';
 
 import {
     initLibrary, saveLibrary, clearLibrary,
@@ -98,6 +111,7 @@ let generateBtn;
 
 // Force layout
 let forceLayoutBtn, stopForceBtn, forceSpeedInput, force3DCheckbox;
+let unpinAllBtn, pinCountLabel;
 
 // Face rendering (Solid Polyhedron Mode)
 let solidFacesCheckbox, faceOptions, faceOpacityInput, faceOpacityLabel, refreshFacesBtn, faceHint;
@@ -296,6 +310,13 @@ export function init() {
     // Initialize graph library
     initLibrary();
     
+    // Initialize Web Worker pool for eigenvalue computation
+    initWorkerPool().then(() => {
+        console.log('[Main] Eigenvalue worker pool ready');
+    }).catch(err => {
+        console.warn('[Main] Worker pool initialization failed, will use main thread:', err);
+    });
+    
     // Load custom graphs from localStorage and add to library
     loadAndAddCustomGraphs();
     
@@ -375,6 +396,8 @@ function grabDOMElements() {
     stopForceBtn = document.getElementById('stop-force-btn');
     forceSpeedInput = document.getElementById('force-speed');
     force3DCheckbox = document.getElementById('force-3d-checkbox');
+    unpinAllBtn = document.getElementById('unpin-all-btn');
+    pinCountLabel = document.getElementById('pin-count-label');
     
     // Face rendering
     solidFacesCheckbox = document.getElementById('solid-faces-checkbox');
@@ -662,6 +685,24 @@ function grabDOMElements() {
 }
 
 // =====================================================
+// PIN COUNT DISPLAY HELPER
+// =====================================================
+
+/**
+ * Update the pinned node count display
+ */
+function updatePinCountDisplay() {
+    if (!pinCountLabel) return;
+    const count = getPinnedNodeCount();
+    if (count > 0) {
+        pinCountLabel.textContent = `${count} pinned`;
+        pinCountLabel.style.color = '#e74c3c';  // Red to match pinned material
+    } else {
+        pinCountLabel.textContent = '';
+    }
+}
+
+// =====================================================
 // EVENT LISTENERS
 // =====================================================
 
@@ -799,6 +840,15 @@ function setupEventListeners() {
         forceLayoutBtn.style.display = 'block';
         stopForceBtn.style.display = 'none';
     });
+    
+    // Unpin All button
+    if (unpinAllBtn) {
+        unpinAllBtn.addEventListener('click', () => {
+            const count = unpinAllNodes();
+            updatePinCountDisplay();
+            console.log(`[Pin] Unpinned ${count} nodes`);
+        });
+    }
     
     // Face rendering (Solid Polyhedron Mode)
     if (solidFacesCheckbox) {
@@ -1169,7 +1219,20 @@ function setupTabs() {
             
             // Update analysis tab content when switching to it
             if (tab.dataset.tab === 'analyze') {
+                // Stop force layout - it conflicts with eigenmode animations
+                if (state.forceSimulationRunning) {
+                    stopForceLayout();
+                    console.log('[Tab] Force layout stopped for Analyze tab');
+                }
                 updateAnalyzeTab();
+            }
+            
+            // Also stop force for Simulate tab (dynamics animations)
+            if (tab.dataset.tab === 'simulate') {
+                if (state.forceSimulationRunning) {
+                    stopForceLayout();
+                    console.log('[Tab] Force layout stopped for Simulate tab');
+                }
             }
             
             // Update bounds tab when switching to it
@@ -6236,6 +6299,35 @@ function onMouseClick(event) {
     // Only handle clicks inside the 3D container
     if (!container.contains(event.target)) {
         return;
+    }
+    
+    // SHIFT+CLICK: Pin/Unpin node for force layout (works in any mode)
+    if (event.shiftKey) {
+        const vertex = getIntersectedVertex(event);
+        if (vertex) {
+            const idx = vertex.userData.index;
+            const nowPinned = togglePinNode(idx);
+            
+            // Update status display
+            const pinnedCount = getPinnedNodeCount();
+            if (pinnedCount > 0) {
+                console.log(`[Pin] ${pinnedCount} node(s) pinned`);
+            }
+            
+            // Visual feedback - don't override partition colors
+            if (!vertex.userData.partitionColor) {
+                if (nowPinned) {
+                    setVertexMaterial(vertex, 'pinned');
+                } else {
+                    setVertexMaterial(vertex, 'default');
+                }
+            }
+            
+            // Update pin count display
+            updatePinCountDisplay();
+            
+            return;  // Don't process other click actions
+        }
     }
     
     const addMode = addModeCheckbox && addModeCheckbox.checked;
@@ -11737,18 +11829,15 @@ function performPhysicsAudit() {
     
     const matrixSize = state.adjacencyMatrix.length;
     
-    // Skip expensive operations for large graphs to prevent freezing
-    const MAX_SIZE_FOR_PHYSICS_AUDIT = 40;
-    if (matrixSize > MAX_SIZE_FOR_PHYSICS_AUDIT) {
-        console.log(`[Physics] Graph too large (n=${matrixSize}) for auto-audit, skipping`);
-        if (physicsAuditResult) {
-            physicsAuditResult.innerHTML = `<span style="color:#ff9800;">Graph too large (n=${matrixSize}) for automatic physics audit.<br>Limit: ${MAX_SIZE_FOR_PHYSICS_AUDIT} nodes.</span>`;
-        }
-        return null;
-    }
+    // Thresholds for different operations
+    const MAX_SIZE_FOR_FULL_AUDIT = 100;  // Full column analysis
+    const MAX_SIZE_FOR_GRID = 40;          // Interactive partition grid
+    
+    const isLargeGraph = matrixSize > MAX_SIZE_FOR_FULL_AUDIT;
     
     try {
         
+        // ALWAYS discover partition for any size graph (BFS is O(n+e), fast)
         // Reset partition if it doesn't match current matrix size
         const partitionTotal = physicsPartition.pIndices.length + physicsPartition.qIndices.length;
         const partitionMax = Math.max(
@@ -11760,9 +11849,9 @@ function performPhysicsAudit() {
         const needsNewPartition = partitionTotal !== matrixSize || partitionMax >= matrixSize;
         
         if (needsNewPartition) {
-            console.log('[Physics] Partition invalid, attempting auto-discovery...');
+            console.log(`[Physics] Partition invalid for n=${matrixSize}, attempting auto-discovery...`);
             
-            // Try automatic bipartite partition discovery with realizability check
+            // Try automatic bipartite partition discovery
             const { engine: testEngine, discovery } = PhysicsEngine.createWithOptimalPartition(state.adjacencyMatrix);
             
             if (discovery.isBipartite) {
@@ -11777,32 +11866,74 @@ function performPhysicsAudit() {
                 if (physicsNValue) {
                     physicsNValue.value = testEngine.pIndices.length;
                 }
+                
+                // Store engine for later use
+                currentPhysicsEngine = testEngine;
             } else {
                 console.log('[Physics] Graph not bipartite:', discovery.reason);
                 // Fall back to sequential partition
                 const N = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
                 physicsPartition.pIndices = Array.from({ length: N }, (_, i) => i);
                 physicsPartition.qIndices = Array.from({ length: matrixSize - N }, (_, i) => N + i);
+                
+                // Create engine with sequential partition
+                currentPhysicsEngine = new PhysicsEngine(state.adjacencyMatrix, N);
             }
         }
         
-        // Build partition grid
+        // Build partition grid (shows message for large graphs)
         buildPartitionGrid(matrixSize);
         
-        // Create engine with current partition
-        if (physicsPartition.pIndices.length > 0 && physicsPartition.qIndices.length > 0) {
-            currentPhysicsEngine = new PhysicsEngine(
-                state.adjacencyMatrix,
-                null,
-                physicsPartition.pIndices,
-                physicsPartition.qIndices
-            );
-        } else {
-            // Fallback
-            const actualN = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
-            currentPhysicsEngine = new PhysicsEngine(state.adjacencyMatrix, actualN);
-            physicsPartition.pIndices = [...currentPhysicsEngine.pIndices];
-            physicsPartition.qIndices = [...currentPhysicsEngine.qIndices];
+        // For large graphs, skip expensive full audit but show partition info
+        if (isLargeGraph) {
+            console.log(`[Physics] Graph large (n=${matrixSize}), skipping full audit`);
+            
+            // Show simplified status for large graphs
+            if (physicsAuditResult) {
+                const isBipartite = physicsPartition.pIndices.length > 0 && physicsPartition.qIndices.length > 0;
+                const N = physicsPartition.pIndices.length;
+                const M = physicsPartition.qIndices.length;
+                
+                physicsAuditResult.innerHTML = `
+                    <div style="color:#ff9800;">
+                        <strong>Large Graph (n=${matrixSize})</strong><br>
+                        Full audit skipped for performance.<br><br>
+                        <span style="color:#4fc3f7;">Partition discovered:</span><br>
+                        N (masses) = ${N}<br>
+                        M (springs) = ${M}<br>
+                        ${isBipartite ? '<span style="color:#4ade80;">✓ Graph is bipartite</span>' : '<span style="color:#f87171;">✗ Graph not bipartite</span>'}
+                    </div>`;
+            }
+            
+            // Update status badge
+            if (physicsStatusBadge) {
+                physicsStatusBadge.textContent = 'LARGE GRAPH';
+                physicsStatusBadge.className = 'status-badge status-warning';
+            }
+            
+            // Still update node colors based on partition
+            updateNodePartitionColors(physicsPartition.pIndices, physicsPartition.qIndices, []);
+            
+            return null;  // Skip full audit
+        }
+        
+        // For smaller graphs, continue with full audit
+        // Create engine with current partition if not already created
+        if (!currentPhysicsEngine || needsNewPartition) {
+            if (physicsPartition.pIndices.length > 0 && physicsPartition.qIndices.length > 0) {
+                currentPhysicsEngine = new PhysicsEngine(
+                    state.adjacencyMatrix,
+                    null,
+                    physicsPartition.pIndices,
+                    physicsPartition.qIndices
+                );
+            } else {
+                // Fallback
+                const actualN = physicsNValue ? parseInt(physicsNValue.value) : Math.floor(matrixSize / 2);
+                currentPhysicsEngine = new PhysicsEngine(state.adjacencyMatrix, actualN);
+                physicsPartition.pIndices = [...currentPhysicsEngine.pIndices];
+                physicsPartition.qIndices = [...currentPhysicsEngine.qIndices];
+            }
         }
         
         updatePartitionGrid();
@@ -12878,6 +13009,16 @@ function onGraphChanged() {
     // The backup from a previous graph is no longer relevant
     originalMatrixBackup = null;
     hideRectificationUI();
+    
+    // IMPORTANT: Reset partition when graph changes - old indices are invalid
+    // This ensures buildPartitionGrid creates buttons for ALL nodes
+    physicsPartition = { pIndices: [], qIndices: [] };
+    
+    // Clear eigenvalue caches so they're recomputed for the new graph
+    clearAnalyticCache();
+    
+    // Update phase diagram node selectors to show all nodes
+    updatePhaseNodeSelectors();
     
     if (physicsAutoAuditCheckbox && physicsAutoAuditCheckbox.checked) {
         // Debounce the audit

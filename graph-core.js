@@ -24,7 +24,9 @@ export const state = {
     // Face rendering (v21)
     faceMeshes: [],
     facesVisible: false,
-    faceOpacity: 0.7  // Default 70% opacity for better visibility
+    faceOpacity: 0.7,  // Default 70% opacity for better visibility
+    // Pinned nodes for force layout (v7.19)
+    pinnedNodes: new Set()
 };
 
 export let scene, camera, renderer, controls, raycaster, mouse;
@@ -53,6 +55,14 @@ const hoverVertexMaterial = new THREE.MeshStandardMaterial({
 const selectedVertexMaterial = new THREE.MeshStandardMaterial({ 
     color: 0x58d68d,      // Soft mint green
     emissive: 0x1e8449,   // Deep green glow
+    metalness: 0.35,
+    roughness: 0.35
+});
+
+// Pinned node material - distinctive red/coral color
+const pinnedVertexMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xe74c3c,      // Coral red
+    emissive: 0x922b21,   // Deep red glow
     metalness: 0.35,
     roughness: 0.35
 });
@@ -715,6 +725,7 @@ export function clearGraph() {
     state.selectedVertex = null;
     state.hoveredVertex = null;
     state.faceMeshes = [];
+    state.pinnedNodes.clear();  // Clear pinned nodes on graph clear
 }
 
 export function setVertexMaterial(mesh, type) {
@@ -726,9 +737,71 @@ export function setVertexMaterial(mesh, type) {
         mesh.material = hoverVertexMaterial.clone();
     } else if (type === 'selected') {
         mesh.material = selectedVertexMaterial.clone();
+    } else if (type === 'pinned') {
+        mesh.material = pinnedVertexMaterial.clone();
     } else {
         mesh.material = defaultVertexMaterial.clone();
     }
+}
+
+// =====================================================
+// PIN/FREEZE NODES FOR FORCE LAYOUT
+// =====================================================
+
+/**
+ * Toggle pin state for a node
+ * Pinned nodes stay fixed during force layout simulation
+ */
+export function togglePinNode(index) {
+    if (index < 0 || index >= state.vertexMeshes.length) return false;
+    
+    if (state.pinnedNodes.has(index)) {
+        // Unpin
+        state.pinnedNodes.delete(index);
+        // Restore default material (unless it has partition coloring)
+        if (!state.vertexMeshes[index].userData.partitionColor) {
+            setVertexMaterial(state.vertexMeshes[index], 'default');
+        }
+        console.log(`[Force] Node ${index} unpinned`);
+        return false;  // Now unpinned
+    } else {
+        // Pin
+        state.pinnedNodes.add(index);
+        setVertexMaterial(state.vertexMeshes[index], 'pinned');
+        console.log(`[Force] Node ${index} pinned`);
+        return true;  // Now pinned
+    }
+}
+
+/**
+ * Check if a node is pinned
+ */
+export function isNodePinned(index) {
+    return state.pinnedNodes.has(index);
+}
+
+/**
+ * Unpin all nodes
+ */
+export function unpinAllNodes() {
+    for (const index of state.pinnedNodes) {
+        if (index < state.vertexMeshes.length) {
+            if (!state.vertexMeshes[index].userData.partitionColor) {
+                setVertexMaterial(state.vertexMeshes[index], 'default');
+            }
+        }
+    }
+    const count = state.pinnedNodes.size;
+    state.pinnedNodes.clear();
+    console.log(`[Force] Unpinned all ${count} nodes`);
+    return count;
+}
+
+/**
+ * Get count of pinned nodes
+ */
+export function getPinnedNodeCount() {
+    return state.pinnedNodes.size;
 }
 
 // =====================================================
@@ -1085,32 +1158,34 @@ export function arrangeOnGrid(rows, cols, spacing = 15) {
     
     // Center the grid
     const offsetX = (actualCols - 1) * spacing / 2;
-    const offsetZ = (actualRows - 1) * spacing / 2;
+    const offsetY = (actualRows - 1) * spacing / 2;
     
+    // Place on XY plane (Z=0) for compatibility with 2D force layout
     for (let i = 0; i < n; i++) {
         const row = Math.floor(i / actualCols);
         const col = i % actualCols;
         
         const x = col * spacing - offsetX;
-        const z = row * spacing - offsetZ;
+        const y = -(row * spacing - offsetY);  // Negative so row 0 is at top
         
-        state.vertexMeshes[i].position.set(x, 0, z);
+        state.vertexMeshes[i].position.set(x, y, 0);
     }
     
     updateVertexLabels();
     updateAllEdges();
 }
 
-// Arrange vertices in a circle
+// Arrange vertices in a circle on XY plane
 export function arrangeOnCircle(radius = 40) {
     const n = state.vertexMeshes.length;
     if (n === 0) return;
     
+    // Place on XY plane (Z=0) for compatibility with 2D force layout
     for (let i = 0; i < n; i++) {
-        const angle = (2 * Math.PI * i) / n;
+        const angle = (2 * Math.PI * i) / n - Math.PI / 2;  // Start from top
         const x = radius * Math.cos(angle);
-        const z = radius * Math.sin(angle);
-        state.vertexMeshes[i].position.set(x, 0, z);
+        const y = radius * Math.sin(angle);
+        state.vertexMeshes[i].position.set(x, y, 0);
     }
     
     updateVertexLabels();
@@ -1450,17 +1525,24 @@ function runForceSimulation(forceSpeedInput, force3DCheckbox, onUpdate) {
         }
     }
     
-    // Centering force
+    // Centering force (skip pinned nodes)
     const CENTER_STRENGTH = 0.01;
     for (let i = 0; i < n; i++) {
+        if (state.pinnedNodes.has(i)) continue;  // Skip pinned nodes
         const p = state.vertexMeshes[i].position;
         forces[i].x -= CENTER_STRENGTH * p.x;
         forces[i].y -= CENTER_STRENGTH * p.y;
         if (use3D) forces[i].z -= CENTER_STRENGTH * p.z;
     }
     
-    // Update velocities and positions
+    // Update velocities and positions (skip pinned nodes)
     for (let i = 0; i < n; i++) {
+        // Skip pinned nodes - they stay fixed
+        if (state.pinnedNodes.has(i)) {
+            state.velocities[i].set(0, 0, 0);
+            continue;
+        }
+        
         state.velocities[i].x = (state.velocities[i].x + forces[i].x * dt) * DAMPING;
         state.velocities[i].y = (state.velocities[i].y + forces[i].y * dt) * DAMPING;
         if (use3D) {

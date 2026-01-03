@@ -4333,3 +4333,22 @@ button.info.small:hover {
 .physics-btn.undo:hover {
     background: linear-gradient(135deg, #9CA3AF 0%, #6B7280 100%);
 }
+
+/* Computing indicator for async eigenvalue computation */
+.computing {
+    animation: pulse 1.5s ease-in-out infinite;
+    color: #888;
+}
+
+.computing-hint {
+    color: #888;
+    font-style: italic;
+    padding: 10px;
+    text-align: center;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
