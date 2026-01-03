@@ -166,7 +166,8 @@
                         <option value="mass-cantilever">Cantilever Beam</option>
                         <option value="mass-bridge">Simple Bridge/Truss</option>
                         <option value="mass-grid">Mass-Spring Grid (m×n)</option>
-                        <option value="mass-drum">Drum (n branches × m rings)</option>
+                        <option value="mass-drum">Drum (radial)</option>
+                        <option value="mass-drum-constrained">Drum Constrained (boundary springs)</option>
                     </optgroup>
                     <optgroup label="Basic Graphs (Table I)">
                         <option value="path">Path Graph (Pₙ)</option>
@@ -339,6 +340,12 @@
                         <input id="rook-m" type="number" value="3" min="2" max="6">
                         <label>Cols (n):</label>
                         <input id="rook-n" type="number" value="3" min="2" max="6">
+                    </div>
+                    <div id="param-drum" class="input-row" style="display: none;">
+                        <label>Branches:</label>
+                        <input id="drum-branches" type="number" value="5" min="3" max="12">
+                        <label>Rings:</label>
+                        <input id="drum-rings" type="number" value="2" min="1" max="5">
                     </div>
                 </div>
                 

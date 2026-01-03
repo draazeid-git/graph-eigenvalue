@@ -989,10 +989,25 @@ function calculateGraphMetrics(graph) {
         try {
             // Build skew-symmetric adjacency matrix
             const matrix = Array(n).fill(null).map(() => Array(n).fill(0));
-            for (const [i, j] of edges) {
-                if (i < n && j < n) {
-                    matrix[i][j] = 1;
-                    matrix[j][i] = -1;
+            
+            // Use directedEdges if available (preserves actual orientation)
+            // Otherwise fall back to edges (canonical smaller→larger orientation)
+            const dirEdges = graph.directedEdges;
+            if (dirEdges && dirEdges.length > 0) {
+                // directedEdges contains [from, to] pairs where from→to is +1
+                for (const [from, to] of dirEdges) {
+                    if (from < n && to < n) {
+                        matrix[from][to] = 1;
+                        matrix[to][from] = -1;
+                    }
+                }
+            } else {
+                // Fallback: use undirected edges with canonical orientation (i < j)
+                for (const [i, j] of edges) {
+                    if (i < n && j < n) {
+                        matrix[i][j] = 1;
+                        matrix[j][i] = -1;
+                    }
                 }
             }
             
@@ -2645,10 +2660,23 @@ function showNodeInfo(nodeData) {
                 
                 // Build SKEW-SYMMETRIC adjacency matrix
                 const skewMatrix = Array(n).fill(null).map(() => Array(n).fill(0));
-                for (const [i, j] of edges) {
-                    if (i < n && j < n) {
-                        skewMatrix[i][j] = 1;
-                        skewMatrix[j][i] = -1;  // Skew-symmetric!
+                
+                // Use directedEdges if available (preserves actual orientation)
+                const dirEdges = graph.directedEdges;
+                if (dirEdges && dirEdges.length > 0) {
+                    for (const [from, to] of dirEdges) {
+                        if (from < n && to < n) {
+                            skewMatrix[from][to] = 1;
+                            skewMatrix[to][from] = -1;
+                        }
+                    }
+                } else {
+                    // Fallback: use undirected edges with canonical orientation
+                    for (const [i, j] of edges) {
+                        if (i < n && j < n) {
+                            skewMatrix[i][j] = 1;
+                            skewMatrix[j][i] = -1;  // Skew-symmetric!
+                        }
                     }
                 }
                 
@@ -5038,10 +5066,23 @@ function calculateSingleGraphMetrics(graphData) {
         try {
             // Build skew-symmetric adjacency matrix
             const matrix = Array(n).fill(null).map(() => Array(n).fill(0));
-            for (const [i, j] of edges) {
-                if (i < n && j < n) {
-                    matrix[i][j] = 1;
-                    matrix[j][i] = -1;
+            
+            // Use directedEdges if available (preserves actual orientation)
+            const dirEdges = graphData.directedEdges;
+            if (dirEdges && dirEdges.length > 0) {
+                for (const [from, to] of dirEdges) {
+                    if (from < n && to < n) {
+                        matrix[from][to] = 1;
+                        matrix[to][from] = -1;
+                    }
+                }
+            } else {
+                // Fallback: use undirected edges with canonical orientation
+                for (const [i, j] of edges) {
+                    if (i < n && j < n) {
+                        matrix[i][j] = 1;
+                        matrix[j][i] = -1;
+                    }
                 }
             }
             

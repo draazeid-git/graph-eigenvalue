@@ -3254,6 +3254,87 @@ button.info.small:hover {
     margin-bottom: 3px;
 }
 
+/* Predicted Frequencies section */
+.physics-frequencies {
+    background: rgba(79, 209, 197, 0.15);
+    border: 1px solid rgba(79, 209, 197, 0.3);
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+}
+
+.frequencies-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: #4FD1C5;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.frequencies-icon {
+    font-size: 14px;
+}
+
+.frequencies-formula {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    color: #81E6D9;
+}
+
+.formula-text {
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.frequencies-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+}
+
+.frequencies-table th {
+    text-align: left;
+    padding: 4px 6px;
+    background: rgba(0, 0, 0, 0.3);
+    color: #4FD1C5;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(79, 209, 197, 0.3);
+}
+
+.frequencies-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+.frequencies-table tr:hover {
+    background: rgba(79, 209, 197, 0.1);
+}
+
+.frequencies-table tr.zero-mode {
+    color: #94A3B8;
+}
+
+.discriminant-info {
+    margin-top: 10px;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    font-size: 10px;
+    color: #A7F3D0;
+}
+
+.discriminant-info strong {
+    color: #4FD1C5;
+    font-size: 12px;
+}
+
 /* Divergence section */
 .physics-divergence-section {
     background: rgba(0, 0, 0, 0.25);

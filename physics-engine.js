@@ -1420,7 +1420,174 @@ export class PhysicsEngine {
      * 
      * @param {number} dt - Time step
      */
+    /**
+     * Optimized Cayley Step using Block Inversion (Schur Complement)
+     * Exploits the port-Hamiltonian structure: J = [[0, B], [-B^T, 0]]
+     * Reduces complexity from O((N+M)³) to O(N³) where N < M typically
+     * 
+     * The Cayley transform (I - kJ)^(-1)(I + kJ) is computed efficiently using:
+     * - Schur complement S = I + k²BB^T (N×N matrix)
+     * - Block formulas for the update
+     */
     stepCayley(dt) {
+        const { N, M } = { N: this.N, M: this.M };
+        
+        // If no proper partition, fall back to generic method
+        if (N === 0 || M === 0) {
+            return this._stepCayleyGeneric(dt);
+        }
+        
+        const k = dt / 2;
+        const kSq = k * k;
+        
+        // 1. Get or compute cached B matrix
+        const B = this.B;  // N x M matrix
+        
+        // 2. Compute Schur complement: S = I + k²BB^T (N×N matrix)
+        // This is the key optimization - invert N×N instead of (N+M)×(N+M)
+        const S = this._computeSchurComplement(B, kSq, N, M);
+        
+        // 3. Invert the N×N Schur system
+        const S_inv = this._invertMatrix(S);
+        if (!S_inv) {
+            console.warn("[Cayley] Schur inversion failed, falling back to generic");
+            return this._stepCayleyGeneric(dt);
+        }
+        
+        // 4. Partition current state vector x = [p, q]
+        // p: momentum (indices from pIndices), q: displacement (indices from qIndices)
+        const p = new Array(N);
+        const q = new Array(M);
+        for (let i = 0; i < N; i++) {
+            p[i] = this.stateVector[i];
+        }
+        for (let j = 0; j < M; j++) {
+            q[j] = this.stateVector[N + j];
+        }
+        
+        // 5. Compute p_next = S^(-1) * [(I - k²BB^T)p + 2kBq]
+        const p_next = this._computeNextP(p, q, B, S_inv, k, kSq, N, M);
+        
+        // 6. Compute q_next = q - k*B^T*(p + p_next)  [minus from -B^T in J]
+        const q_next = this._computeNextQ(p, p_next, q, B, k, N, M);
+        
+        // 7. Reconstruct state vector
+        for (let i = 0; i < N; i++) {
+            this.stateVector[i] = p_next[i];
+        }
+        for (let j = 0; j < M; j++) {
+            this.stateVector[N + j] = q_next[j];
+        }
+    }
+    
+    /**
+     * Compute Schur complement: S = I + k²BB^T
+     * Result is an N×N matrix
+     * @private
+     */
+    _computeSchurComplement(B, kSq, N, M) {
+        const S = Array.from({ length: N }, () => new Array(N).fill(0));
+        
+        for (let i = 0; i < N; i++) {
+            S[i][i] = 1.0;  // Identity component
+            for (let j = 0; j < N; j++) {
+                // Compute (BB^T)[i][j] = sum_l B[i][l] * B[j][l]
+                let bbT = 0;
+                for (let l = 0; l < M; l++) {
+                    bbT += B[i][l] * B[j][l];
+                }
+                S[i][j] += kSq * bbT;
+            }
+        }
+        return S;
+    }
+    
+    /**
+     * Compute next momentum: p_next = S^(-1) * [(I - k²BB^T)p + 2kBq]
+     * @private
+     */
+    _computeNextP(p, q, B, S_inv, k, kSq, N, M) {
+        // Step 1: Compute (I - k²BB^T)p
+        // First compute BB^T * p
+        const BBTp = new Array(N).fill(0);
+        for (let i = 0; i < N; i++) {
+            // (BB^T * p)[i] = sum_j (BB^T)[i][j] * p[j]
+            //               = sum_j sum_l B[i][l]*B[j][l] * p[j]
+            for (let j = 0; j < N; j++) {
+                let bbT_ij = 0;
+                for (let l = 0; l < M; l++) {
+                    bbT_ij += B[i][l] * B[j][l];
+                }
+                BBTp[i] += bbT_ij * p[j];
+            }
+        }
+        
+        // term1 = p - k²(BB^T)p
+        const term1 = new Array(N);
+        for (let i = 0; i < N; i++) {
+            term1[i] = p[i] - kSq * BBTp[i];
+        }
+        
+        // Step 2: Compute 2kBq
+        const Bq = new Array(N).fill(0);
+        for (let i = 0; i < N; i++) {
+            for (let l = 0; l < M; l++) {
+                Bq[i] += B[i][l] * q[l];
+            }
+        }
+        
+        // rhs = term1 + 2k*Bq
+        const rhs = new Array(N);
+        for (let i = 0; i < N; i++) {
+            rhs[i] = term1[i] + 2 * k * Bq[i];
+        }
+        
+        // Step 3: p_next = S^(-1) * rhs
+        const p_next = new Array(N).fill(0);
+        for (let i = 0; i < N; i++) {
+            for (let j = 0; j < N; j++) {
+                p_next[i] += S_inv[i][j] * rhs[j];
+            }
+        }
+        
+        return p_next;
+    }
+    
+    /**
+     * Compute next displacement: q_next = q - k*B^T*(p + p_next)
+     * Note: The minus sign comes from J = [[0, B], [-B^T, 0]]
+     * @private
+     */
+    _computeNextQ(p, p_next, q, B, k, N, M) {
+        // Compute p + p_next
+        const p_sum = new Array(N);
+        for (let i = 0; i < N; i++) {
+            p_sum[i] = p[i] + p_next[i];
+        }
+        
+        // Compute B^T * p_sum
+        const BTp = new Array(M).fill(0);
+        for (let j = 0; j < M; j++) {
+            for (let i = 0; i < N; i++) {
+                BTp[j] += B[i][j] * p_sum[i];  // B^T[j][i] = B[i][j]
+            }
+        }
+        
+        // q_next = q - k*B^T*(p + p_next)  [MINUS sign from -B^T in J matrix]
+        const q_next = new Array(M);
+        for (let j = 0; j < M; j++) {
+            q_next[j] = q[j] - k * BTp[j];
+        }
+        
+        return q_next;
+    }
+    
+    /**
+     * Generic Cayley step (fallback for non-standard systems)
+     * Uses full (N+M)×(N+M) matrix inversion
+     * @private
+     */
+    _stepCayleyGeneric(dt) {
         const dim = this.N + this.M;
         
         // Compute Cayley matrix if not cached or dt changed

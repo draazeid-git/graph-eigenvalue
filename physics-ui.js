@@ -18,6 +18,7 @@ import {
 } from './physics-engine.js';
 
 import { state } from './graph-core.js';
+import { detectGraphType } from './spectral-analysis.js';
 
 // =====================================================
 // STATE
@@ -110,6 +111,16 @@ function createPhysicsPanel() {
                     H = <span id="total-energy">0.00</span>
                     <span id="conservation-status" class="conservation-check">✓</span>
                 </div>
+            </div>
+            
+            <!-- Predicted Frequencies (from eigenvalue formula) -->
+            <div class="physics-frequencies" id="physics-frequencies" style="display: none;">
+                <div class="frequencies-header">
+                    <span class="frequencies-icon">🎵</span>
+                    <span>Predicted Natural Frequencies</span>
+                </div>
+                <div class="frequencies-formula" id="frequencies-formula"></div>
+                <div class="frequencies-list" id="frequencies-list"></div>
             </div>
             
             <!-- Violations List -->
@@ -652,7 +663,111 @@ export function performAudit() {
     
     updateUIWithReport(report, energy, conservation, divergences);
     
+    // Check for known graph types with exact eigenvalue formulas
+    updatePredictedFrequencies();
+    
     return report;
+}
+
+/**
+ * Update the predicted frequencies display based on detected graph type
+ */
+function updatePredictedFrequencies() {
+    const frequenciesPanel = document.getElementById('physics-frequencies');
+    const formulaDisplay = document.getElementById('frequencies-formula');
+    const listDisplay = document.getElementById('frequencies-list');
+    
+    if (!frequenciesPanel || !formulaDisplay || !listDisplay) return;
+    
+    // Detect graph type
+    const graphInfo = detectGraphType();
+    
+    // Check if we have physics-relevant eigenvalue info
+    if (graphInfo.physicsInfo || (graphInfo.type === 'constrained_drum' && graphInfo.skewEigenvalues)) {
+        frequenciesPanel.style.display = 'block';
+        
+        // Display formula
+        if (graphInfo.skewFormula) {
+            formulaDisplay.innerHTML = `<div class="formula-text">${graphInfo.skewFormula}</div>`;
+        }
+        
+        // Display natural frequencies (|λ|)
+        if (graphInfo.physicsInfo?.naturalFrequencies) {
+            const freqs = graphInfo.physicsInfo.naturalFrequencies;
+            const disc = graphInfo.physicsInfo.discriminant;
+            const n = graphInfo.branches;
+            const a = graphInfo.physicsInfo.quarticCoeffs.a;
+            const quadRoot = graphInfo.physicsInfo.quadraticRoot;
+            
+            let html = '<table class="frequencies-table">';
+            html += '<tr><th>Mode</th><th>ω (rad/s)</th><th>Exact Form</th><th>Mult.</th></tr>';
+            
+            // Zero modes
+            html += `<tr class="zero-mode">
+                <td>Rigid</td>
+                <td>0</td>
+                <td>λ = 0</td>
+                <td>×${graphInfo.physicsInfo.zeroMultiplicity}</td>
+            </tr>`;
+            
+            // Quadratic mode: ±i√(n+2) - freqs[0]
+            html += `<tr>
+                <td>Quadratic</td>
+                <td>${freqs[0].toFixed(6)}</td>
+                <td>√${a}</td>
+                <td>×2</td>
+            </tr>`;
+            
+            // Quartic mode 1: freqs[1] = √((a+√disc)/2)
+            html += `<tr>
+                <td>Quartic +</td>
+                <td>${freqs[1].toFixed(6)}</td>
+                <td>√((${a}+√${disc})/2)</td>
+                <td>×1</td>
+            </tr>`;
+            
+            // Quartic mode 2: freqs[2] = √((a-√disc)/2)
+            html += `<tr>
+                <td>Quartic −</td>
+                <td>${freqs[2].toFixed(6)}</td>
+                <td>√((${a}−√${disc})/2)</td>
+                <td>×1</td>
+            </tr>`;
+            
+            html += '</table>';
+            
+            // Add complete formula info
+            html += `<div class="discriminant-info">
+                <strong>Complete Formula (n=${n}):</strong><br>
+                p(λ) = λ<sup>${graphInfo.physicsInfo.zeroMultiplicity}</sup> · 
+                (λ²+${a})² · (λ⁴+${a}λ²+${n})<br>
+                Discriminant: n² + 4 = ${n}² + 4 = <strong>${disc}</strong>
+            </div>`;
+            
+            listDisplay.innerHTML = html;
+        } else if (graphInfo.skewEigenvalues) {
+            // Generic eigenvalue list
+            let html = '<table class="frequencies-table">';
+            html += '<tr><th>ω (rad/s)</th><th>Mult.</th><th>Form</th></tr>';
+            
+            graphInfo.skewEigenvalues.forEach(ev => {
+                if (ev.imag >= 0) {  // Only show positive imaginary (frequency)
+                    const mult = ev.multiplicity || 1;
+                    const form = ev.form || ev.imag.toFixed(4);
+                    html += `<tr>
+                        <td>${Math.abs(ev.imag).toFixed(6)}</td>
+                        <td>${mult}</td>
+                        <td>${form}</td>
+                    </tr>`;
+                }
+            });
+            
+            html += '</table>';
+            listDisplay.innerHTML = html;
+        }
+    } else {
+        frequenciesPanel.style.display = 'none';
+    }
 }
 
 /**

@@ -104,12 +104,13 @@ let solidFacesCheckbox, faceOptions, faceOpacityInput, faceOpacityLabel, refresh
 
 // Templates
 let templateSelect, applyTemplateBtn, skewSymmetricCheckbox;
-let templateParams, paramN, paramDepth, paramBranches, paramKary, paramGrid, paramCuboid, paramHypercube, paramGenPetersen, paramLollipop, paramKneser, paramRook, paramNBar, paramNLink;
+let templateParams, paramN, paramDepth, paramBranches, paramKary, paramGrid, paramCuboid, paramHypercube, paramGenPetersen, paramLollipop, paramKneser, paramRook, paramNBar, paramNLink, paramDrum;
 let templateNInput, treeDepthInput, treeBranchesInput, treeKInput;
 let gridRowsInput, gridColsInput;
 let cuboidMInput, cuboidNInput, cuboidKInput;
 let hypercubeDimInput;
 let gpNInput, gpKInput, lollipopMInput, lollipopNInput, kneserNInput, kneserKInput, rookMInput, rookNInput;
+let drumBranchesInput, drumRingsInput;
 
 // Universe Integration (Build tab)
 let sendToUniverseBtn, saveToLibraryBtn, universeGraphNameInput, testUniverseBtn;
@@ -421,6 +422,9 @@ function grabDOMElements() {
     kneserKInput = document.getElementById('kneser-k');
     rookMInput = document.getElementById('rook-m');
     rookNInput = document.getElementById('rook-n');
+    paramDrum = document.getElementById('param-drum');
+    drumBranchesInput = document.getElementById('drum-branches');
+    drumRingsInput = document.getElementById('drum-rings');
     
     // Universe Integration
     sendToUniverseBtn = document.getElementById('send-to-universe-btn');
@@ -2101,6 +2105,7 @@ function updateTemplateParams() {
     if (paramRook) paramRook.style.display = 'none';
     if (paramNBar) paramNBar.style.display = 'none';
     if (paramNLink) paramNLink.style.display = 'none';
+    if (paramDrum) paramDrum.style.display = 'none';
     
     // Show relevant params based on template
     let showParams = false;
@@ -2112,7 +2117,7 @@ function updateTemplateParams() {
         'ladder', 'mobius-ladder', 'circular-ladder',
         'helm', 'gear', 'sun', 'friendship', 'web',
         'book', 'pan', 'stacked-prism',
-        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid', 'mass-drum'
+        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid'
     ];
     
     if (basicFamilies.includes(template)) {
@@ -2190,6 +2195,11 @@ function updateTemplateParams() {
             if (paramRook) paramRook.style.display = 'flex';
             showParams = true;
             break;
+        case 'mass-drum':
+        case 'mass-drum-constrained':
+            if (paramDrum) paramDrum.style.display = 'flex';
+            showParams = true;
+            break;
     }
     
     if (templateParams) templateParams.style.display = showParams ? 'block' : 'none';
@@ -2209,6 +2219,7 @@ const TEMPLATE_INFO = {
     'mass-bridge': { name: 'Simple Bridge', nodes: '2n+2', edges: '3n+1', formula: 'Supported at ends', realizable: true },
     'mass-grid': { name: 'Mass-Spring Grid', nodes: 'm×n+(m-1)×n+m×(n-1)', edges: 'varies', formula: 'Checkerboard pattern', realizable: true },
     'mass-drum': { name: 'Drum (Radial)', nodes: '1+3nm', edges: '4nm', formula: 'n branches × m rings', realizable: true },
+    'mass-drum-constrained': { name: 'Drum Constrained', nodes: '1+3nm+n', edges: '4nm+n', formula: 'With grounded boundary springs', realizable: true },
     // Basic graphs
     'path': { name: 'Path Graph Pₙ', nodes: 'n', edges: 'n-1', formula: 'λₖ = 2cos(kπ/(n+1))' },
     'cycle': { name: 'Cycle Graph Cₙ', nodes: 'n', edges: 'n', formula: 'λₖ = 2cos(2kπ/n)' },
@@ -2414,6 +2425,45 @@ function getPreviewGraph(template) {
             // Circumferential edges
             for (let i = 1; i <= branches; i++) {
                 edges.push([i, (i % branches) + 1]);
+            }
+            break;
+        }
+        
+        case 'mass-drum-constrained': {
+            // Preview: drum with radial boundary springs (grounded)
+            const branches = 5;
+            positions.push({ x: 0, y: 0 });  // Center (0)
+            // Inner ring masses (1-5)
+            for (let i = 0; i < branches; i++) {
+                const angle = (2 * Math.PI * i) / branches - Math.PI / 2;
+                positions.push({ x: Math.cos(angle) * 1.0, y: Math.sin(angle) * 1.0 });
+            }
+            // Outer ring masses (6-10)
+            for (let i = 0; i < branches; i++) {
+                const angle = (2 * Math.PI * i) / branches - Math.PI / 2;
+                positions.push({ x: Math.cos(angle) * 2.0, y: Math.sin(angle) * 2.0 });
+            }
+            // Boundary springs (grounded, extending outward) (11-15)
+            for (let i = 0; i < branches; i++) {
+                const angle = (2 * Math.PI * i) / branches - Math.PI / 2;
+                positions.push({ x: Math.cos(angle) * 2.8, y: Math.sin(angle) * 2.8 });
+            }
+            // Radial edges
+            for (let i = 1; i <= branches; i++) {
+                edges.push([0, i]);  // Center to inner
+                edges.push([i, i + branches]);  // Inner to outer
+            }
+            // Circumferential inner
+            for (let i = 1; i <= branches; i++) {
+                edges.push([i, (i % branches) + 1]);
+            }
+            // Circumferential outer
+            for (let i = 1; i <= branches; i++) {
+                edges.push([branches + i, branches + (i % branches) + 1]);
+            }
+            // Boundary springs (radial, from outer masses outward)
+            for (let i = 1; i <= branches; i++) {
+                edges.push([branches + i, 2 * branches + i]);  // Outer mass to boundary spring
             }
             break;
         }
@@ -3455,7 +3505,7 @@ function applyTemplate(template) {
         'ladder', 'mobius-ladder', 'circular-ladder',
         'helm', 'gear', 'sun', 'friendship', 'web',
         'book', 'pan', 'stacked-prism',
-        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid', 'mass-drum'
+        'mass-chain', 'mass-star', 'mass-tree', 'mass-cantilever', 'mass-bridge', 'mass-grid'
     ];
     
     // Use template-n input for basic families, otherwise use num-vertices
@@ -3812,9 +3862,9 @@ function applyTemplate(template) {
         
         case 'mass-drum': {
             // Drum structure: n branches (radial spokes), m rings (circles)
-            // Uses the 'n' parameter for branches, defaults to 2 rings (can be extended)
-            const branches = n;  // Number of radial branches
-            const rings = 2;     // Number of concentric rings (can make this configurable later)
+            // Read from drum parameter inputs
+            const branches = drumBranchesInput ? parseInt(drumBranchesInput.value) : 5;
+            const rings = drumRingsInput ? parseInt(drumRingsInput.value) : 2;
             
             // Masses: center + n per ring = 1 + n*m
             const nMasses = 1 + branches * rings;
@@ -3947,6 +3997,161 @@ function applyTemplate(template) {
             
             updateStats();
             console.log(`Built mass-drum: ${branches} branches × ${rings} rings = ${nMasses} masses, ${nSprings} springs, ${totalNodes} total nodes`);
+            break;
+        }
+        
+        case 'mass-drum-constrained': {
+            // Constrained Drum: like regular drum but with boundary springs extending
+            // radially outward from each outer mass (grounded boundary constraints)
+            const branches = drumBranchesInput ? parseInt(drumBranchesInput.value) : 5;
+            const rings = drumRingsInput ? parseInt(drumRingsInput.value) : 2;
+            
+            // Masses: center + n per ring = 1 + n*m
+            const nMasses = 1 + branches * rings;
+            
+            // Springs: radial + circumferential + boundary (one per outer mass)
+            const radialSprings = branches * rings;
+            const circumSprings = branches * rings;
+            const boundarySprings = branches;  // One grounded spring per outer mass
+            const nSprings = radialSprings + circumSprings + boundarySprings;
+            
+            const totalNodes = nMasses + nSprings;
+            
+            clearGraph();
+            const baseRadius = 20;
+            const ringSpacing = 25;
+            
+            // Initialize matrices
+            state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
+            
+            // === CREATE MASS NODES ===
+            createVertex(new THREE.Vector3(0, 0, 0), 0);  // Center
+            
+            let massIdx = 1;
+            const massPositions = [[0, 0]];
+            for (let r = 1; r <= rings; r++) {
+                const radius = baseRadius + (r - 1) * ringSpacing;
+                for (let b = 0; b < branches; b++) {
+                    const angle = (2 * Math.PI * b) / branches - Math.PI / 2;
+                    const x = radius * Math.cos(angle);
+                    const y = radius * Math.sin(angle);
+                    createVertex(new THREE.Vector3(x, y, 0), massIdx);
+                    massPositions.push([x, y]);
+                    massIdx++;
+                }
+            }
+            
+            // === CREATE SPRING NODES ===
+            let springIdx = nMasses;
+            const radialSpringIndices = [];
+            
+            // Radial springs (connecting center to ring1, ring1 to ring2, etc.)
+            for (let r = 0; r < rings; r++) {
+                radialSpringIndices[r] = [];
+                for (let b = 0; b < branches; b++) {
+                    let innerMass, outerMass;
+                    if (r === 0) {
+                        innerMass = 0;
+                        outerMass = 1 + b;
+                    } else {
+                        innerMass = 1 + (r - 1) * branches + b;
+                        outerMass = 1 + r * branches + b;
+                    }
+                    
+                    const innerPos = massPositions[innerMass];
+                    const outerPos = massPositions[outerMass];
+                    const midX = (innerPos[0] + outerPos[0]) / 2;
+                    const midY = (innerPos[1] + outerPos[1]) / 2;
+                    const offsetAngle = (2 * Math.PI * b) / branches - Math.PI / 2 + 0.1;
+                    
+                    createVertex(new THREE.Vector3(midX + 2 * Math.cos(offsetAngle), midY + 2 * Math.sin(offsetAngle), 0), springIdx);
+                    radialSpringIndices[r][b] = springIdx;
+                    springIdx++;
+                }
+            }
+            
+            // Circumferential springs (around each ring)
+            const circumSpringIndices = [];
+            for (let r = 0; r < rings; r++) {
+                circumSpringIndices[r] = [];
+                for (let b = 0; b < branches; b++) {
+                    const mass1 = 1 + r * branches + b;
+                    const mass2 = 1 + r * branches + ((b + 1) % branches);
+                    
+                    const pos1 = massPositions[mass1];
+                    const pos2 = massPositions[mass2];
+                    const midX = (pos1[0] + pos2[0]) / 2;
+                    const midY = (pos1[1] + pos2[1]) / 2;
+                    const dist = Math.sqrt(midX * midX + midY * midY);
+                    const normX = dist > 0 ? midX / dist : 0;
+                    const normY = dist > 0 ? midY / dist : 1;
+                    
+                    createVertex(new THREE.Vector3(midX + 3 * normX, midY + 3 * normY, 0), springIdx);
+                    circumSpringIndices[r][b] = springIdx;
+                    springIdx++;
+                }
+            }
+            
+            // Boundary springs (RADIAL, extending outward from each outer mass to ground)
+            // These are grounded springs - only connected to one mass
+            const boundarySpringIndices = [];
+            const outerRadius = baseRadius + (rings - 1) * ringSpacing;
+            const boundaryExtension = 15;  // How far beyond outer ring
+            for (let b = 0; b < branches; b++) {
+                const outerMass = 1 + (rings - 1) * branches + b;
+                const massPos = massPositions[outerMass];
+                
+                // Position boundary spring radially outward from the outer mass
+                const angle = (2 * Math.PI * b) / branches - Math.PI / 2;
+                const springX = (outerRadius + boundaryExtension) * Math.cos(angle);
+                const springY = (outerRadius + boundaryExtension) * Math.sin(angle);
+                
+                createVertex(new THREE.Vector3(springX, springY, 0), springIdx);
+                boundarySpringIndices.push(springIdx);
+                springIdx++;
+            }
+            
+            // === CONNECT EDGES ===
+            // Radial connections (mass → spring → mass)
+            for (let r = 0; r < rings; r++) {
+                for (let b = 0; b < branches; b++) {
+                    let innerMass, outerMass;
+                    if (r === 0) {
+                        innerMass = 0;
+                        outerMass = 1 + b;
+                    } else {
+                        innerMass = 1 + (r - 1) * branches + b;
+                        outerMass = 1 + r * branches + b;
+                    }
+                    const spring = radialSpringIndices[r][b];
+                    addBi(innerMass, spring);
+                    addBi(spring, outerMass);
+                }
+            }
+            
+            // Circumferential connections (mass → spring → mass around each ring)
+            for (let r = 0; r < rings; r++) {
+                for (let b = 0; b < branches; b++) {
+                    const mass1 = 1 + r * branches + b;
+                    const mass2 = 1 + r * branches + ((b + 1) % branches);
+                    const spring = circumSpringIndices[r][b];
+                    addBi(mass1, spring);
+                    addBi(spring, mass2);
+                }
+            }
+            
+            // Boundary constraint connections (outer mass → grounded spring)
+            // Each boundary spring only connects to ONE mass (grounded at other end)
+            for (let b = 0; b < branches; b++) {
+                const outerMass = 1 + (rings - 1) * branches + b;
+                const spring = boundarySpringIndices[b];
+                addBi(outerMass, spring);
+                // No second connection - this spring is grounded (like chain end springs)
+            }
+            
+            updateStats();
+            console.log(`Built mass-drum-constrained: ${branches} branches × ${rings} rings + ${boundarySprings} boundary springs (grounded) = ${totalNodes} total nodes`);
             break;
         }
         
@@ -9616,12 +9821,23 @@ function getCurrentGraphData() {
     const n = state.vertexMeshes.length;
     if (n === 0) return null;
     
-    // Extract edges from symmetric adjacency matrix
+    // Extract edges from symmetric adjacency matrix (for undirected representation)
     const edges = [];
     for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
             if (state.symmetricAdjMatrix[i] && state.symmetricAdjMatrix[i][j] === 1) {
                 edges.push([i, j]);
+            }
+        }
+    }
+    
+    // Also extract directed edges with orientation (for skew-symmetric eigenvalues)
+    // This preserves the actual edge orientations from the adjacency matrix
+    const directedEdges = [];
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            if (state.adjacencyMatrix[i] && state.adjacencyMatrix[i][j] === 1) {
+                directedEdges.push([i, j]);  // i → j (positive direction)
             }
         }
     }
@@ -9644,6 +9860,7 @@ function getCurrentGraphData() {
     return {
         n,
         edges,
+        directedEdges,  // NEW: includes orientation information
         edgeCount: edges.length,
         name,
         family: 'Custom',

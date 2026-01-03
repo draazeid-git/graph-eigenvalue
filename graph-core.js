@@ -1554,40 +1554,71 @@ const FACE_HUES = [
 
 /**
  * Generate a bright face color from hue index
- * Uses HSL with MINIMUM 60% lightness to guarantee visibility
+ * Uses HSL with LUMINANCE-AWARE adjustment to guarantee visibility against dark backgrounds
+ * Ensures minimum perceived luminance (not just lightness) for true visibility
  */
 function generateFaceColor(index) {
     const hue = FACE_HUES[index % FACE_HUES.length];
-    // High saturation and HIGH lightness (60-80%) ensures visibility against dark bg
+    // High saturation for vivid colors
     const saturation = Math.min(100, Math.max(50, 80 * faceColorSaturation));
-    // MINIMUM 60% lightness - this is the key to avoiding dark colors
-    const lightness = Math.min(90, Math.max(60, 70 * faceColorBrightness));
+    // Start with high lightness
+    let lightness = Math.min(90, Math.max(60, 70 * faceColorBrightness));
     
     // Convert HSL to RGB
     const h = hue / 360;
     const s = saturation / 100;
-    const l = lightness / 100;
+    let l = lightness / 100;
     
-    let r, g, b;
-    if (s === 0) {
-        r = g = b = l;
-    } else {
-        const hue2rgb = (p, q, t) => {
-            if (t < 0) t += 1;
-            if (t > 1) t -= 1;
-            if (t < 1/6) return p + (q - p) * 6 * t;
-            if (t < 1/2) return q;
-            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-            return p;
-        };
-        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-        const p = 2 * l - q;
-        r = hue2rgb(p, q, h + 1/3);
-        g = hue2rgb(p, q, h);
-        b = hue2rgb(p, q, h - 1/3);
+    const hslToRgb = (h, s, l) => {
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l;
+        } else {
+            const hue2rgb = (p, q, t) => {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1/6) return p + (q - p) * 6 * t;
+                if (t < 1/2) return q;
+                if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return { r, g, b };
+    };
+    
+    // Calculate perceived luminance using standard formula
+    // Human eye is most sensitive to green, then red, then blue
+    const calcLuminance = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    // Generate initial color
+    let rgb = hslToRgb(h, s, l);
+    let luminance = calcLuminance(rgb.r, rgb.g, rgb.b);
+    
+    // LUMINANCE-AWARE ADJUSTMENT
+    // Minimum luminance threshold (0.4 ensures good contrast against dark ~0.05 background)
+    const MIN_LUMINANCE = 0.4;
+    
+    // If luminance is too low, boost lightness iteratively
+    let iterations = 0;
+    while (luminance < MIN_LUMINANCE && l < 0.95 && iterations < 10) {
+        l += 0.05;  // Increase lightness
+        rgb = hslToRgb(h, s, l);
+        luminance = calcLuminance(rgb.r, rgb.g, rgb.b);
+        iterations++;
     }
     
-    return (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
+    // If still too dark (e.g., pure blue), add a minimum RGB floor
+    const MIN_COMPONENT = 0.3;  // Ensure no channel is too dark
+    rgb.r = Math.max(rgb.r, MIN_COMPONENT * (1 - s));
+    rgb.g = Math.max(rgb.g, MIN_COMPONENT * (1 - s));
+    rgb.b = Math.max(rgb.b, MIN_COMPONENT * (1 - s));
+    
+    return (Math.round(rgb.r * 255) << 16) | (Math.round(rgb.g * 255) << 8) | Math.round(rgb.b * 255);
 }
 
 /**
@@ -1654,12 +1685,13 @@ export function detectFaces() {
     const n = state.vertexMeshes.length;
     if (n < 3) return [];
     
-    // Global size limit to prevent freezing
-    const MAX_FACE_DETECTION_SIZE = 40;
-    if (n > MAX_FACE_DETECTION_SIZE) {
-        console.log(`[Face Detection] Skipping - graph too large (n=${n} > ${MAX_FACE_DETECTION_SIZE})`);
-        return [];
-    }
+    // No global limit - individual methods have their own limits based on complexity
+    // Triangle and Quad detection: fast, no limit
+    // Pentagon: O(n*d^4), limit to n <= 50
+    // Hexagon: O(n*d^5), limit to n <= 40
+    // Octagon: O(n*d^7), limit to n <= 30
+    
+    console.log(`[Face Detection] Starting for n=${n} vertices`);
     
     // Build adjacency list and edge set
     const adj = Array(n).fill(null).map(() => []);
@@ -1833,8 +1865,8 @@ export function detectFaces() {
     }
     
     // Method 4: Pentagon (5-cycle) detection
-    // Only for small graphs due to O(n * d^4) complexity
-    if (n <= 40) {
+    // Only for medium graphs due to O(n * d^4) complexity
+    if (n <= 100) {
         for (let a = 0; a < n; a++) {
             for (const b of adj[a]) {
                 if (b <= a) continue;
@@ -1866,9 +1898,9 @@ export function detectFaces() {
         }
     }
     
-    // Method 5: Hexagon (6-cycle) detection - for small graphs only
-    // O(n * d^5) complexity - expensive!
-    if (n <= 40) {
+    // Method 5: Hexagon (6-cycle) detection - for medium graphs
+    // O(n * d^5) complexity
+    if (n <= 100) {
         for (let a = 0; a < n; a++) {
             for (const b of adj[a]) {
                 if (b <= a) continue;
@@ -1904,9 +1936,9 @@ export function detectFaces() {
     }
     
     // Method 6: Octagon (8-cycle) detection
-    // Important for Mass-Spring grids which have 8-cycle faces
-    // Only for small graphs due to O(n * d^7) complexity
-    if (n <= 40) {
+    // Important for Mass-Spring grids/drums which have 8-cycle faces
+    // O(n * d^7) complexity but d is typically low (2-4) for these graphs
+    if (n <= 100) {
         for (let a = 0; a < n; a++) {
             for (const b of adj[a]) {
                 if (b <= a) continue;
@@ -2152,21 +2184,26 @@ export function createFaceMeshes(faces = null, colors = null) {
         const color = (colors && colors[faceIndex]) ? colors[faceIndex] : getFaceColor(faceIndex);
         const colorObj = new THREE.Color(color);
         
-        // EMISSIVE GLOW material - color emits its own light
-        // High emissive ensures faces are ALWAYS visible against dark background
+        // ADDITIVE BLENDING material for light-on-dark glow effect
+        // - AdditiveBlending: overlapping faces become brighter (natural glow)
+        // - depthWrite: false: vertices and edges always render on top
+        // - DoubleSide: faces visible from both sides
         const material = new THREE.MeshBasicMaterial({
             color: colorObj,
             transparent: true,
-            opacity: state.faceOpacity,
+            opacity: state.faceOpacity * 0.7,  // Slightly lower base opacity for additive
             side: THREE.DoubleSide,
-            depthWrite: false
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
         });
         
         const mesh = new THREE.Mesh(geometry, material);
         mesh.userData.faceIndex = faceIndex;
         mesh.userData.faceVertices = face.slice();  // Clone the array
         mesh.userData.faceColor = color;
-        mesh.renderOrder = -1; // Render faces before edges
+        // Render faces first (lower order), then edges (0), then vertices (higher)
+        // Combined with depthWrite: false, this ensures graph skeleton is always visible
+        mesh.renderOrder = -10;
         
         state.graphGroup.add(mesh);
         state.faceMeshes.push(mesh);
@@ -2231,17 +2268,19 @@ function createFaceGeometry(vertices) {
 
 /**
  * Create glowing edge lines on top of faces for better visibility
- * Uses white/cyan "rim light" for cyberpunk aesthetic
+ * Uses white/cyan "rim light" for cyberpunk aesthetic with additive glow
  */
 function createFaceEdges() {
     if (!state.faceMeshes || state.faceMeshes.length === 0) return;
     
-    // Glowing rim edge material - white with subtle transparency
+    // Glowing rim edge material - white with additive blending for glow
     const edgeMaterial = new THREE.LineBasicMaterial({
-        color: 0xffffff,  // White rim light (or 0x00f2ff for cyan)
+        color: 0x88ddff,  // Soft cyan rim light
         linewidth: 2,
         transparent: true,
-        opacity: 0.4  // Subtle rim highlight
+        opacity: 0.5,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
     });
     
     const processedEdges = new Set();
@@ -2273,7 +2312,8 @@ function createFaceEdges() {
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
             const line = new THREE.Line(geometry, edgeMaterial.clone());
             line.userData.isFaceEdge = true;
-            line.renderOrder = 1; // Render after faces
+            // Render face edges after face polygons (-10) but with same order as main edges
+            line.renderOrder = -5;
             
             edgesToAdd.push(line);
         }
@@ -2326,7 +2366,8 @@ export function setFaceOpacity(opacity) {
     
     for (const mesh of state.faceMeshes) {
         if (mesh.material && !mesh.userData.isFaceEdge) {
-            mesh.material.opacity = opacity;
+            // Apply 0.7 multiplier for additive blending (avoids over-bright overlaps)
+            mesh.material.opacity = opacity * 0.7;
         }
     }
 }

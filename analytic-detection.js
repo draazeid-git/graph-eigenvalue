@@ -2509,6 +2509,118 @@ function detectNLinkPendulum(inv) {
 }
 
 // ============================================================================
+// CONSTRAINED DRUM DETECTOR (Mass-Spring System)
+// ============================================================================
+
+/**
+ * Detect Constrained Drum: n branches, 1 ring mass-spring system with boundary constraints
+ * 
+ * Structure (for n branches, 1 ring):
+ * - 1 center mass (degree n)
+ * - n ring masses (degree 4 each)
+ * - n radial springs (degree 2)
+ * - n circumferential springs (degree 2)
+ * - n boundary springs (degree 1, grounded)
+ * 
+ * Total nodes: 1 + 4n
+ * Total edges: 5n
+ * 
+ * Characteristic polynomial:
+ * p(λ) = λ^(2n-1) · (λ²+(n+2))² · (λ⁴+(n+2)λ²+n)
+ * 
+ * Eigenvalues:
+ * - 0 with multiplicity 2n-1
+ * - ±i√(n+2) with multiplicity 2 each
+ * - ±i√((n+2 ± √(n²+4))/2) with multiplicity 1 each
+ */
+function detectConstrainedDrum(inv) {
+    const n = inv.n;
+    
+    // Total nodes must be 1 + 4*branches for some integer branches >= 3
+    if ((n - 1) % 4 !== 0 || n < 13) return null;  // n=13 is minimum (branches=3)
+    
+    const branches = (n - 1) / 4;
+    if (branches < 3) return null;
+    
+    // Check degree distribution
+    // Expected: degCounts[branches]=1, degCounts[4]=branches, degCounts[2]=2*branches, degCounts[1]=branches
+    const degCounts = inv.degreeCount || {};
+    
+    const hasCenterMass = degCounts[branches] === 1;
+    const hasRingMasses = degCounts[4] === branches;
+    const hasDeg2Springs = degCounts[2] === 2 * branches;
+    const hasBoundarySprings = degCounts[1] === branches;
+    
+    if (!hasCenterMass || !hasRingMasses || !hasDeg2Springs || !hasBoundarySprings) {
+        return null;
+    }
+    
+    // Check edge count: 5 * branches
+    const expectedEdges = 5 * branches;
+    if (inv.edges !== expectedEdges) {
+        return null;
+    }
+    
+    // Must be bipartite (masses vs springs)
+    if (!inv.isBipartite) {
+        return null;
+    }
+    
+    // Compute exact eigenvalues
+    const zeroMult = 2 * branches - 1;
+    const a = branches + 2;
+    const disc = branches * branches + 4;
+    const sqrtDisc = Math.sqrt(disc);
+    
+    const lambda_quad = Math.sqrt(a);  // From (λ²+(n+2))²
+    const lambda_plus = Math.sqrt((a + sqrtDisc) / 2);  // From quartic
+    const lambda_minus = Math.sqrt((a - sqrtDisc) / 2);  // From quartic
+    
+    const eigenvalues = [];
+    
+    // Zeros
+    for (let i = 0; i < zeroMult; i++) {
+        eigenvalues.push({ re: 0, im: 0 });
+    }
+    
+    // Quadratic factor: ±i√(n+2) with mult 2
+    eigenvalues.push({ re: 0, im: lambda_quad });
+    eigenvalues.push({ re: 0, im: lambda_quad });
+    eigenvalues.push({ re: 0, im: -lambda_quad });
+    eigenvalues.push({ re: 0, im: -lambda_quad });
+    
+    // Quartic factor: ±i√((a±√disc)/2) with mult 1
+    eigenvalues.push({ re: 0, im: lambda_plus });
+    eigenvalues.push({ re: 0, im: -lambda_plus });
+    eigenvalues.push({ re: 0, im: lambda_minus });
+    eigenvalues.push({ re: 0, im: -lambda_minus });
+    
+    const formulaStr = `λ = 0^(${zeroMult}), ±i√${a} (×2), ±i√((${a}±√${disc})/2)`;
+    
+    return {
+        type: 'constrained_drum',
+        name: `Constrained Drum (${branches} branches)`,
+        n: n,
+        branches: branches,
+        rings: 1,
+        formula: `Mass-Spring: ${branches+1} masses, ${3*branches} springs (${branches} grounded)`,
+        skewFormula: formulaStr,
+        eigenvalues: eigenvalues,
+        spectralRadius: lambda_plus,
+        physicsInfo: {
+            masses: branches + 1,
+            springs: 3 * branches,
+            groundedSprings: branches,
+            zeroMultiplicity: zeroMult,
+            quadraticRoot: lambda_quad,
+            quarticCoeffs: { a: a, b: branches },
+            discriminant: disc,
+            naturalFrequencies: [lambda_quad, lambda_plus, lambda_minus]
+        }
+    };
+}
+
+// ============================================================================
 // MAIN DETECTION FUNCTION
 // ============================================================================
 
@@ -2558,6 +2670,9 @@ export function detectAnalyticEigenspectrum() {
     
     // Try detectors in order of specificity (most specific first)
     const detectors = [
+        // Mass-spring systems
+        detectConstrainedDrum,  // Constrained drum (n branches, 1 ring)
+        
         // Specific named graphs (very specific structures)
         detectNBarMechanism,  // n-Bar Mechanisms (4-bar, 5-bar, 6-bar, 7-bar, etc.)
         detectNLinkPendulum,  // n-Link Pendulums (1-link, 2-link, etc.)

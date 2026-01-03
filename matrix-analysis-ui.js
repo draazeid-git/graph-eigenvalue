@@ -718,7 +718,9 @@ export function showAnalysis() {
         
         if (skewFormulaStr && analyticResult.type !== 'unknown') {
             // New robust detection found eigenvalues
-            skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box detected" style="border-left-color:#2196F3;"><div class="formula" style="color:#64b5f6;">${analyticResult.formula}<br><small>${skewFormulaStr}</small></div></div>`;
+            // Prefer the exact skewFormula if available, otherwise use computed formula
+            const displayFormula = analyticResult.skewFormula || skewFormulaStr;
+            skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box detected" style="border-left-color:#2196F3;"><div class="formula" style="color:#64b5f6;">${analyticResult.formula}<br><small>${displayFormula}</small></div></div>`;
         } else if (graphInfo.skewFormula) {
             // Fall back to old detection
             skewAnalyticFormulaDisplay.innerHTML = `<div class="formula-box" style="border-left-color:#2196F3;"><div class="formula" style="color:#64b5f6;">${graphInfo.skewFormula}</div></div>`;

@@ -66,7 +66,7 @@ The SIMULATE tab now includes comprehensive **port-Hamiltonian realizability ana
 
 ### 🏗️ Mass-Spring Graph Templates
 
-Seven pre-built realizable mass-spring configurations:
+Eight pre-built realizable mass-spring configurations:
 
 | Template | Description | Nodes |
 |----------|-------------|-------|
@@ -76,7 +76,8 @@ Seven pre-built realizable mass-spring configurations:
 | **Mass-Spring Cantilever** | Fixed-free beam model | 2n |
 | **Mass-Spring Bridge** | Doubly-grounded structure | 2n+1 |
 | **Mass-Spring Grid** | m×n checkerboard pattern | m×n + springs |
-| **Drum (Radial)** | n branches × m rings (like drum head) | 1+3nm |
+| **Drum (Radial)** | n branches × m rings | 1+3nm |
+| **Drum Constrained** | With grounded boundary springs (radial) | 1+3nm+n |
 
 ### ✖️ Product Graph Operations
 
@@ -353,7 +354,7 @@ graph-project/
 ### v7.12 (Current) - Physics Engine & Mass-Spring Systems
 
 - 🔧 **Port-Hamiltonian Analysis** - Realizability audit for mass-spring systems
-- 🏗️ **7 Mass-Spring Templates** - Chain, Star, Tree, Cantilever, Bridge, Grid, Drum
+- 🏗️ **8 Mass-Spring Templates** - Chain, Star, Tree, Cantilever, Bridge, Grid, Drum, Drum Constrained
 - ✖️ **Product Graph Operations** - Cartesian □, Tensor ⊗, Realizable ⚡
 - 🎨 **Face Visualization** - Adjustable opacity, brightness, saturation, background
 - ⚡ **Performance Limits** - Size limits (n≤40) prevent freezing
