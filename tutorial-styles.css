@@ -471,6 +471,31 @@
     border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.tutorial-menu-links {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.tutorial-menu-link {
+    flex: 1;
+    padding: 8px 12px;
+    background: rgba(74, 158, 255, 0.1);
+    border: 1px solid rgba(74, 158, 255, 0.3);
+    border-radius: 6px;
+    color: #4a9eff;
+    text-decoration: none;
+    font-size: 13px;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.tutorial-menu-link:hover {
+    background: rgba(74, 158, 255, 0.2);
+    border-color: #4a9eff;
+    color: #fff;
+}
+
 .tutorial-btn-reset {
     width: 100%;
     padding: 10px;

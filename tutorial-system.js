@@ -2028,6 +2028,14 @@ export function createTutorialMenu(tutorialEngine) {
                 </div>
             </div>
             <div class="tutorial-menu-footer">
+                <div class="tutorial-menu-links">
+                    <a href="https://github.com/draazeid-git/graph-eigenvalue/wiki" target="_blank" class="tutorial-menu-link">
+                        📖 Documentation
+                    </a>
+                    <a href="https://github.com/draazeid-git/graph-eigenvalue" target="_blank" class="tutorial-menu-link">
+                        📂 GitHub
+                    </a>
+                </div>
                 <button class="tutorial-btn tutorial-btn-reset">Reset Progress</button>
             </div>
         </div>
