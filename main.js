@@ -190,9 +190,11 @@ let vizShowBounds, vizShowEigenvectors, vizShowGrid, vizZoom, vizZoomLabel;
 let enhancedVizActive = false;
 let timeSeriesHistory = [];
 let timeSeriesTimeStamps = [];
+let enhancedPhaseTrail = []; // Separate phase trail for Enhanced Visualization
 let initialEnergy = null; // Track initial energy for conservation check
 const TIME_SERIES_LENGTH = 200;
 const TIME_SERIES_WINDOW = 10.0; // Show 10 seconds of data
+const ENHANCED_PHASE_TRAIL_LENGTH = 500; // Phase trail length for enhanced viz
 
 // Bounds tab (Zeid-Rosenberg)
 let zrTopologyDisplay, detectTopologyBtn;
@@ -974,10 +976,10 @@ function setupEventListeners() {
     
     // Phase diagram controls
     if (phaseEnabledCheckbox) phaseEnabledCheckbox.addEventListener('change', togglePhaseDiagram);
-    if (clearPhaseBtn) clearPhaseBtn.addEventListener('click', clearPhaseTrail);
-    if (phaseNodeISelect) phaseNodeISelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); });
-    if (phaseNodeJSelect) phaseNodeJSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); });
-    if (phaseModeSelect) phaseModeSelect.addEventListener('change', () => { clearPhaseTrail(); updatePhaseLabels(); updatePhaseModeExplanation(); });
+    if (clearPhaseBtn) clearPhaseBtn.addEventListener('click', () => { clearPhaseTrail(); enhancedPhaseTrail = []; });
+    if (phaseNodeISelect) phaseNodeISelect.addEventListener('change', () => { clearPhaseTrail(); enhancedPhaseTrail = []; updatePhaseLabels(); });
+    if (phaseNodeJSelect) phaseNodeJSelect.addEventListener('change', () => { clearPhaseTrail(); enhancedPhaseTrail = []; updatePhaseLabels(); });
+    if (phaseModeSelect) phaseModeSelect.addEventListener('change', () => { clearPhaseTrail(); enhancedPhaseTrail = []; updatePhaseLabels(); updatePhaseModeExplanation(); });
     if (animationModeSelect) animationModeSelect.addEventListener('change', updateAnimationModeExplanation);
     
     // Freeze nodes teaching toggle
@@ -3618,6 +3620,9 @@ function applyTemplate(template) {
             const nMasses = n;
             const totalNodes = 2 * nMasses + 1;
             
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
+            
             clearGraph();
             const spacing = 15;
             
@@ -3651,17 +3656,45 @@ function applyTemplate(template) {
             addBi(2 * nMasses - 1, 0);           // left ground to first mass
             addBi(2 * nMasses, nMasses - 1);    // right ground to last mass
             
+            // Set partition: masses are p-nodes, springs are q-nodes
+            const pIndices = [];
+            for (let i = 0; i < nMasses; i++) {
+                pIndices.push(i);  // Masses
+            }
+            const qIndices = [];
+            for (let i = 0; i < nMasses - 1; i++) {
+                qIndices.push(nMasses + i);  // Internal springs
+            }
+            qIndices.push(2 * nMasses - 1);  // Left ground spring
+            qIndices.push(2 * nMasses);      // Right ground spring
+            
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
+            }
+            
             updateStats();
             console.log(`Built mass-chain: ${nMasses} masses, ${nMasses + 1} springs (2 grounded)`);
+            console.log(`  p (masses): [${pIndices.join(',')}]`);
+            console.log(`  q (springs): [${qIndices.join(',')}]`);
             break;
         }
         
         case 'mass-star': {
-            // Central spring connected to n masses (star configuration)
-            // p-nodes: masses (1 to n)
-            // q-nodes: central spring (0), grounded springs (n+1 to 2n)
-            const nMasses = n;
-            const totalNodes = 2 * nMasses + 1;
+            // Star configuration: central hub connected to n outer nodes with grounded leaves
+            // The structure is bipartite and realizable when properly partitioned
+            // 
+            // Physical interpretation (after partition swap):
+            // - Node 0 = central mass
+            // - Nodes 1..n = radial springs (each connects center to one outer)
+            // - Nodes n+1..2n = outer nodes (act as grounded springs)
+            //
+            // Note: Auto-discovery may swap p/q for realizability
+            const nBranches = n;
+            const totalNodes = 2 * nBranches + 1;
+            
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
             
             clearGraph();
             const radius = 20;
@@ -3670,92 +3703,180 @@ function applyTemplate(template) {
             state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             
-            // Central spring (q-node)
+            // Central node
             createVertex(new THREE.Vector3(0, 0, 0), 0);
             
-            // Masses around the center
-            for (let i = 0; i < nMasses; i++) {
-                const angle = (2 * Math.PI * i) / nMasses - Math.PI / 2;
+            // Inner ring (connected to center)
+            for (let i = 0; i < nBranches; i++) {
+                const angle = (2 * Math.PI * i) / nBranches - Math.PI / 2;
                 const x = Math.cos(angle) * radius;
                 const y = Math.sin(angle) * radius;
                 createVertex(new THREE.Vector3(x, y, 0), i + 1);
             }
             
-            // Grounded springs (one per mass, on outer edge)
-            for (let i = 0; i < nMasses; i++) {
-                const angle = (2 * Math.PI * i) / nMasses - Math.PI / 2;
+            // Outer ring (grounded, connected to inner)
+            for (let i = 0; i < nBranches; i++) {
+                const angle = (2 * Math.PI * i) / nBranches - Math.PI / 2;
                 const x = Math.cos(angle) * radius * 1.4;
                 const y = Math.sin(angle) * radius * 1.4;
-                createVertex(new THREE.Vector3(x, y, 0), nMasses + 1 + i);
+                createVertex(new THREE.Vector3(x, y, 0), nBranches + 1 + i);
             }
             
-            // Connect center to masses
-            for (let i = 0; i < nMasses; i++) {
+            // Connect center to inner ring
+            for (let i = 0; i < nBranches; i++) {
                 addBi(0, i + 1);
             }
             
-            // Connect masses to grounded springs
-            for (let i = 0; i < nMasses; i++) {
-                addBi(i + 1, nMasses + 1 + i);
+            // Connect inner to outer ring
+            for (let i = 0; i < nBranches; i++) {
+                addBi(i + 1, nBranches + 1 + i);
+            }
+            
+            // Partition that makes this realizable:
+            // p (masses) = center (0) + outer ring (n+1 to 2n)
+            // q (springs) = inner ring (1 to n)
+            // This ensures each "spring" has exactly 2 connections
+            const pIndices = [0];  // Center mass
+            for (let i = 0; i < nBranches; i++) {
+                pIndices.push(nBranches + 1 + i);  // Outer masses (act as grounded)
+            }
+            
+            const qIndices = [];
+            for (let i = 0; i < nBranches; i++) {
+                qIndices.push(i + 1);  // Inner springs
+            }
+            
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
             }
             
             updateStats();
-            console.log(`Built mass-star: ${nMasses} masses, ${nMasses + 1} springs (${nMasses} grounded)`);
+            console.log(`Built mass-star: ${nBranches} branches, ${totalNodes} nodes`);
+            console.log(`  p (masses): [${pIndices.join(',')}] (center + outer)`);
+            console.log(`  q (springs): [${qIndices.join(',')}] (inner ring)`);
             break;
         }
         
         case 'mass-tree': {
-            // Binary tree of depth d: alternating masses and springs
-            // Masses at even depth, springs at odd depth
-            const depth = n;
+            // Physically realizable "star-tree" structure:
+            // - Center mass connected to k outer masses via radial springs
+            // - Each outer mass has a grounded leaf spring
+            // - Center mass optionally has a grounded spring
+            //
+            // Structure for k branches:
+            //        [S_center] (grounded, connected to center)
+            //            |
+            //          (M_0)  center mass
+            //        / | | | \
+            //    [S_1][S_2]...[S_k]  radial springs
+            //      |    |       |
+            //    (M_1)(M_2)...(M_k)  outer masses  
+            //      |    |       |
+            //    [Sg1][Sg2]...[Sgk]  grounded leaf springs
+            //
+            // Total: 1 center + k radial + k outer + k grounded + 1 center_grounded
+            //      = 3k + 2 nodes
+            
+            const branches = Math.max(2, n);  // At least 2 branches
+            const totalNodes = 3 * branches + 2;
+            
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
             
             clearGraph();
-            
-            const levelHeight = 20;
-            const baseWidth = 60;
-            let nodeIndex = 0;
-            
-            // Count total nodes first
-            let totalNodes = 0;
-            for (let d = 0; d <= depth; d++) {
-                totalNodes += Math.pow(2, d);
-            }
             
             // Initialize matrices
             state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             
-            // Build tree level by level
-            for (let d = 0; d <= depth; d++) {
-                const nodesAtLevel = Math.pow(2, d);
-                const levelWidth = baseWidth / Math.pow(2, Math.max(0, d - 1));
+            // Node indices:
+            // 0: center mass
+            // 1 to branches: radial springs
+            // branches+1 to 2*branches: outer masses
+            // 2*branches+1 to 3*branches: grounded leaf springs
+            // 3*branches+1: center grounded spring
+            
+            const centerMass = 0;
+            const radialSpringBase = 1;
+            const outerMassBase = branches + 1;
+            const leafSpringBase = 2 * branches + 1;
+            const centerGroundedSpring = 3 * branches + 1;
+            
+            const spacing = 30;
+            const radius = spacing * 1.5;
+            
+            // Create center mass at origin
+            createVertex(new THREE.Vector3(0, 0, 0), centerMass);
+            
+            // Create radial springs and outer masses in a circle
+            for (let i = 0; i < branches; i++) {
+                const angle = (2 * Math.PI * i) / branches - Math.PI / 2;
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
                 
-                for (let i = 0; i < nodesAtLevel; i++) {
-                    const x = (i - (nodesAtLevel - 1) / 2) * levelWidth;
-                    const y = -d * levelHeight;
-                    createVertex(new THREE.Vector3(x, y, 0), nodeIndex);
-                    nodeIndex++;
-                }
+                // Radial spring (between center and outer mass)
+                const radialSpring = radialSpringBase + i;
+                createVertex(new THREE.Vector3(cosA * radius * 0.5, sinA * radius * 0.5, 0), radialSpring);
+                
+                // Outer mass
+                const outerMass = outerMassBase + i;
+                createVertex(new THREE.Vector3(cosA * radius, sinA * radius, 0), outerMass);
+                
+                // Grounded leaf spring (below outer mass)
+                const leafSpring = leafSpringBase + i;
+                createVertex(new THREE.Vector3(cosA * radius * 1.3, sinA * radius * 1.3, 0), leafSpring);
             }
             
-            // Connect parent to children
-            let parentStart = 0;
-            for (let d = 0; d < depth; d++) {
-                const parentsAtLevel = Math.pow(2, d);
-                const childStart = parentStart + parentsAtLevel;
+            // Create center grounded spring (above center mass)
+            createVertex(new THREE.Vector3(0, -spacing * 0.7, 0), centerGroundedSpring);
+            
+            // Connect edges:
+            // 1. Center grounded spring to center mass
+            addBi(centerGroundedSpring, centerMass);
+            
+            // 2. For each branch: center - radial spring - outer mass - leaf spring
+            for (let i = 0; i < branches; i++) {
+                const radialSpring = radialSpringBase + i;
+                const outerMass = outerMassBase + i;
+                const leafSpring = leafSpringBase + i;
                 
-                for (let i = 0; i < parentsAtLevel; i++) {
-                    const parent = parentStart + i;
-                    const leftChild = childStart + 2 * i;
-                    const rightChild = childStart + 2 * i + 1;
-                    addBi(parent, leftChild);
-                    addBi(parent, rightChild);
-                }
-                parentStart = childStart;
+                // Center mass connects to radial spring
+                addBi(centerMass, radialSpring);
+                // Radial spring connects to outer mass
+                addBi(radialSpring, outerMass);
+                // Outer mass connects to leaf spring (grounded)
+                addBi(outerMass, leafSpring);
+            }
+            
+            // Partition:
+            // p (masses): center mass + outer masses = [0, branches+1, ..., 2*branches]
+            // q (springs): radial springs + leaf springs + center grounded
+            const pIndices = [centerMass];
+            for (let i = 0; i < branches; i++) {
+                pIndices.push(outerMassBase + i);
+            }
+            
+            const qIndices = [];
+            for (let i = 0; i < branches; i++) {
+                qIndices.push(radialSpringBase + i);  // Radial springs
+            }
+            for (let i = 0; i < branches; i++) {
+                qIndices.push(leafSpringBase + i);  // Leaf springs (grounded)
+            }
+            qIndices.push(centerGroundedSpring);  // Center grounded spring
+            
+            // Store partition
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
             }
             
             updateStats();
-            console.log(`Built mass-tree: depth ${depth}, ${nodeIndex} nodes`);
+            console.log(`Built mass-tree (star): ${branches} branches, ${totalNodes} nodes`);
+            console.log(`  p (masses): [${pIndices.join(',')}] (${pIndices.length} nodes)`);
+            console.log(`  q (springs): [${qIndices.join(',')}] (${qIndices.length} nodes)`);
+            console.log(`  Structure: center mass with ${branches} radial springs to outer masses, each with grounded leaf`);
             break;
         }
         
@@ -3765,6 +3886,9 @@ function applyTemplate(template) {
             const nSections = n;
             const totalNodes = 2 * nSections;
             
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
+            
             clearGraph();
             const spacing = 15;
             
@@ -3772,17 +3896,17 @@ function applyTemplate(template) {
             state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             
-            // Masses in a row
+            // Masses in a row (indices 0 to nSections-1)
             for (let i = 0; i < nSections; i++) {
                 createVertex(new THREE.Vector3(i * spacing * 1.5, 0, 0), i);
             }
             
-            // Internal springs between masses
+            // Internal springs between masses (indices nSections to 2*nSections-2)
             for (let i = 0; i < nSections - 1; i++) {
                 createVertex(new THREE.Vector3(i * spacing * 1.5 + spacing * 0.75, spacing * 0.4, 0), nSections + i);
             }
             
-            // Grounded spring at fixed end
+            // Grounded spring at fixed end (index 2*nSections-1)
             createVertex(new THREE.Vector3(-spacing * 0.75, spacing * 0.4, 0), 2 * nSections - 1);
             
             // Connect masses via springs
@@ -3794,8 +3918,27 @@ function applyTemplate(template) {
             // Ground spring to first mass
             addBi(2 * nSections - 1, 0);
             
+            // Partition: masses are p-nodes, springs are q-nodes
+            const pIndices = [];
+            for (let i = 0; i < nSections; i++) {
+                pIndices.push(i);  // Masses
+            }
+            
+            const qIndices = [];
+            for (let i = 0; i < nSections - 1; i++) {
+                qIndices.push(nSections + i);  // Internal springs
+            }
+            qIndices.push(2 * nSections - 1);  // Grounded spring
+            
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
+            }
+            
             updateStats();
             console.log(`Built mass-cantilever: ${nSections} masses, ${nSections} springs (1 grounded)`);
+            console.log(`  p (masses): [${pIndices.join(',')}]`);
+            console.log(`  q (springs): [${qIndices.join(',')}]`);
             break;
         }
         
@@ -3805,6 +3948,9 @@ function applyTemplate(template) {
             const nMasses = n;
             const totalNodes = 2 * nMasses + 1;
             
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
+            
             clearGraph();
             const spacing = 15;
             
@@ -3812,32 +3958,52 @@ function applyTemplate(template) {
             state.adjacencyMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             state.symmetricAdjMatrix = Array(totalNodes).fill(null).map(() => Array(totalNodes).fill(0));
             
-            // Masses
+            // Masses (indices 0 to nMasses-1)
             for (let i = 0; i < nMasses; i++) {
                 createVertex(new THREE.Vector3((i - (nMasses - 1) / 2) * spacing * 2, 0, 0), i);
             }
             
-            // Internal springs
+            // Internal springs (indices nMasses to 2*nMasses-2)
             for (let i = 0; i < nMasses - 1; i++) {
                 createVertex(new THREE.Vector3((i - (nMasses - 1) / 2) * spacing * 2 + spacing, spacing * 0.5, 0), nMasses + i);
             }
             
-            // Support springs at ends (below the masses)
+            // Support springs at ends (indices 2*nMasses-1, 2*nMasses)
             createVertex(new THREE.Vector3(-(nMasses - 1) / 2 * spacing * 2, -spacing, 0), 2 * nMasses - 1);
             createVertex(new THREE.Vector3((nMasses - 1) / 2 * spacing * 2, -spacing, 0), 2 * nMasses);
             
-            // Connect masses
+            // Connect masses via springs
             for (let i = 0; i < nMasses - 1; i++) {
                 addBi(i, nMasses + i);
                 addBi(nMasses + i, i + 1);
             }
             
-            // Support springs
+            // Support springs (grounded)
             addBi(0, 2 * nMasses - 1);
             addBi(nMasses - 1, 2 * nMasses);
             
+            // Partition: masses are p-nodes, springs are q-nodes
+            const pIndices = [];
+            for (let i = 0; i < nMasses; i++) {
+                pIndices.push(i);
+            }
+            
+            const qIndices = [];
+            for (let i = 0; i < nMasses - 1; i++) {
+                qIndices.push(nMasses + i);  // Internal springs
+            }
+            qIndices.push(2 * nMasses - 1);  // Left support
+            qIndices.push(2 * nMasses);      // Right support
+            
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
+            }
+            
             updateStats();
             console.log(`Built mass-bridge: ${nMasses} masses, ${nMasses + 1} springs (2 supports)`);
+            console.log(`  p (masses): [${pIndices.join(',')}]`);
+            console.log(`  q (springs): [${qIndices.join(',')}]`);
             break;
         }
         
@@ -3851,6 +4017,9 @@ function applyTemplate(template) {
             const hSprings = rows * (cols - 1);
             const vSprings = (rows - 1) * cols;
             const totalNodes = nMasses + hSprings + vSprings;
+            
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
             
             clearGraph();
             const spacing = 15;
@@ -3938,6 +4107,9 @@ function applyTemplate(template) {
             const nSprings = radialSprings + circumSprings;
             
             const totalNodes = nMasses + nSprings;
+            
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
             
             clearGraph();
             const baseRadius = 20;
@@ -4059,7 +4231,26 @@ function applyTemplate(template) {
             }
             
             updateStats();
+            
+            // Set partition: masses are p-nodes, springs are q-nodes
+            const pIndices = [];
+            for (let i = 0; i < nMasses; i++) {
+                pIndices.push(i);  // All masses (center + ring masses)
+            }
+            
+            const qIndices = [];
+            for (let i = nMasses; i < totalNodes; i++) {
+                qIndices.push(i);  // All springs (radial + circumferential)
+            }
+            
+            if (typeof physicsPartition !== 'undefined') {
+                physicsPartition.pIndices = pIndices;
+                physicsPartition.qIndices = qIndices;
+            }
+            
             console.log(`Built mass-drum: ${branches} branches × ${rings} rings = ${nMasses} masses, ${nSprings} springs, ${totalNodes} total nodes`);
+            console.log(`  p (masses): ${pIndices.length} nodes`);
+            console.log(`  q (springs): ${qIndices.length} nodes`);
             break;
         }
         
@@ -4079,6 +4270,9 @@ function applyTemplate(template) {
             const nSprings = radialSprings + circumSprings + boundarySprings;
             
             const totalNodes = nMasses + nSprings;
+            
+            // Reset partition FIRST to prevent old partition from being preserved
+            physicsPartition = { pIndices: [], qIndices: [] };
             
             clearGraph();
             const baseRadius = 20;
@@ -6683,6 +6877,7 @@ function setupEnhancedVizPopup() {
             enhancedVizActive = true;
             timeSeriesHistory = [];
             timeSeriesTimeStamps = [];
+            enhancedPhaseTrail = []; // Clear phase trail when opening
             initialEnergy = null; // Reset energy tracking
             
             // Ensure spectrum is computed for frequency display
@@ -6699,6 +6894,7 @@ function setupEnhancedVizPopup() {
             enhancedVizActive = false;
             timeSeriesHistory = [];
             timeSeriesTimeStamps = [];
+            enhancedPhaseTrail = []; // Clear phase trail when closing
             initialEnergy = null;
         });
     }
@@ -6789,6 +6985,9 @@ export function updateEnhancedVisualizations() {
         // Ensure spectrum data is available
         ensureSpectrumComputed();
         
+        // Update the enhanced phase trail from current dynamics state
+        updateEnhancedPhaseTrail();
+        
         drawEnhancedPhaseCurrent();
         drawEnhancedPhaseMain();
         drawFrequencySpectrum();
@@ -6796,6 +6995,94 @@ export function updateEnhancedVisualizations() {
         updateEnergyDisplay();
     } catch (e) {
         console.warn('Enhanced visualization error:', e);
+    }
+}
+
+// Compute and store phase values for the Enhanced Visualization (independent of regular phase plot)
+function updateEnhancedPhaseTrail() {
+    const dynamicsState = getDynamicsState();
+    if (!dynamicsState || dynamicsState.nodeStates.length < 2) {
+        // Debug: log why we're returning early
+        if (enhancedPhaseTrail.length % 120 === 0) {
+            console.log('[EnhancedViz] Early return: dynamicsState=', dynamicsState ? 'exists' : 'null', 
+                        'nodeStates.length=', dynamicsState?.nodeStates?.length);
+        }
+        return;
+    }
+    if (!dynamicsState.nodeDerivatives || dynamicsState.nodeDerivatives.length === 0) {
+        if (enhancedPhaseTrail.length % 120 === 0) {
+            console.log('[EnhancedViz] Early return: no nodeDerivatives');
+        }
+        return;
+    }
+    
+    const nodeStates = dynamicsState.nodeStates;
+    const nodeDerivatives = dynamicsState.nodeDerivatives;
+    
+    // Get selected nodes and mode
+    const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
+    const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
+    const mode = phaseModeSelect ? phaseModeSelect.value : 'displacement';
+    
+    if (nodeI >= nodeStates.length || nodeJ >= nodeStates.length) {
+        if (enhancedPhaseTrail.length % 120 === 0) {
+            console.log('[EnhancedViz] Early return: nodeI/J out of bounds', nodeI, nodeJ, nodeStates.length);
+        }
+        return;
+    }
+    
+    const xi = nodeStates[nodeI];
+    const xj = nodeStates[nodeJ];
+    const dxi = nodeDerivatives[nodeI];
+    const dxj = nodeDerivatives[nodeJ];
+    
+    // Get symmetric adjacency matrix entry for edge power calculation
+    // Use symmetricAdjMatrix (1 if connected, 0 if not) rather than adjacencyMatrix (which has +1/-1 for direction)
+    const symA = state.symmetricAdjMatrix;
+    const A_ij = (symA && symA[nodeI] && symA[nodeI][nodeJ] !== undefined) ? symA[nodeI][nodeJ] : 0;
+    
+    let plotX, plotY;
+    
+    switch (mode) {
+        case 'displacement':
+            plotX = xi;
+            plotY = xj;
+            break;
+        case 'velocity':
+            plotX = xi;
+            plotY = dxj;
+            break;
+        case 'node-power':
+            plotX = xi;
+            plotY = xi * dxi;
+            break;
+        case 'power-power':
+            plotX = xi * dxi;
+            plotY = xj * dxj;
+            break;
+        case 'edge-power':
+            // True edge power: P_ij = A_ij · x_i · x_j (using symmetric adjacency)
+            plotX = xi;
+            plotY = A_ij * xi * xj;
+            break;
+        default:
+            plotX = xi;
+            plotY = xj;
+    }
+    
+    // Debug logging - log every ~1 second (60 frames)
+    if (enhancedPhaseTrail.length % 60 === 0) {
+        console.log(`[EnhancedViz] mode=${mode}, i=${nodeI}, j=${nodeJ}`);
+        console.log(`  nodeStates[${nodeI}]=${xi?.toFixed(4)}, nodeStates[${nodeJ}]=${xj?.toFixed(4)}`);
+        console.log(`  A_ij=${A_ij}, plotX=${plotX?.toFixed(4)}, plotY=${plotY?.toFixed(4)}`);
+        console.log(`  Full nodeStates[0..4]:`, nodeStates.slice(0, 5).map(v => v?.toFixed(3)));
+    }
+    
+    enhancedPhaseTrail.push({ x: plotX, y: plotY, time: dynamicsState.simulationTime });
+    
+    // Limit trail length
+    if (enhancedPhaseTrail.length > ENHANCED_PHASE_TRAIL_LENGTH) {
+        enhancedPhaseTrail.shift();
     }
 }
 
@@ -6826,20 +7113,31 @@ function drawEnhancedPhaseCurrent() {
     // Get selected nodes and plot mode
     const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
     const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
-    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'state-state';
+    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'displacement';
     
-    // Determine axis labels based on plot mode
+    // Determine axis labels based on plot mode (matching actual HTML option values)
     let xAxisLabel, yAxisLabel;
     switch(plotMode) {
-        case 'state-velocity':
+        case 'displacement':
             xAxisLabel = `x${nodeI}`;
-            yAxisLabel = `ẋ${nodeI}`;
+            yAxisLabel = `x${nodeJ}`;
+            break;
+        case 'velocity':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `ẋ${nodeJ}`;
+            break;
+        case 'node-power':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `x${nodeI}·ẋ${nodeI}`;
             break;
         case 'power-power':
             xAxisLabel = `P${nodeI}`;
             yAxisLabel = `P${nodeJ}`;
             break;
-        case 'state-state':
+        case 'edge-power':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `P${nodeI}${nodeJ}`;
+            break;
         default:
             xAxisLabel = `x${nodeI}`;
             yAxisLabel = `x${nodeJ}`;
@@ -6877,8 +7175,8 @@ function drawEnhancedPhaseCurrent() {
     ctx.lineTo(cx, H);
     ctx.stroke();
     
-    // Draw phase trail
-    const trail = dynamicsState.phaseTrail || [];
+    // Draw phase trail - use our own enhanced trail, not the one from dynamics state
+    const trail = enhancedPhaseTrail;
     if (trail.length > 1) {
         ctx.strokeStyle = '#00ffff';
         ctx.lineWidth = 2;
@@ -6934,22 +7232,36 @@ function drawEnhancedPhaseMain() {
     // Get selected nodes and plot mode
     const nodeI = phaseNodeISelect ? parseInt(phaseNodeISelect.value) : 0;
     const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
-    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'state-state';
+    const plotMode = phaseModeSelect ? phaseModeSelect.value : 'displacement';
     
-    // Determine axis labels based on plot mode
+    // Determine axis labels based on plot mode (matching actual HTML option values)
     let xAxisLabel, yAxisLabel, plotTitle;
     switch(plotMode) {
-        case 'state-velocity':
+        case 'displacement':
             xAxisLabel = `x${nodeI}`;
-            yAxisLabel = `ẋ${nodeI}`;
-            plotTitle = `Node ${nodeI}: displacement vs velocity`;
+            yAxisLabel = `x${nodeJ}`;
+            plotTitle = `Displacement: node ${nodeI} vs node ${nodeJ}`;
+            break;
+        case 'velocity':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `ẋ${nodeJ}`;
+            plotTitle = `Node ${nodeI} displacement vs node ${nodeJ} velocity`;
+            break;
+        case 'node-power':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `x${nodeI}·ẋ${nodeI}`;
+            plotTitle = `Node ${nodeI}: displacement vs power`;
             break;
         case 'power-power':
             xAxisLabel = `P${nodeI}`;
             yAxisLabel = `P${nodeJ}`;
             plotTitle = `Power: node ${nodeI} vs node ${nodeJ}`;
             break;
-        case 'state-state':
+        case 'edge-power':
+            xAxisLabel = `x${nodeI}`;
+            yAxisLabel = `P${nodeI}${nodeJ}`;
+            plotTitle = `Edge power: node ${nodeI} to node ${nodeJ}`;
+            break;
         default:
             xAxisLabel = `x${nodeI}`;
             yAxisLabel = `x${nodeJ}`;
@@ -7065,9 +7377,9 @@ function drawEnhancedPhaseMain() {
         }
     }
     
-    // Draw phase trail
-    if (dynamicsState && dynamicsState.phaseTrail && dynamicsState.phaseTrail.length > 1) {
-        const trail = dynamicsState.phaseTrail;
+    // Draw phase trail - use our own enhanced trail, not the one from dynamics state
+    if (enhancedPhaseTrail.length > 1) {
+        const trail = enhancedPhaseTrail;
         ctx.strokeStyle = '#00ffff';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -9544,6 +9856,11 @@ async function loadUniverseModule() {
 function switchToTableView() {
     if (currentView === 'table') return;
     
+    // IMPORTANT: Save Universe graphs to Library before stopping
+    if (universeModule) {
+        saveUniverseGraphsToLibrary();
+    }
+    
     currentView = 'table';
     
     // Update toggle buttons
@@ -9553,7 +9870,7 @@ function switchToTableView() {
     // Hide universe nav controls
     if (universeNavControls) universeNavControls.style.display = 'none';
     
-    // Stop universe
+    // Stop universe (but graphs are now saved)
     if (universeModule) {
         universeModule.stopUniverse();
     }
@@ -9568,7 +9885,50 @@ function switchToTableView() {
         container.style.display = 'block';
     }
     
-    console.log('Switched to table view');
+    // Refresh table to show any newly added graphs
+    updateLibraryUI();
+    
+    console.log('Switched to table view (graphs preserved)');
+}
+
+/**
+ * Save all graphs from Universe to Library (avoiding duplicates)
+ */
+function saveUniverseGraphsToLibrary() {
+    if (!universeModule) return;
+    
+    const universeState = universeModule.getUniverseState();
+    if (!universeState.graphNodes || universeState.graphNodes.size === 0) {
+        console.log('[Library] No Universe graphs to save');
+        return;
+    }
+    
+    let added = 0;
+    let duplicates = 0;
+    
+    universeState.graphNodes.forEach((nodeData, graphId) => {
+        const graphData = nodeData.data;
+        if (!graphData || !graphData.edges) return;
+        
+        // Try to add to library (handles deduplication internally)
+        const result = addToLibrary(graphData, {
+            name: graphData.name || graphData.family || `Graph ${graphData.n}`,
+            source: 'universe',
+            tags: graphData.isPhysicallyRealizable ? ['physically-realizable'] : []
+        });
+        
+        if (result.success) {
+            added++;
+        } else if (result.reason === 'duplicate') {
+            duplicates++;
+        }
+    });
+    
+    console.log(`[Library] Saved Universe graphs: ${added} added, ${duplicates} duplicates skipped`);
+    
+    if (added > 0) {
+        showLibraryToast(`Saved ${added} graphs from Universe to Library`, 'success');
+    }
 }
 
 /**
@@ -10217,7 +10577,11 @@ async function _generateTestGraphsForUniverseImpl() {
         platonic: document.getElementById('test-family-platonic')?.checked ?? true,
         mobius: document.getElementById('test-family-mobius')?.checked ?? false,
         fivebar: document.getElementById('test-family-fivebar')?.checked ?? false,
-        pendulum: document.getElementById('test-family-pendulum')?.checked ?? false
+        pendulum: document.getElementById('test-family-pendulum')?.checked ?? false,
+        // Physically realizable systems
+        massChain: document.getElementById('test-family-mass-chain')?.checked ?? true,
+        massDrum: document.getElementById('test-family-mass-drum')?.checked ?? true,
+        massCantilever: document.getElementById('test-family-mass-cantilever')?.checked ?? false
     };
     
     const nMin = parseInt(document.getElementById('test-n-min')?.value) || 4;
@@ -10345,6 +10709,42 @@ async function _generateTestGraphsForUniverseImpl() {
         }
     }
     
+    // Physically Realizable Systems
+    if (families.massChain) {
+        // Mass-spring chain: n masses connected by n+1 springs (including grounded ends)
+        // Total vertices = 2n + 1 (n masses + n-1 internal springs + 2 grounded springs)
+        // Actually simpler: n masses, n+1 springs = 2n+1 total for chain with both ends grounded
+        for (let masses = 2; masses <= Math.min(8, nMax); masses++) {
+            const totalNodes = 2 * masses + 1;  // masses + internal springs + 2 grounded
+            if (totalNodes >= nMin && totalNodes <= nMax) {
+                testGraphs.push(generateMassChainGraph(masses));
+            }
+        }
+    }
+    
+    if (families.massDrum) {
+        // Mass-spring drum: center mass + n outer masses connected by springs
+        // For k branches: 1 center mass + k outer masses + k radial springs + k grounded springs
+        // Total = 1 + k + k + k = 1 + 3k (but we double-count... actually 2k+1 nodes)
+        for (let branches = 3; branches <= Math.min(10, nMax); branches++) {
+            const totalNodes = 2 * branches + 1;  // 1 center + branches masses + branches springs
+            if (totalNodes >= nMin && totalNodes <= nMax) {
+                testGraphs.push(generateMassDrumGraph(branches));
+            }
+        }
+    }
+    
+    if (families.massCantilever) {
+        // Cantilever beam: fixed at one end, free at other
+        // n sections: n masses, n springs (including 1 grounded at fixed end)
+        for (let sections = 2; sections <= Math.min(8, nMax); sections++) {
+            const totalNodes = 2 * sections;  // n masses + n springs
+            if (totalNodes >= nMin && totalNodes <= nMax) {
+                testGraphs.push(generateMassCantileverGraph(sections));
+            }
+        }
+    }
+    
     // Deduplicate test graphs themselves (in case of any logic issues)
     const seenTestKeys = new Set();
     const dedupedTestGraphs = testGraphs.filter(g => {
@@ -10391,6 +10791,12 @@ async function _generateTestGraphsForUniverseImpl() {
             if (/^Tetrahedron/i.test(text) || /^Octahedron/i.test(text) || 
                 /^Cube$/i.test(text) || /^Icosahedron/i.test(text) || 
                 /^Dodecahedron/i.test(text) || text === 'Platonic') return 'Platonic';
+            // Physically realizable systems
+            if (/^Mass Chain/i.test(text) || text === 'Mass Chain') return 'Mass Chain';
+            if (/^Mass Drum/i.test(text) || text === 'Mass Drum') return 'Mass Drum';
+            if (/^Cantilever/i.test(text) || text === 'Cantilever') return 'Cantilever';
+            if (/^Pendulum/i.test(text) || /Link Pendulum/i.test(text)) return 'Pendulum';
+            if (/^n-Bar/i.test(text) || /-Bar Mechanism/i.test(text)) return 'n-Bar';
         }
         
         // Try type field as fallback
@@ -10402,7 +10808,9 @@ async function _generateTestGraphsForUniverseImpl() {
                 'ladder': 'Ladder', 'petersen': 'Petersen', 'tree': 'Tree',
                 'prism': 'Prism', 'friendship': 'Friendship', 'crown': 'Crown',
                 'book': 'Book', 'fan': 'Fan', 'gear': 'Gear', 'helm': 'Helm',
-                'turan': 'Turán', 'platonic': 'Platonic', 'mobius': 'Möbius'
+                'turan': 'Turán', 'platonic': 'Platonic', 'mobius': 'Möbius',
+                'mass_chain': 'Mass Chain', 'mass_drum': 'Mass Drum', 
+                'cantilever': 'Cantilever', 'pendulum': 'Pendulum', 'nbar': 'n-Bar'
             };
             if (typeMap[g.type]) return typeMap[g.type];
         }
@@ -11184,6 +11592,162 @@ function generateThreeLinkPendulumGraph() {
 }
 
 // =====================================================
+// PHYSICALLY REALIZABLE SYSTEM GENERATORS
+// =====================================================
+
+/**
+ * Generate Mass-Spring Chain graph
+ * Chain with n masses connected by springs, grounded at both ends
+ * Total: n masses + (n-1) internal springs + 2 grounded springs = 2n+1 nodes
+ * Structure: G - M - S - M - S - M - ... - M - G
+ *            (grounded spring - mass - spring - mass - ... - grounded spring)
+ */
+function generateMassChainGraph(masses) {
+    if (masses < 2) masses = 2;
+    
+    // Layout: masses (0 to masses-1), internal springs (masses to 2*masses-2), 
+    //         left grounded (2*masses-1), right grounded (2*masses)
+    const n = 2 * masses + 1;
+    const edges = [];
+    
+    // Indices
+    const massBase = 0;
+    const springBase = masses;
+    const leftGround = 2 * masses - 1;
+    const rightGround = 2 * masses;
+    
+    // Left grounded spring connects to first mass
+    edges.push([leftGround, massBase]);
+    
+    // Internal springs connect adjacent masses
+    for (let i = 0; i < masses - 1; i++) {
+        const spring = springBase + i;
+        const massLeft = massBase + i;
+        const massRight = massBase + i + 1;
+        edges.push([massLeft, spring]);
+        edges.push([spring, massRight]);
+    }
+    
+    // Right grounded spring connects to last mass
+    edges.push([massBase + masses - 1, rightGround]);
+    
+    // Spectral radius for chain (approximately related to 2cos pattern)
+    const spectralRadius = 2;  // Approximate - exact depends on topology
+    
+    return {
+        n,
+        edges,
+        edgeCount: edges.length,
+        name: `Mass Chain (${masses})`,
+        family: 'Mass Chain',
+        spectralRadius: spectralRadius,
+        analyticalRho: '≈2 (bounded)',
+        expectedAlpha: 0,
+        masses: masses,
+        isPhysicallyRealizable: true,
+        description: `${masses}-mass chain with grounded ends`
+    };
+}
+
+/**
+ * Generate Mass-Spring Drum graph
+ * Center mass connected to k outer masses via springs, outer masses have grounded springs
+ * Total: 1 center + k outer masses + k radial springs + k grounded springs = 2k+1 nodes
+ */
+function generateMassDrumGraph(branches) {
+    if (branches < 3) branches = 3;
+    
+    // Layout: center mass (0), outer masses (1 to branches), 
+    //         radial springs (branches+1 to 2*branches), 
+    //         grounded springs would be separate but for simplicity we use star topology
+    const n = 2 * branches + 1;
+    const edges = [];
+    
+    // Center mass at index 0
+    // Outer masses at indices 1 to branches
+    // Radial springs at indices branches+1 to 2*branches
+    
+    const centerMass = 0;
+    const outerMassBase = 1;
+    const radialSpringBase = branches + 1;
+    
+    // Connect center to outer masses via radial springs
+    for (let i = 0; i < branches; i++) {
+        const outerMass = outerMassBase + i;
+        const radialSpring = radialSpringBase + i;
+        // Center - spring - outer
+        edges.push([centerMass, radialSpring]);
+        edges.push([radialSpring, outerMass]);
+    }
+    
+    // Spectral radius: star-like structure
+    const spectralRadius = Math.sqrt(branches);
+    
+    return {
+        n,
+        edges,
+        edgeCount: edges.length,
+        name: `Mass Drum (${branches})`,
+        family: 'Mass Drum',
+        spectralRadius: spectralRadius,
+        analyticalRho: `√${branches}`,
+        expectedAlpha: 0,
+        branches: branches,
+        isPhysicallyRealizable: true,
+        description: `${branches}-branch drum: center mass with ${branches} outer masses via springs`
+    };
+}
+
+/**
+ * Generate Mass-Spring Cantilever graph
+ * Beam fixed at one end: n masses connected by springs, one end grounded
+ * Total: n masses + n springs (including 1 grounded at fixed end) = 2n nodes
+ */
+function generateMassCantileverGraph(sections) {
+    if (sections < 2) sections = 2;
+    
+    const n = 2 * sections;
+    const edges = [];
+    
+    // Masses: 0 to sections-1
+    // Internal springs: sections to 2*sections-2
+    // Grounded spring: 2*sections-1
+    
+    const massBase = 0;
+    const springBase = sections;
+    const groundedSpring = 2 * sections - 1;
+    
+    // Grounded spring at fixed end connects to first mass
+    edges.push([groundedSpring, massBase]);
+    
+    // Internal springs connect adjacent masses
+    for (let i = 0; i < sections - 1; i++) {
+        const spring = springBase + i;
+        const massLeft = massBase + i;
+        const massRight = massBase + i + 1;
+        edges.push([massLeft, spring]);
+        edges.push([spring, massRight]);
+    }
+    
+    // Spectral radius (cantilever modes)
+    const spectralRadius = 2;  // Approximate
+    
+    return {
+        n,
+        edges,
+        edgeCount: edges.length,
+        name: `Cantilever (${sections})`,
+        family: 'Cantilever',
+        spectralRadius: spectralRadius,
+        analyticalRho: '≈2 (bounded)',
+        expectedAlpha: 0,
+        sections: sections,
+        isPhysicallyRealizable: true,
+        description: `${sections}-section cantilever beam (fixed at one end)`
+    };
+}
+
+// =====================================================
 // ADDITIONAL GRAPH FAMILY GENERATORS
 // =====================================================
 
@@ -11838,7 +12402,7 @@ function performPhysicsAudit() {
     try {
         
         // ALWAYS discover partition for any size graph (BFS is O(n+e), fast)
-        // Reset partition if it doesn't match current matrix size
+        // But respect template-provided partitions if they're valid
         const partitionTotal = physicsPartition.pIndices.length + physicsPartition.qIndices.length;
         const partitionMax = Math.max(
             ...physicsPartition.pIndices, 
@@ -11879,6 +12443,22 @@ function performPhysicsAudit() {
                 // Create engine with sequential partition
                 currentPhysicsEngine = new PhysicsEngine(state.adjacencyMatrix, N);
             }
+        } else {
+            // Valid partition exists (likely from template) - use it
+            console.log(`[Physics] Using existing partition: p=${physicsPartition.pIndices.length}, q=${physicsPartition.qIndices.length}`);
+            
+            // Update N input to match
+            if (physicsNValue) {
+                physicsNValue.value = physicsPartition.pIndices.length;
+            }
+            
+            // Create engine with template partition
+            currentPhysicsEngine = new PhysicsEngine(
+                state.adjacencyMatrix,
+                null,
+                physicsPartition.pIndices,
+                physicsPartition.qIndices
+            );
         }
         
         // Build partition grid (shows message for large graphs)
@@ -13010,9 +13590,24 @@ function onGraphChanged() {
     originalMatrixBackup = null;
     hideRectificationUI();
     
-    // IMPORTANT: Reset partition when graph changes - old indices are invalid
-    // This ensures buildPartitionGrid creates buttons for ALL nodes
-    physicsPartition = { pIndices: [], qIndices: [] };
+    // Check if current partition is valid for the new graph size
+    // Only reset if partition doesn't match current matrix size
+    const matrixSize = state.adjacencyMatrix ? state.adjacencyMatrix.length : 0;
+    const partitionTotal = physicsPartition.pIndices.length + physicsPartition.qIndices.length;
+    const partitionMax = Math.max(
+        ...physicsPartition.pIndices, 
+        ...physicsPartition.qIndices, 
+        -1
+    );
+    
+    // Only reset partition if it's invalid for the current graph
+    // This preserves template-provided partitions
+    if (partitionTotal !== matrixSize || partitionMax >= matrixSize) {
+        console.log('[Physics] Resetting invalid partition for graph change');
+        physicsPartition = { pIndices: [], qIndices: [] };
+    } else {
+        console.log('[Physics] Keeping valid partition from template');
+    }
     
     // Clear eigenvalue caches so they're recomputed for the new graph
     clearAnalyticCache();

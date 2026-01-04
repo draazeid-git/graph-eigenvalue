@@ -4848,6 +4848,7 @@ export function getUniverseState() {
         active: universeState.active,
         galaxyCount: universeState.galaxies.size,
         graphCount: universeState.graphNodes.size,
+        graphNodes: universeState.graphNodes,  // Include for data access
         cameraPosition: universeState.camera?.position.clone(),
         selectedGraphId: universeState.selectedNode?.userData.graphId,
         spectralMode: true  // Always spectral mode now
@@ -4901,6 +4902,29 @@ export function addCustomGraph(graphData, expanded = true) {
         return null;
     }
     
+    // Check for duplicate names in Universe
+    const newName = graphData.name || `Custom G(${graphData.n}, ${graphData.edges?.length || 0})`;
+    let finalName = newName;
+    let nameCounter = 1;
+    
+    // Check if name already exists
+    const existingNames = new Set();
+    universeState.graphNodes.forEach((nodeData, id) => {
+        if (nodeData.data && nodeData.data.name) {
+            existingNames.add(nodeData.data.name);
+        }
+    });
+    
+    // If name exists, add a suffix
+    while (existingNames.has(finalName)) {
+        nameCounter++;
+        finalName = `${newName} (${nameCounter})`;
+    }
+    
+    if (finalName !== newName) {
+        console.log(`[Universe] Renamed duplicate: "${newName}" → "${finalName}"`);
+    }
+    
     // Generate unique ID
     const graphId = `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
@@ -4941,14 +4965,14 @@ export function addCustomGraph(graphData, expanded = true) {
     
     universeState.scene.add(graphMesh);
     
-    // Store in graphNodes
+    // Store in graphNodes (use finalName to avoid duplicates)
     universeState.graphNodes.set(graphId, {
         mesh: graphMesh,
         data: {
             ...graphData,
             id: graphId,
             family: graphData.family || 'Custom',
-            name: graphData.name || `Custom G(${graphData.n}, ${graphData.edges?.length || 0})`,
+            name: finalName,  // Use deduped name
             isCustom: true,  // Mark as custom for analytic highlight mode
             isBuilt: true    // Also mark as built
         },
@@ -4957,14 +4981,14 @@ export function addCustomGraph(graphData, expanded = true) {
         expanded: expanded
     });
     
-    // Add label - higher for expanded graphs
-    const label = createTextSprite(graphData.name || 'Custom', 0x00ffff, 0.6);
+    // Add label - higher for expanded graphs (use finalName)
+    const label = createTextSprite(finalName, 0x00ffff, 0.6);
     label.position.copy(position);
     label.position.y += expanded ? 35 : 18;
     universeState.scene.add(label);
     graphMesh.userData.label = label;
     
-    console.log(`Added custom graph "${graphData.name}" at position (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
+    console.log(`Added custom graph "${finalName}" at position (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`);
     
     return graphId;
 }
@@ -5007,6 +5031,10 @@ function getFamilyBase(family) {
     if (familyLower.includes('complete') && familyLower.includes('bipartite')) return 'Complete Bipartite';
     if (familyLower.includes('complete')) return 'Complete';
     if (familyLower.includes('bipartite')) return 'Bipartite';
+    // Physically realizable systems
+    if (familyLower.includes('mass chain') || familyLower.includes('chain')) return 'Mass Chain';
+    if (familyLower.includes('mass drum') || familyLower.includes('drum')) return 'Mass Drum';
+    if (familyLower.includes('cantilever')) return 'Cantilever';
     
     // Check if the first word is a known family
     const firstWord = family.split(' ')[0];

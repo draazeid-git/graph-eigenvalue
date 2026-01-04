@@ -930,9 +930,11 @@ export async function showAnalysis() {
             let anaHtml = '<div class="eigenvalues-list">';
             graphInfo.eigenvalues.forEach(ev => {
                 const value = ev.value !== undefined ? ev.value : ev;
+                // Handle both numeric and string values (e.g., "√5", "2cos(π/5)")
+                const displayValue = (typeof value === 'number') ? value.toFixed(6) : String(value);
                 anaHtml += `
                     <div class="eigenvalue-item">
-                        λ = <span class="real-part">${value.toFixed(6)}</span>
+                        λ = <span class="real-part">${displayValue}</span>
                         ${ev.multiplicity ? ' (mult. ' + ev.multiplicity + ')' : ''}
                     </div>`;
             });

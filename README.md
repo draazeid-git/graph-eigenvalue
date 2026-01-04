@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-yellow.svg)](https://www.javascript.com/)
 [![Three.js](https://img.shields.io/badge/Three.js-r160+-black.svg)](https://threejs.org/)
-[![Version](https://img.shields.io/badge/Version-7.12-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
+[![Version](https://img.shields.io/badge/Version-7.24-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
 
 **A powerful web-based tool for visualizing graph structures, computing eigenvalues with exact arithmetic, exploring spectral graph theory through an immersive 3D "Graph Universe", and analyzing port-Hamiltonian realizability for mass-spring systems.**
 
@@ -16,7 +16,7 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [What's New in v7.12](#whats-new-in-v712)
+- [What's New in v7.24](#whats-new-in-v724)
 - [Key Features](#key-features)
 - [Physics Engine](#physics-engine)
 - [Graph Universe](#graph-universe)
@@ -48,11 +48,43 @@ The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application fo
 
 ---
 
-## What's New in v7.12
+## What's New in v7.24
+
+### 🐛 Bug Fixes
+
+#### Enhanced Visualization Dashboard - Phase Plot Fix
+
+Fixed a critical bug where the phase plot in the Enhanced Visualization Dashboard showed constant zero values for one axis (e.g., `x1=0.00`) even when dynamics were running correctly.
+
+**Root Cause:** The Enhanced Visualization was using the regular phase diagram's trail data, which was only updated when the "Enable Phase Diagram" checkbox in the Simulate tab was checked.
+
+**Solution:** 
+- Added independent `enhancedPhaseTrail` that computes phase values directly from dynamics state
+- Enhanced Visualization now works correctly regardless of the regular phase plot checkbox state
+- Fixed axis label mismatches between HTML option values and JavaScript switch cases
+
+| Component | Before | After |
+|-----------|--------|-------|
+| Phase trail source | Shared with regular phase plot | Independent trail for Enhanced Viz |
+| Checkbox dependency | Required "Enable Phase Diagram" | Works independently |
+| Mode labels | Mismatched (`state-state`) | Correct (`displacement`, `velocity`, etc.) |
+
+### 🔧 Previous Fixes (v7.20-v7.23)
+
+| Version | Fix |
+|---------|-----|
+| v7.23 | Universe graph saving when switching to Table view |
+| v7.22 | Mass-tree structure changed from binary tree to star-tree for realizability |
+| v7.21 | `toFixed` error handling for symbolic eigenvalues like "√5" |
+| v7.20 | Partition preservation bug - templates now reset `physicsPartition = {}` |
+
+---
+
+## Key Features from v7.12
 
 ### 🔧 Physics Engine & Mass-Spring Systems
 
-The SIMULATE tab now includes comprehensive **port-Hamiltonian realizability analysis**:
+The SIMULATE tab includes comprehensive **port-Hamiltonian realizability analysis**:
 
 | Feature | Description |
 |---------|-------------|
@@ -72,7 +104,7 @@ Eight pre-built realizable mass-spring configurations:
 |----------|-------------|-------|
 | **Mass-Spring Chain** | Linear chain with grounded ends | 2n+1 |
 | **Mass-Spring Star** | Central mass with radiating springs | 2n+1 |
-| **Mass-Spring Tree** | Binary tree structure | 2^(d+1)-1 |
+| **Mass-Spring Tree** | Star-tree structure (realizable) | varies |
 | **Mass-Spring Cantilever** | Fixed-free beam model | 2n |
 | **Mass-Spring Bridge** | Doubly-grounded structure | 2n+1 |
 | **Mass-Spring Grid** | m×n checkerboard pattern | m×n + springs |
@@ -112,13 +144,6 @@ Size limits prevent freezing on large graphs:
 | Physics Audit | n ≤ 40 | Shows warning message |
 | Analysis/Eigenvalues | n ≤ 40 | Basic properties still shown |
 | Partition Grid UI | n ≤ 40 | Disabled for large graphs |
-
-### 🧹 UI Simplifications
-
-- Removed **Search Library** section from Library tab
-- Removed **Jump to Galaxy** dropdown from Universe navigation  
-- Removed duplicate **Current Phase Plot** - kept only Enhanced Phase Plot
-- Eigenmode animation **stops automatically** when switching tabs
 
 ---
 
@@ -351,7 +376,21 @@ graph-project/
 
 ## Version History
 
-### v7.12 (Current) - Physics Engine & Mass-Spring Systems
+### v7.24 (Current) - Enhanced Visualization Phase Plot Fix
+
+- 🐛 **Phase Plot Bug Fix** - Enhanced Visualization Dashboard now shows correct phase data independently
+- 🔧 **Independent Phase Trail** - Added `enhancedPhaseTrail` computed directly from dynamics state
+- 🏷️ **Axis Label Fix** - Corrected mode label mismatches in Enhanced Visualization
+- 🧹 **Trail Management** - Proper clearing on mode/node changes and popup open/close
+
+### v7.20-v7.23 - Stability Improvements
+
+- 🔧 **Partition Preservation** - Templates correctly reset physics partition
+- 🐛 **toFixed Error** - Handles symbolic eigenvalues like "√5"
+- 🌳 **Mass-Tree Fix** - Changed from binary tree to star-tree for realizability
+- 💾 **Universe Saving** - Switching to Table view now saves Universe graphs to Library
+
+### v7.12 - Physics Engine & Mass-Spring Systems
 
 - 🔧 **Port-Hamiltonian Analysis** - Realizability audit for mass-spring systems
 - 🏗️ **8 Mass-Spring Templates** - Chain, Star, Tree, Cantilever, Bridge, Grid, Drum, Drum Constrained
@@ -398,7 +437,7 @@ If you use this tool in academic work:
   title = {Zeid-Rosenberg Eigenvalue Explorer},
   author = {Zeid, Ashraf},
   year = {2024},
-  version = {7.12},
+  version = {7.24},
   url = {https://github.com/draazeid-git/graph-eigenvalue}
 }
 ```

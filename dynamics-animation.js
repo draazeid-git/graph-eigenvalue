@@ -1576,9 +1576,10 @@ function updatePhaseDiagram() {
     const dxi = nodeDerivatives[nodeI];
     const dxj = nodeDerivatives[nodeJ];
     
-    // Get adjacency matrix entry for edge power calculation
-    const A = state.adjacencyMatrix;
-    const A_ij = (A && A[nodeI] && A[nodeI][nodeJ] !== undefined) ? A[nodeI][nodeJ] : 0;
+    // Get symmetric adjacency matrix entry for edge power calculation
+    // Use symmetricAdjMatrix (1 if connected, 0 if not) rather than adjacencyMatrix (which has +1/-1 for direction)
+    const symA = state.symmetricAdjMatrix;
+    const A_ij = (symA && symA[nodeI] && symA[nodeI][nodeJ] !== undefined) ? symA[nodeI][nodeJ] : 0;
     
     let plotX, plotY;
     
@@ -1600,7 +1601,7 @@ function updatePhaseDiagram() {
             plotY = xj * dxj;
             break;
         case 'edge-power':
-            // True edge power: P_ij = A_ij · x_i · x_j
+            // True edge power: P_ij = A_ij · x_i · x_j (using symmetric adjacency)
             plotX = xi;
             plotY = A_ij * xi * xj;
             break;
