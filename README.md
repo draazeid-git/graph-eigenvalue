@@ -1,13 +1,20 @@
 # 🌐 Zeid-Rosenberg Eigenvalue Explorer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/Version-7.25-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
+[![Live Demo](https://img.shields.io/badge/Demo-Live-brightgreen)](https://draazeid-git.github.io/graph-eigenvalue/)
+[![GitHub stars](https://img.shields.io/github/stars/draazeid-git/graph-eigenvalue?style=social)](https://github.com/draazeid-git/graph-eigenvalue/stargazers)
+
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-yellow.svg)](https://www.javascript.com/)
 [![Three.js](https://img.shields.io/badge/Three.js-r160+-black.svg)](https://threejs.org/)
-[![Version](https://img.shields.io/badge/Version-7.25-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
+[![WebGL](https://img.shields.io/badge/WebGL-2.0-red.svg)](https://www.khronos.org/webgl/)
+[![No Dependencies](https://img.shields.io/badge/Dependencies-None-success)](https://github.com/draazeid-git/graph-eigenvalue)
 
 **A web-based tool for exploring how graph topology influences eigenspectra in the special case of uniform parameters (±1). Visualize graph structures, compute eigenvalues with exact arithmetic, explore spectral graph theory through an immersive 3D "Graph Universe", and analyze port-Hamiltonian realizability for physical network analogs.**
 
 🔗 **Live Demo:** [https://draazeid-git.github.io/graph-eigenvalue/](https://draazeid-git.github.io/graph-eigenvalue/)
+
+📖 **Wiki Documentation:** [https://github.com/draazeid-git/graph-eigenvalue/wiki](https://github.com/draazeid-git/graph-eigenvalue/wiki)
 
 ![Graph Visualization Demo](docs/images/demo-wheel-graph.jpg)
 
@@ -506,8 +513,41 @@ graph-project/
 
 ## References
 
-- van der Schaft, A., & Maschke, B. (2012). Port-Hamiltonian Systems on Graphs. *SIAM Journal on Control and Optimization*.
-- Zeid, A. (2024). Eigenvalue Estimation Framework for Spectral Graph Theory.
+### Port-Hamiltonian Systems & Network Theory
+
+- van der Schaft, A., & Maschke, B. (2014). Port-Hamiltonian Systems on Graphs. *SIAM Journal on Control and Optimization*, 51(2), 906-937. https://doi.org/10.1137/110840091
+
+- van der Schaft, A., & Maschke, B. (2013). Port-Hamiltonian Systems: An Introductory Survey. *Proceedings of the International Congress of Mathematicians*, Madrid.
+
+- Maschke, B., & van der Schaft, A. (1992). Port-Controlled Hamiltonian Systems: Modelling Origins and System-Theoretic Properties. *IFAC Proceedings Volumes*, 25(13), 359-365.
+
+- van der Schaft, A. (2017). *L2-Gain and Passivity Techniques in Nonlinear Control* (3rd ed.). Springer.
+
+### Spectral Graph Theory
+
+- Brouwer, A. E., & Haemers, W. H. (2012). *Spectra of Graphs*. Springer. https://doi.org/10.1007/978-1-4614-1939-6
+
+- Chung, F. R. K. (1997). *Spectral Graph Theory*. American Mathematical Society.
+
+- Cvetković, D., Rowlinson, P., & Simić, S. (2010). *An Introduction to the Theory of Graph Spectra*. Cambridge University Press.
+
+- Godsil, C., & Royle, G. (2001). *Algebraic Graph Theory*. Springer.
+
+### Numerical Methods & Algorithms
+
+- Souriau, J.-M. (1948). Une méthode pour la décomposition spectrale et l'inversion des matrices. *Comptes Rendus*, 227, 1010-1011.
+
+- Frame, J. S. (1949). A Simple Recursion Formula for Inverting a Matrix. *Bulletin of the American Mathematical Society*, 55, 1045.
+
+- Faddeev, D. K., & Faddeeva, V. N. (1963). *Computational Methods of Linear Algebra*. Freeman.
+
+- Iserles, A., Munthe-Kaas, H. Z., Nørsett, S. P., & Zanna, A. (2000). Lie-group Methods. *Acta Numerica*, 9, 215-365.
+
+### This Implementation
+
+- Zeid, A. (2024). Eigenvalue Estimation Framework for Spectral Graph Theory. *Working Paper*.
+
+- Zeid, A. (2025). Zeid-Rosenberg Eigenvalue Explorer: A Visual Tool for Spectral Graph Theory and Port-Hamiltonian Systems. https://github.com/draazeid-git/graph-eigenvalue
 
 ---
 
@@ -525,9 +565,25 @@ If you use this tool in academic work:
 @software{zeid_rosenberg_explorer,
   title = {Zeid-Rosenberg Eigenvalue Explorer},
   author = {Zeid, Ashraf},
-  year = {2024},
-  version = {7.24},
-  url = {https://github.com/draazeid-git/graph-eigenvalue}
+  year = {2025},
+  version = {7.25},
+  url = {https://github.com/draazeid-git/graph-eigenvalue},
+  note = {A visual tool for spectral graph theory and port-Hamiltonian systems}
+}
+```
+
+For the underlying theoretical framework:
+
+```bibtex
+@article{vanderschaft2014port,
+  title = {Port-{H}amiltonian Systems on Graphs},
+  author = {van der Schaft, Arjan and Maschke, Bernhard},
+  journal = {SIAM Journal on Control and Optimization},
+  volume = {51},
+  number = {2},
+  pages = {906--937},
+  year = {2014},
+  publisher = {SIAM}
 }
 ```
 

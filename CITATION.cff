@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+title: "Zeid-Rosenberg Eigenvalue Explorer"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: "Zeid"
+    given-names: "Ashraf"
+    orcid: ""
+version: "7.25"
+date-released: "2025-01-04"
+url: "https://github.com/draazeid-git/graph-eigenvalue"
+repository-code: "https://github.com/draazeid-git/graph-eigenvalue"
+license: MIT
+keywords:
+  - spectral graph theory
+  - eigenvalues
+  - port-Hamiltonian systems
+  - visualization
+  - graph theory
+  - linear systems
+  - network topology
+  - mass-spring systems
+  - LC circuits
+abstract: >-
+  A web-based tool for exploring how graph topology influences 
+  eigenspectra in the special case of uniform parameters (±1). 
+  Features include exact eigenvalue computation via the 
+  Souriau-Frame-Faddeev algorithm, port-Hamiltonian realizability 
+  analysis, and an immersive 3D Graph Universe for visualizing 
+  spectral properties across graph families.
+references:
+  - type: article
+    authors:
+      - family-names: "van der Schaft"
+        given-names: "Arjan"
+      - family-names: "Maschke"
+        given-names: "Bernhard"
+    title: "Port-Hamiltonian Systems on Graphs"
+    journal: "SIAM Journal on Control and Optimization"
+    volume: 51
+    issue: 2
+    start: 906
+    end: 937
+    year: 2014
+    doi: "10.1137/110840091"
+  - type: book
+    authors:
+      - family-names: "Brouwer"
+        given-names: "Andries E."
+      - family-names: "Haemers"
+        given-names: "Willem H."
+    title: "Spectra of Graphs"
+    publisher:
+      name: "Springer"
+    year: 2012
+    doi: "10.1007/978-1-4614-1939-6"
