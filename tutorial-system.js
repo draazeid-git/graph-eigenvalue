@@ -44,9 +44,10 @@ export class TutorialEngine {
             <div class="tutorial-backdrop"></div>
             <div class="tutorial-spotlight"></div>
             <div class="tutorial-dialog">
-                <div class="tutorial-header">
+                <div class="tutorial-header tutorial-drag-handle">
                     <span class="tutorial-tour-name"></span>
                     <span class="tutorial-step-counter"></span>
+                    <span class="tutorial-drag-hint">⋮⋮</span>
                 </div>
                 <div class="tutorial-content">
                     <div class="tutorial-title"></div>
@@ -74,6 +75,7 @@ export class TutorialEngine {
         this.backdrop = this.overlay.querySelector('.tutorial-backdrop');
         this.spotlight = this.overlay.querySelector('.tutorial-spotlight');
         this.dialog = this.overlay.querySelector('.tutorial-dialog');
+        this.dialogHeader = this.overlay.querySelector('.tutorial-header');
         this.tourNameEl = this.overlay.querySelector('.tutorial-tour-name');
         this.stepCounterEl = this.overlay.querySelector('.tutorial-step-counter');
         this.titleEl = this.overlay.querySelector('.tutorial-title');
@@ -95,6 +97,149 @@ export class TutorialEngine {
                 this.nextStep();
             }
         });
+        
+        // Setup dialog dragging
+        this.setupDragging();
+    }
+    
+    // =====================================================
+    // DIALOG DRAGGING
+    // =====================================================
+    
+    setupDragging() {
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dialogStartX = 0;
+        let dialogStartY = 0;
+        
+        const onMouseDown = (e) => {
+            // Allow drag from header OR edges of dialog
+            const isHeader = e.target.closest('.tutorial-drag-handle');
+            const isEdge = this.isNearEdge(e);
+            
+            if (!isHeader && !isEdge) return;
+            
+            isDragging = true;
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            
+            // Get current dialog position
+            const rect = this.dialog.getBoundingClientRect();
+            dialogStartX = rect.left;
+            dialogStartY = rect.top;
+            
+            // Remove any transform so we work with absolute positioning
+            this.dialog.style.transform = 'none';
+            this.dialog.style.left = `${dialogStartX}px`;
+            this.dialog.style.top = `${dialogStartY}px`;
+            
+            this.dialog.classList.add('dragging');
+            e.preventDefault();
+        };
+        
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            
+            const deltaX = e.clientX - dragStartX;
+            const deltaY = e.clientY - dragStartY;
+            
+            let newX = dialogStartX + deltaX;
+            let newY = dialogStartY + deltaY;
+            
+            // Keep dialog within viewport bounds
+            const dialogRect = this.dialog.getBoundingClientRect();
+            const maxX = window.innerWidth - dialogRect.width;
+            const maxY = window.innerHeight - dialogRect.height;
+            
+            newX = Math.max(0, Math.min(newX, maxX));
+            newY = Math.max(0, Math.min(newY, maxY));
+            
+            this.dialog.style.left = `${newX}px`;
+            this.dialog.style.top = `${newY}px`;
+        };
+        
+        const onMouseUp = () => {
+            if (isDragging) {
+                isDragging = false;
+                this.dialog.classList.remove('dragging');
+                // Mark as manually positioned so auto-positioning doesn't override
+                this.dialog.dataset.manuallyPositioned = 'true';
+            }
+        };
+        
+        // Add event listeners to dialog itself (for edge dragging)
+        this.dialog.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        
+        // Touch support for mobile
+        this.dialog.addEventListener('touchstart', (e) => {
+            const touch = e.touches[0];
+            onMouseDown({ clientX: touch.clientX, clientY: touch.clientY, target: e.target, preventDefault: () => e.preventDefault() });
+        });
+        
+        document.addEventListener('touchmove', (e) => {
+            if (!isDragging) return;
+            const touch = e.touches[0];
+            onMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+        });
+        
+        document.addEventListener('touchend', onMouseUp);
+        
+        // Show move cursor on edges
+        this.dialog.addEventListener('mousemove', (e) => {
+            if (isDragging) return;
+            if (this.isNearEdge(e)) {
+                this.dialog.style.cursor = 'move';
+            } else if (!e.target.closest('.tutorial-drag-handle')) {
+                this.dialog.style.cursor = 'default';
+            }
+        });
+    }
+    
+    isNearEdge(e) {
+        const rect = this.dialog.getBoundingClientRect();
+        const edgeThreshold = 12; // pixels from edge
+        
+        const nearLeft = e.clientX - rect.left < edgeThreshold;
+        const nearRight = rect.right - e.clientX < edgeThreshold;
+        const nearTop = e.clientY - rect.top < edgeThreshold;
+        const nearBottom = rect.bottom - e.clientY < edgeThreshold;
+        
+        return nearLeft || nearRight || nearTop || nearBottom;
+    }
+    
+    // Ensure dialog is within viewport bounds
+    ensureDialogInViewport() {
+        const rect = this.dialog.getBoundingClientRect();
+        let needsAdjustment = false;
+        let newLeft = rect.left;
+        let newTop = rect.top;
+        
+        // Check if off-screen
+        if (rect.top < 0) {
+            newTop = 10;
+            needsAdjustment = true;
+        }
+        if (rect.left < 0) {
+            newLeft = 10;
+            needsAdjustment = true;
+        }
+        if (rect.bottom > window.innerHeight) {
+            newTop = window.innerHeight - rect.height - 10;
+            needsAdjustment = true;
+        }
+        if (rect.right > window.innerWidth) {
+            newLeft = window.innerWidth - rect.width - 10;
+            needsAdjustment = true;
+        }
+        
+        if (needsAdjustment) {
+            this.dialog.style.transform = 'none';
+            this.dialog.style.left = `${Math.max(10, newLeft)}px`;
+            this.dialog.style.top = `${Math.max(10, newTop)}px`;
+        }
     }
     
     // =====================================================
@@ -169,6 +314,9 @@ export class TutorialEngine {
         // Clean up previous action listener
         this.cleanupActionListener();
         
+        // Reset manual positioning so auto-positioning works for new step
+        this.dialog.dataset.manuallyPositioned = 'false';
+        
         this.currentStepIndex = index;
         const step = steps[index];
         
@@ -222,6 +370,9 @@ export class TutorialEngine {
         } else if (step.target) {
             this.positionDialogNearTarget(step.target);
         }
+        
+        // Always ensure dialog is within viewport after positioning
+        setTimeout(() => this.ensureDialogInViewport(), 50);
         
         // Set up action listener if waiting for action
         if (step.waitFor) {
@@ -327,6 +478,10 @@ export class TutorialEngine {
             this.centerDialog();
             return;
         }
+        
+        // Ensure we stay within viewport
+        left = Math.max(10, Math.min(left, window.innerWidth - dialogRect.width - 10));
+        top = Math.max(10, Math.min(top, window.innerHeight - dialogRect.height - 10));
         
         this.dialog.style.left = `${left}px`;
         this.dialog.style.top = `${top}px`;
