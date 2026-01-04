@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-yellow.svg)](https://www.javascript.com/)
 [![Three.js](https://img.shields.io/badge/Three.js-r160+-black.svg)](https://threejs.org/)
-[![Version](https://img.shields.io/badge/Version-7.24-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
+[![Version](https://img.shields.io/badge/Version-7.25-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
 
 **A powerful web-based tool for visualizing graph structures, computing eigenvalues with exact arithmetic, exploring spectral graph theory through an immersive 3D "Graph Universe", and analyzing port-Hamiltonian realizability for mass-spring systems.**
 
@@ -16,8 +16,9 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
-- [What's New in v7.24](#whats-new-in-v724)
+- [What's New in v7.25](#whats-new-in-v725)
 - [Key Features](#key-features)
+- [Tutorial System](#tutorial-system)
 - [Physics Engine](#physics-engine)
 - [Graph Universe](#graph-universe)
 - [Installation](#installation)
@@ -36,6 +37,7 @@ The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application fo
 
 | Feature | Description |
 |---------|-------------|
+| **Interactive Tutorials** | 12 guided tours for students and researchers |
 | **Graph Universe** | Explore 247+ graphs in 3D space positioned by spectral properties |
 | **Physics Engine** | Port-Hamiltonian realizability audit for mass-spring systems |
 | **Mass-Spring Templates** | 6 pre-built realizable system configurations |
@@ -48,35 +50,87 @@ The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application fo
 
 ---
 
-## What's New in v7.24
+## What's New in v7.25
 
-### 🐛 Bug Fixes
+### 🎓 Interactive Tutorial System
+
+Added a comprehensive interactive tutorial system with 12 guided tours designed for students and researchers:
+
+| Tour | Content |
+|------|---------|
+| **🏗️ Building Graphs** | Templates, force layout, face visualization, product graphs |
+| **✏️ Editing Graphs** | Drag, view, project, distribute, snap-to-grid |
+| **📊 Spectral Analysis** | Skew-symmetric matrix, characteristic polynomial, eigenvalues |
+| **🌊 Eigenmode Animation** | Visualize characteristic vectors in motion |
+| **🎬 Dynamics & Power Flow** | Integrators (Rodrigues/Cayley/Trapezoidal), Enhanced Viz Dashboard |
+| **⚙️ Realizable Systems** | Mass-spring, grounded springs, pin/freeze nodes, rectification |
+| **📐 Bounds & Zeid-Rosenberg** | Eigenvalue bounds, spectral radius, energy estimation |
+| **🌌 Graph Universe** | 3D exploration, axis configuration, spectral metrics |
+| **🔍 Analytic Finder** | Search for graphs with symbolic eigenvalues |
+| **🔗 Mechanisms** | N-bar planar linkage systems |
+| **📚 Library & Saving** | Save, load, export graphs |
+| **⌨️ Keyboard Shortcuts** | All hotkeys for power users |
+
+**Features:**
+- Button-triggered (click **?** button in bottom-right corner)
+- Interactive steps that wait for user actions
+- Progress persistence across sessions
+- Spotlight highlighting of UI elements
+- Keyboard navigation (←/→, Enter, Esc)
+
+### 🐛 Previous Bug Fixes (v7.24)
 
 #### Enhanced Visualization Dashboard - Phase Plot Fix
 
-Fixed a critical bug where the phase plot in the Enhanced Visualization Dashboard showed constant zero values for one axis (e.g., `x1=0.00`) even when dynamics were running correctly.
+Fixed a critical bug where the phase plot in the Enhanced Visualization Dashboard showed constant zero values for one axis.
 
-**Root Cause:** The Enhanced Visualization was using the regular phase diagram's trail data, which was only updated when the "Enable Phase Diagram" checkbox in the Simulate tab was checked.
-
-**Solution:** 
-- Added independent `enhancedPhaseTrail` that computes phase values directly from dynamics state
-- Enhanced Visualization now works correctly regardless of the regular phase plot checkbox state
-- Fixed axis label mismatches between HTML option values and JavaScript switch cases
+**Solution:** Added independent `enhancedPhaseTrail` that computes phase values directly from dynamics state.
 
 | Component | Before | After |
 |-----------|--------|-------|
 | Phase trail source | Shared with regular phase plot | Independent trail for Enhanced Viz |
 | Checkbox dependency | Required "Enable Phase Diagram" | Works independently |
-| Mode labels | Mismatched (`state-state`) | Correct (`displacement`, `velocity`, etc.) |
 
-### 🔧 Previous Fixes (v7.20-v7.23)
+---
 
-| Version | Fix |
-|---------|-----|
-| v7.23 | Universe graph saving when switching to Table view |
-| v7.22 | Mass-tree structure changed from binary tree to star-tree for realizability |
-| v7.21 | `toFixed` error handling for symbolic eigenvalues like "√5" |
-| v7.20 | Partition preservation bug - templates now reset `physicsPartition = {}` |
+## Tutorial System
+
+### Getting Started
+
+Click the **?** button in the bottom-right corner to open the tutorial menu.
+
+### Available Tours
+
+**Getting Started:**
+- 🏗️ Building Graphs - Create and customize graphs with templates, layouts, and products
+- ✏️ Editing Graphs - Manual graph modification, drag mode, projections
+
+**Analysis:**
+- 📊 Spectral Analysis - Examine matrices, polynomials, and eigenvalues
+- 🌊 Eigenmode Animation - Visualize eigenvectors in motion
+- 📐 Bounds & Zeid-Rosenberg - Eigenvalue estimation and bounds
+
+**Simulation:**
+- 🎬 Dynamics & Power Flow - Animate dynamics with different integrators
+- ⚙️ Realizable Linear Systems - Mass-spring physics, grounded springs, pin/freeze
+
+**Advanced:**
+- 🌌 Graph Universe - Explore graphs in 3D spectral space
+- 🔍 Analytic Graph Finder - Find graphs with symbolic eigenvalues
+- 🔗 Planar Links & Mechanisms - N-bar linkage systems
+
+**Utilities:**
+- 📚 Library & Saving - Manage your graph collection
+- ⌨️ Keyboard Shortcuts - Master the hotkeys
+
+### Interactive Features
+
+- **Spotlight highlighting** - Target elements are highlighted with a glowing border
+- **Wait for action** - Some steps require you to complete an action before continuing
+- **Progress tracking** - Completed tours show a ✓ checkmark
+- **Reset progress** - Clear all progress and start fresh
+
+---
 
 ---
 

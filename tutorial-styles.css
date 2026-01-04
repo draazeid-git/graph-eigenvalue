@@ -1,0 +1,618 @@
+/**
+ * Tutorial System Styles
+ * Zeid-Rosenberg Eigenvalue Explorer
+ */
+
+/* =====================================================
+   OVERLAY & SPOTLIGHT
+   ===================================================== */
+
+.tutorial-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10000;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.tutorial-overlay.active {
+    opacity: 1;
+    /* Keep pointer-events: none so clicks pass through to highlighted elements */
+    pointer-events: none;
+}
+
+/* Dark backdrop is created by spotlight's box-shadow, no ::before needed */
+/* For steps without a target, we add a separate backdrop */
+.tutorial-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 1;
+    pointer-events: none;
+}
+
+.tutorial-spotlight {
+    position: absolute;
+    z-index: 2;
+    border-radius: 8px;
+    box-shadow: 
+        0 0 0 9999px rgba(0, 0, 0, 0.75),
+        0 0 20px 5px rgba(74, 158, 255, 0.4),
+        inset 0 0 0 2px rgba(74, 158, 255, 0.6);
+    transition: all 0.3s ease;
+    pointer-events: none;
+}
+
+/* =====================================================
+   DIALOG BOX
+   ===================================================== */
+
+.tutorial-dialog {
+    position: absolute;
+    z-index: 3;
+    width: 380px;
+    max-width: calc(100vw - 40px);
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid #4a9eff;
+    border-radius: 12px;
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.5),
+        0 0 30px rgba(74, 158, 255, 0.2);
+    overflow: hidden;
+    transition: all 0.3s ease;
+    pointer-events: auto; /* Allow clicking dialog buttons */
+}
+
+.tutorial-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(74, 158, 255, 0.15);
+    border-bottom: 1px solid rgba(74, 158, 255, 0.3);
+}
+
+.tutorial-tour-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #4a9eff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.tutorial-step-counter {
+    font-size: 11px;
+    color: #888;
+}
+
+.tutorial-content {
+    padding: 20px;
+}
+
+.tutorial-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 12px;
+    line-height: 1.3;
+}
+
+.tutorial-description {
+    font-size: 14px;
+    color: #ccc;
+    line-height: 1.6;
+}
+
+.tutorial-description p {
+    margin: 0 0 10px 0;
+}
+
+.tutorial-description p:last-child {
+    margin-bottom: 0;
+}
+
+.tutorial-description ul {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.tutorial-description li {
+    margin: 6px 0;
+}
+
+.tutorial-description strong {
+    color: #4a9eff;
+}
+
+.tutorial-description code {
+    background: rgba(74, 158, 255, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Consolas', monospace;
+    font-size: 13px;
+    color: #7ec8ff;
+}
+
+.tutorial-action-hint {
+    margin-top: 16px;
+    padding: 12px;
+    background: rgba(255, 193, 7, 0.15);
+    border: 1px solid rgba(255, 193, 7, 0.3);
+    border-radius: 8px;
+    font-size: 13px;
+    color: #ffc107;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.action-indicator {
+    font-size: 18px;
+    animation: pulse 1.5s infinite;
+}
+
+.action-complete {
+    color: #4caf50;
+    font-size: 18px;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.1); }
+}
+
+/* =====================================================
+   FOOTER & BUTTONS
+   ===================================================== */
+
+.tutorial-footer {
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tutorial-progress-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+
+.tutorial-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4a9eff, #00d4aa);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.tutorial-buttons {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.tutorial-nav {
+    display: flex;
+    gap: 8px;
+}
+
+.tutorial-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tutorial-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.tutorial-btn-prev,
+.tutorial-btn-next {
+    background: rgba(74, 158, 255, 0.2);
+    color: #4a9eff;
+    border: 1px solid rgba(74, 158, 255, 0.3);
+}
+
+.tutorial-btn-prev:hover:not(:disabled),
+.tutorial-btn-next:hover:not(:disabled) {
+    background: rgba(74, 158, 255, 0.3);
+    transform: translateY(-1px);
+}
+
+.tutorial-btn-skip {
+    background: transparent;
+    color: #888;
+    border: 1px solid transparent;
+}
+
+.tutorial-btn-skip:hover {
+    color: #ff6b6b;
+    border-color: rgba(255, 107, 107, 0.3);
+}
+
+.tutorial-btn-primary {
+    background: linear-gradient(135deg, #4a9eff 0%, #00d4aa 100%);
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+}
+
+.tutorial-btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(74, 158, 255, 0.4);
+}
+
+/* =====================================================
+   HELP BUTTON
+   ===================================================== */
+
+.tutorial-help-btn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4a9eff 0%, #00d4aa 100%);
+    border: none;
+    color: #fff;
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+    z-index: 9999;
+    box-shadow: 
+        0 4px 15px rgba(74, 158, 255, 0.4),
+        0 0 20px rgba(74, 158, 255, 0.2);
+    transition: all 0.3s ease;
+}
+
+.tutorial-help-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 
+        0 6px 25px rgba(74, 158, 255, 0.5),
+        0 0 30px rgba(74, 158, 255, 0.3);
+}
+
+.tutorial-help-btn:active {
+    transform: scale(0.95);
+}
+
+/* =====================================================
+   TUTORIAL MENU
+   ===================================================== */
+
+.tutorial-menu {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    width: 360px;
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 120px);
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid #4a9eff;
+    border-radius: 12px;
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.5),
+        0 0 30px rgba(74, 158, 255, 0.2);
+    z-index: 9998;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(20px) scale(0.95);
+    transition: all 0.3s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.tutorial-menu.active {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0) scale(1);
+}
+
+.tutorial-menu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: rgba(74, 158, 255, 0.15);
+    border-bottom: 1px solid rgba(74, 158, 255, 0.3);
+}
+
+.tutorial-menu-header span {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.tutorial-menu-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: #888;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tutorial-menu-close:hover {
+    background: rgba(255, 107, 107, 0.2);
+    color: #ff6b6b;
+}
+
+.tutorial-menu-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.tutorial-menu-section {
+    margin-bottom: 8px;
+}
+
+.tutorial-menu-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 8px 12px 4px;
+}
+
+.tutorial-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tutorial-menu-item:hover {
+    background: rgba(74, 158, 255, 0.15);
+}
+
+.tutorial-menu-item.completed {
+    opacity: 0.7;
+}
+
+.tutorial-menu-item.completed:hover {
+    opacity: 1;
+}
+
+.tutorial-menu-icon {
+    font-size: 24px;
+    width: 36px;
+    text-align: center;
+}
+
+.tutorial-menu-info {
+    flex: 1;
+}
+
+.tutorial-menu-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    margin-bottom: 2px;
+}
+
+.tutorial-menu-desc {
+    font-size: 12px;
+    color: #888;
+}
+
+.tutorial-menu-status {
+    width: 24px;
+    text-align: center;
+    color: #4caf50;
+    font-size: 16px;
+}
+
+.tutorial-menu-footer {
+    padding: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tutorial-btn-reset {
+    width: 100%;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tutorial-btn-reset:hover {
+    background: rgba(255, 107, 107, 0.1);
+    color: #ff6b6b;
+    border-color: rgba(255, 107, 107, 0.3);
+}
+
+/* =====================================================
+   COMPLETION OVERLAY
+   ===================================================== */
+
+.tutorial-completion {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.tutorial-completion.active {
+    opacity: 1;
+}
+
+.tutorial-completion-dialog {
+    text-align: center;
+    padding: 40px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid #4a9eff;
+    border-radius: 16px;
+    box-shadow: 
+        0 10px 40px rgba(0, 0, 0, 0.5),
+        0 0 60px rgba(74, 158, 255, 0.3);
+    transform: scale(0.9);
+    transition: transform 0.3s ease;
+}
+
+.tutorial-completion.active .tutorial-completion-dialog {
+    transform: scale(1);
+}
+
+.tutorial-completion-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+    animation: bounce 0.5s ease;
+}
+
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-20px); }
+}
+
+.tutorial-completion-title {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+.tutorial-completion-message {
+    font-size: 16px;
+    color: #ccc;
+    margin-bottom: 24px;
+}
+
+/* =====================================================
+   RESPONSIVE ADJUSTMENTS
+   ===================================================== */
+
+@media (max-width: 768px) {
+    .tutorial-dialog {
+        width: calc(100vw - 32px);
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+    
+    .tutorial-menu {
+        width: calc(100vw - 32px);
+        right: 16px;
+        bottom: 72px;
+    }
+    
+    .tutorial-help-btn {
+        width: 44px;
+        height: 44px;
+        font-size: 20px;
+        right: 16px;
+        bottom: 16px;
+    }
+}
+
+/* =====================================================
+   CUSTOM SCROLLBAR
+   ===================================================== */
+
+.tutorial-menu-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tutorial-menu-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+}
+
+.tutorial-menu-content::-webkit-scrollbar-thumb {
+    background: rgba(74, 158, 255, 0.3);
+    border-radius: 3px;
+}
+
+.tutorial-menu-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(74, 158, 255, 0.5);
+}
+
+/* =====================================================
+   HIGHLIGHT ANIMATION FOR TARGET ELEMENTS
+   ===================================================== */
+
+.tutorial-highlight-pulse {
+    animation: highlight-pulse 2s infinite;
+}
+
+@keyframes highlight-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 0 0 rgba(74, 158, 255, 0.4);
+    }
+    50% { 
+        box-shadow: 0 0 0 10px rgba(74, 158, 255, 0);
+    }
+}
+
+/* =====================================================
+   TOOLTIP ARROWS (for positioned dialogs)
+   ===================================================== */
+
+.tutorial-dialog[data-position="right"]::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 8px solid transparent;
+    border-right-color: #4a9eff;
+}
+
+.tutorial-dialog[data-position="left"]::before {
+    content: '';
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 8px solid transparent;
+    border-left-color: #4a9eff;
+}
+
+.tutorial-dialog[data-position="bottom"]::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 8px solid transparent;
+    border-bottom-color: #4a9eff;
+}
+
+.tutorial-dialog[data-position="top"]::before {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 8px solid transparent;
+    border-top-color: #4a9eff;
+}

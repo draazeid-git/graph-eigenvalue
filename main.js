@@ -95,6 +95,14 @@ import {
     isPhysicallyRealizable
 } from './physics-engine.js';
 
+// Tutorial System for interactive guided tours
+import {
+    initTutorialSystem,
+    getTutorialEngine,
+    getTutorialMenu,
+    TOURS
+} from './tutorial-system.js';
+
 // =====================================================
 // DOM ELEMENT REFERENCES
 // =====================================================
@@ -333,6 +341,22 @@ export function init() {
     setupMobileToggle();
     setupLibraryEventListeners();
     setupPhysicsPanel();
+    
+    // Initialize tutorial system for interactive guided tours
+    try {
+        initTutorialSystem();
+        console.log('[Main] Tutorial system initialized');
+    } catch (err) {
+        console.error('[Main] Tutorial system failed to initialize:', err);
+        // Create a simple fallback button
+        const fallbackBtn = document.createElement('button');
+        fallbackBtn.className = 'tutorial-help-btn';
+        fallbackBtn.innerHTML = '?';
+        fallbackBtn.title = 'Tutorials (Error loading)';
+        fallbackBtn.style.cssText = 'position:fixed;bottom:20px;right:20px;width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#4a9eff,#00d4aa);border:none;color:#fff;font-size:24px;font-weight:bold;cursor:pointer;z-index:9999;';
+        fallbackBtn.addEventListener('click', () => alert('Tutorial system failed to load. Please check the console for errors.'));
+        document.body.appendChild(fallbackBtn);
+    }
     
     // Generate initial graph
     generateGraph();
@@ -7001,20 +7025,8 @@ export function updateEnhancedVisualizations() {
 // Compute and store phase values for the Enhanced Visualization (independent of regular phase plot)
 function updateEnhancedPhaseTrail() {
     const dynamicsState = getDynamicsState();
-    if (!dynamicsState || dynamicsState.nodeStates.length < 2) {
-        // Debug: log why we're returning early
-        if (enhancedPhaseTrail.length % 120 === 0) {
-            console.log('[EnhancedViz] Early return: dynamicsState=', dynamicsState ? 'exists' : 'null', 
-                        'nodeStates.length=', dynamicsState?.nodeStates?.length);
-        }
-        return;
-    }
-    if (!dynamicsState.nodeDerivatives || dynamicsState.nodeDerivatives.length === 0) {
-        if (enhancedPhaseTrail.length % 120 === 0) {
-            console.log('[EnhancedViz] Early return: no nodeDerivatives');
-        }
-        return;
-    }
+    if (!dynamicsState || dynamicsState.nodeStates.length < 2) return;
+    if (!dynamicsState.nodeDerivatives || dynamicsState.nodeDerivatives.length === 0) return;
     
     const nodeStates = dynamicsState.nodeStates;
     const nodeDerivatives = dynamicsState.nodeDerivatives;
@@ -7024,12 +7036,7 @@ function updateEnhancedPhaseTrail() {
     const nodeJ = phaseNodeJSelect ? parseInt(phaseNodeJSelect.value) : 1;
     const mode = phaseModeSelect ? phaseModeSelect.value : 'displacement';
     
-    if (nodeI >= nodeStates.length || nodeJ >= nodeStates.length) {
-        if (enhancedPhaseTrail.length % 120 === 0) {
-            console.log('[EnhancedViz] Early return: nodeI/J out of bounds', nodeI, nodeJ, nodeStates.length);
-        }
-        return;
-    }
+    if (nodeI >= nodeStates.length || nodeJ >= nodeStates.length) return;
     
     const xi = nodeStates[nodeI];
     const xj = nodeStates[nodeJ];
@@ -7068,14 +7075,6 @@ function updateEnhancedPhaseTrail() {
         default:
             plotX = xi;
             plotY = xj;
-    }
-    
-    // Debug logging - log every ~1 second (60 frames)
-    if (enhancedPhaseTrail.length % 60 === 0) {
-        console.log(`[EnhancedViz] mode=${mode}, i=${nodeI}, j=${nodeJ}`);
-        console.log(`  nodeStates[${nodeI}]=${xi?.toFixed(4)}, nodeStates[${nodeJ}]=${xj?.toFixed(4)}`);
-        console.log(`  A_ij=${A_ij}, plotX=${plotX?.toFixed(4)}, plotY=${plotY?.toFixed(4)}`);
-        console.log(`  Full nodeStates[0..4]:`, nodeStates.slice(0, 5).map(v => v?.toFixed(3)));
     }
     
     enhancedPhaseTrail.push({ x: plotX, y: plotY, time: dynamicsState.simulationTime });
