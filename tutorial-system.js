@@ -1216,24 +1216,30 @@ export const TOURS = {
     physicsSystems: {
         id: 'physics-systems',
         name: '⚙️ Realizable Linear Systems',
-        description: 'Mass-spring systems and port-Hamiltonian analysis',
+        description: 'Physical network analogs with uniform parameters',
         steps: [
             {
                 title: 'Realizable Systems',
                 description: `
-                    <p>A graph is <strong>"realizable"</strong> if it can represent a physical mass-spring network.</p>
-                    <p>This requires a bipartite structure with proper interconnections.</p>
+                    <p>A graph is <strong>"realizable"</strong> if it can represent a physical network.</p>
+                    <p>The same graph structure applies to:</p>
+                    <ul>
+                        <li>Mass-spring systems</li>
+                        <li>LC (inductor-capacitor) circuits</li>
+                        <li>Rotational inertia-torsional spring systems</li>
+                    </ul>
+                    <p><strong>Note:</strong> All parameters are uniform (±1) in this tool.</p>
                 `,
                 dialogPosition: 'center'
             },
             {
-                title: 'Mass-Spring Templates',
+                title: 'Realizable Templates',
                 description: `
                     <p>The BUILD tab has pre-built <strong>realizable templates</strong>:</p>
                     <ul>
-                        <li>Mass-Spring Chain</li>
-                        <li>Mass-Spring Grid</li>
-                        <li>Drum (radial)</li>
+                        <li>Chain structures</li>
+                        <li>Grid structures</li>
+                        <li>Radial/drum structures</li>
                         <li>And more...</li>
                     </ul>
                 `,
@@ -1245,34 +1251,34 @@ export const TOURS = {
             {
                 title: 'Create a Realizable System',
                 description: `
-                    <p>Select <strong>"Mass-Spring Chain"</strong> and click Create.</p>
+                    <p>Select a template like <strong>"Chain"</strong> and click Apply Template.</p>
                 `,
                 target: '#realizable-select',
                 waitFor: {
-                    selector: '#create-graph-btn',
+                    selector: '#apply-template-btn',
                     event: 'click'
                 },
-                actionHint: 'Select a template and click Create'
+                actionHint: 'Select a template and click Apply Template'
             },
             {
                 title: 'p-nodes and q-nodes',
                 description: `
-                    <p>In a realizable system:</p>
+                    <p>In a realizable system with uniform parameters:</p>
                     <ul>
-                        <li><strong>p-nodes (blue)</strong> = Masses (momentum)</li>
-                        <li><strong>q-nodes (orange)</strong> = Springs (displacement)</li>
+                        <li><strong>p-nodes (blue)</strong> = Inertia elements (mass, inductance, rotational inertia)</li>
+                        <li><strong>q-nodes (orange)</strong> = Stiffness elements (spring, capacitor, torsional spring)</li>
                     </ul>
-                    <p>Edges connect masses to springs, never mass-to-mass or spring-to-spring.</p>
+                    <p>The bipartite structure is required for physical validity.</p>
                 `,
                 dialogPosition: 'center'
             },
             {
-                title: '🆕 Grounded Springs',
+                title: 'Grounded Elements',
                 description: `
-                    <p><strong>Grounded springs</strong> connect masses to fixed points (ground).</p>
+                    <p><strong>Grounded elements</strong> connect to fixed reference points.</p>
                     <ul>
-                        <li><strong>Teal nodes</strong> = Grounded springs</li>
-                        <li>One end fixed, one end connected to mass</li>
+                        <li><strong>Teal nodes</strong> = Grounded stiffness elements</li>
+                        <li>One end fixed, one end connected to inertia</li>
                         <li>Essential for boundary conditions</li>
                     </ul>
                     <p>Without grounding, the system has rigid-body modes.</p>
@@ -1280,27 +1286,27 @@ export const TOURS = {
                 dialogPosition: 'center'
             },
             {
-                title: 'Physics Audit',
+                title: 'Realizability Audit',
                 description: `
-                    <p>Go to <strong>SIMULATE → Physics</strong> and click "Audit Realizability".</p>
-                    <p>This checks if the graph satisfies physical constraints.</p>
+                    <p>Go to <strong>ANALYZE</strong> tab and check "Linear System Realizability".</p>
+                    <p>This checks if the graph satisfies physical constraints for uniform ±1 parameters.</p>
                 `,
-                target: '[data-tab="simulate"]',
+                target: '[data-tab="analyze"]',
                 beforeShow: () => {
-                    document.querySelector('[data-tab="simulate"]')?.click();
+                    document.querySelector('[data-tab="analyze"]')?.click();
                 }
             },
             {
                 title: 'B-Matrix Analysis',
                 description: `
-                    <p>The <strong>B-matrix</strong> (incidence matrix) shows connections.</p>
-                    <p>Each column should have exactly one +1 and one -1 (Newton's 3rd Law).</p>
-                    <p>Grounded springs have only one connection (+1 or -1).</p>
+                    <p>The <strong>B-matrix</strong> (incidence matrix) shows interconnections.</p>
+                    <p>Each column should have exactly one +1 and one -1 (action-reaction).</p>
+                    <p>Grounded elements have only one connection (+1 or -1).</p>
                 `,
-                target: '#physics-section'
+                target: '#physics-panel'
             },
             {
-                title: '🆕 Pin/Freeze Nodes',
+                title: 'Pin/Freeze Nodes',
                 description: `
                     <p>Use <strong>Pin/Freeze</strong> to lock nodes during simulation:</p>
                     <ul>
@@ -1315,9 +1321,9 @@ export const TOURS = {
                 title: 'Rectification',
                 description: `
                     <p>Non-realizable graphs can be <strong>rectified</strong> automatically.</p>
-                    <p>This adjusts the structure to satisfy physical constraints.</p>
+                    <p>This adjusts edge signs to satisfy physical constraints.</p>
                 `,
-                target: '#rectify-btn'
+                target: '#physics-rectify-yes-btn'
             },
             {
                 title: 'Physics Tour Complete! ✓',
@@ -1650,56 +1656,80 @@ export const TOURS = {
         ]
     },
     
-    // Tour 10: Mechanisms (Planar Links)
-    mechanisms: {
-        id: 'mechanisms',
-        name: '🔗 Planar Links & Mechanisms',
-        description: 'N-bar mechanisms and linkage systems',
+    // Tour 10: Network Topology & Physical Analogs
+    networkTopology: {
+        id: 'network-topology',
+        name: '🔗 Network Topology',
+        description: 'Graph structures as physical network interconnections',
         steps: [
             {
-                title: 'Planar Linkages',
+                title: 'Graph Topology & Physical Networks',
                 description: `
-                    <p>The tool can model <strong>planar linkage mechanisms</strong>.</p>
-                    <p>These are systems of rigid bars connected by revolute joints.</p>
-                `,
-                dialogPosition: 'center'
-            },
-            {
-                title: 'N-Bar Mechanisms',
-                description: `
-                    <p>Common mechanisms:</p>
+                    <p>This tool explores how <strong>graph topology</strong> influences eigenspectra in physical networks.</p>
+                    <p>The same graph structure applies to multiple energy domains:</p>
                     <ul>
-                        <li><strong>4-bar</strong> - Classic coupler curves</li>
-                        <li><strong>6-bar</strong> - Watt and Stephenson types</li>
-                        <li><strong>Slider-crank</strong> - Converts rotation to translation</li>
+                        <li><strong>Mass-spring</strong> systems (mechanical)</li>
+                        <li><strong>LC circuits</strong> (electrical)</li>
+                        <li><strong>Rotational inertia-torsional spring</strong> systems</li>
                     </ul>
                 `,
                 dialogPosition: 'center'
             },
             {
-                title: 'Create a Mechanism',
+                title: 'Uniform Parameter Assumption',
                 description: `
-                    <p>Use the BUILD tab templates or manually construct linkages.</p>
-                    <p>The graph structure encodes the kinematic chain.</p>
-                `,
-                target: '[data-tab="build"]',
-                beforeShow: () => {
-                    document.querySelector('[data-tab="build"]')?.click();
-                }
-            },
-            {
-                title: "Grübler's Formula",
-                description: `
-                    <p>Degrees of freedom: DOF = 3(n-1) - 2j</p>
-                    <p>Where n = links and j = joints.</p>
-                    <p>DOF = 1 means the mechanism has one input motion.</p>
+                    <p><strong>Important:</strong> This tool uses <strong>uniform parameters (±1)</strong> throughout.</p>
+                    <p>All gyrators, transformers, and inertia elements are normalized to ±1.</p>
+                    <p>This allows us to study how <strong>graph structure alone</strong> affects eigenspectra, independent of parameter variations.</p>
                 `,
                 dialogPosition: 'center'
             },
             {
-                title: 'Mechanisms Tour Complete! ✓',
+                title: 'Physical Interpretation',
                 description: `
-                    <p>You've learned about planar linkage modeling!</p>
+                    <p>In the uniform parameter case:</p>
+                    <table style="font-size: 12px; margin: 10px 0;">
+                        <tr><td><strong>p-nodes</strong></td><td>= Inertia elements (mass, inductance, rotational inertia)</td></tr>
+                        <tr><td><strong>q-nodes</strong></td><td>= Stiffness elements (springs, capacitors, torsional springs)</td></tr>
+                        <tr><td><strong>Edges</strong></td><td>= Interconnections with weight ±1</td></tr>
+                    </table>
+                `,
+                dialogPosition: 'center'
+            },
+            {
+                title: 'Realizability Check',
+                description: `
+                    <p>The <strong>ANALYZE</strong> tab can audit if a graph represents a valid physical network.</p>
+                    <p>A graph is <strong>realizable</strong> when it can be synthesized as a real physical system.</p>
+                `,
+                target: '[data-tab="analyze"]',
+                beforeShow: () => {
+                    document.querySelector('[data-tab="analyze"]')?.click();
+                }
+            },
+            {
+                title: 'Why Uniform Parameters?',
+                description: `
+                    <p>By fixing all parameters to ±1, we isolate <strong>topological effects</strong>:</p>
+                    <ul>
+                        <li>How does connectivity pattern affect natural frequencies?</li>
+                        <li>Which graph families share spectral properties?</li>
+                        <li>How do product operations preserve realizability?</li>
+                    </ul>
+                    <p>The general case with arbitrary parameters is a separate study.</p>
+                `,
+                dialogPosition: 'center'
+            },
+            {
+                title: 'Network Topology Tour Complete! ✓',
+                description: `
+                    <p>You've learned about the physical interpretation of graphs!</p>
+                    <p><strong>Key points:</strong></p>
+                    <ul>
+                        <li>Same graph applies to mass-spring, LC, and rotational systems</li>
+                        <li>Uniform ±1 parameters isolate topological effects</li>
+                        <li>Realizability determines physical validity</li>
+                    </ul>
                 `,
                 dialogPosition: 'center'
             }
@@ -1946,7 +1976,7 @@ export function createTutorialMenu(tutorialEngine) {
                     <span class="tutorial-menu-icon">⚙️</span>
                     <div class="tutorial-menu-info">
                         <div class="tutorial-menu-name">Realizable Linear Systems</div>
-                        <div class="tutorial-menu-desc">Mass-spring, grounded springs, pin/freeze</div>
+                        <div class="tutorial-menu-desc">Physical network analogs, grounded elements</div>
                     </div>
                     <span class="tutorial-menu-status"></span>
                 </div>
@@ -1969,11 +1999,11 @@ export function createTutorialMenu(tutorialEngine) {
                     </div>
                     <span class="tutorial-menu-status"></span>
                 </div>
-                <div class="tutorial-menu-item" data-tour="mechanisms">
+                <div class="tutorial-menu-item" data-tour="networkTopology">
                     <span class="tutorial-menu-icon">🔗</span>
                     <div class="tutorial-menu-info">
-                        <div class="tutorial-menu-name">Planar Links & Mechanisms</div>
-                        <div class="tutorial-menu-desc">N-bar linkage systems</div>
+                        <div class="tutorial-menu-name">Network Topology</div>
+                        <div class="tutorial-menu-desc">Graph structures as physical networks</div>
                     </div>
                     <span class="tutorial-menu-status"></span>
                 </div>

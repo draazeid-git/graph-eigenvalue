@@ -5,7 +5,7 @@
 [![Three.js](https://img.shields.io/badge/Three.js-r160+-black.svg)](https://threejs.org/)
 [![Version](https://img.shields.io/badge/Version-7.25-green.svg)](https://github.com/draazeid-git/graph-eigenvalue)
 
-**A powerful web-based tool for visualizing graph structures, computing eigenvalues with exact arithmetic, exploring spectral graph theory through an immersive 3D "Graph Universe", and analyzing port-Hamiltonian realizability for mass-spring systems.**
+**A web-based tool for exploring how graph topology influences eigenspectra in the special case of uniform parameters (±1). Visualize graph structures, compute eigenvalues with exact arithmetic, explore spectral graph theory through an immersive 3D "Graph Universe", and analyze port-Hamiltonian realizability for physical network analogs.**
 
 🔗 **Live Demo:** [https://draazeid-git.github.io/graph-eigenvalue/](https://draazeid-git.github.io/graph-eigenvalue/)
 
@@ -16,6 +16,7 @@
 ## 📋 Table of Contents
 
 - [Overview](#overview)
+- [Scientific Scope](#scientific-scope)
 - [What's New in v7.25](#whats-new-in-v725)
 - [Key Features](#key-features)
 - [Tutorial System](#tutorial-system)
@@ -31,16 +32,46 @@
 
 ## Overview
 
-The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application for exploring the relationship between graph topology, matrix spectra, and dynamic behavior. It implements the **Zeid-Rosenberg eigenvalue estimation framework** with exact arithmetic computation via the **Souriau-Frame-Faddeev (SFF)** algorithm, plus **port-Hamiltonian realizability analysis** for mass-spring systems.
+The **Zeid-Rosenberg Eigenvalue Explorer** is a comprehensive web application for exploring the relationship between graph topology, matrix spectra, and dynamic behavior. It implements the **Zeid-Rosenberg eigenvalue estimation framework** with exact arithmetic computation via the **Souriau-Frame-Faddeev (SFF)** algorithm, plus **port-Hamiltonian realizability analysis** for physical network analogs.
+
+---
+
+## Scientific Scope
+
+### Uniform Parameter Assumption
+
+**Important:** This tool treats the special case of **uniform parameters (±1)** throughout all gyrators, transformers, and inertia elements. This simplification allows us to focus on how **graph structure alone** influences eigenspectra properties, independent of parameter variations.
+
+### Physical Network Analogs
+
+The realizability analysis determines whether a graph structure can represent physical networks across multiple energy domains:
+
+| Domain | p-nodes (Flow) | q-nodes (Effort) | Interconnection |
+|--------|----------------|------------------|-----------------|
+| **Mechanical (Translational)** | Masses (momentum) | Springs (displacement) | Mass-spring networks |
+| **Mechanical (Rotational)** | Rotational inertias | Torsional springs | Gear/shaft systems |
+| **Electrical** | Inductors (flux linkage) | Capacitors (charge) | LC networks |
+
+All these physical systems share the same mathematical structure under the uniform parameter assumption, making the graph topology the determining factor for spectral properties.
+
+### Objective
+
+The primary objective is to provide a **visual environment** for exploring how graph structures influence eigenspectra properties when all network parameters are normalized to ±1. This enables:
+
+- Studying spectral properties determined purely by topology
+- Comparing eigenvalue distributions across graph families
+- Understanding the relationship between graph connectivity and dynamic behavior
+- Visualizing how structural changes affect spectral characteristics
 
 ### What Makes This Tool Unique
 
 | Feature | Description |
 |---------|-------------|
+| **Uniform Parameters** | All network elements use ±1 values to isolate topological effects |
 | **Interactive Tutorials** | 12 guided tours for students and researchers |
 | **Graph Universe** | Explore 247+ graphs in 3D space positioned by spectral properties |
-| **Physics Engine** | Port-Hamiltonian realizability audit for mass-spring systems |
-| **Mass-Spring Templates** | 6 pre-built realizable system configurations |
+| **Realizability Analysis** | Port-Hamiltonian audit for physical network analogs |
+| **Multi-Domain Templates** | Pre-built realizable configurations (mass-spring, LC, rotational) |
 | **Product Graphs** | Cartesian (□), Tensor (⊗), and Realizable (⚡) products |
 | **Face Visualization** | Polygon face detection with adjustable colors |
 | **Dynamic Axis Mapping** | Configure X/Y/Z axes to any spectral metric |
@@ -63,11 +94,11 @@ Added a comprehensive interactive tutorial system with 12 guided tours designed 
 | **📊 Spectral Analysis** | Skew-symmetric matrix, characteristic polynomial, eigenvalues |
 | **🌊 Eigenmode Animation** | Visualize characteristic vectors in motion |
 | **🎬 Dynamics & Power Flow** | Integrators (Rodrigues/Cayley/Trapezoidal), Enhanced Viz Dashboard |
-| **⚙️ Realizable Systems** | Mass-spring, grounded springs, pin/freeze nodes, rectification |
+| **⚙️ Realizable Systems** | Physical network analogs, grounded elements, pin/freeze nodes, rectification |
 | **📐 Bounds & Zeid-Rosenberg** | Eigenvalue bounds, spectral radius, energy estimation |
 | **🌌 Graph Universe** | 3D exploration, axis configuration, spectral metrics |
 | **🔍 Analytic Finder** | Search for graphs with symbolic eigenvalues |
-| **🔗 Mechanisms** | N-bar planar linkage systems |
+| **🔗 Network Topology** | Graph structures as physical network interconnections |
 | **📚 Library & Saving** | Save, load, export graphs |
 | **⌨️ Keyboard Shortcuts** | All hotkeys for power users |
 
@@ -117,7 +148,7 @@ Click the **?** button in the bottom-right corner to open the tutorial menu.
 **Advanced:**
 - 🌌 Graph Universe - Explore graphs in 3D spectral space
 - 🔍 Analytic Graph Finder - Find graphs with symbolic eigenvalues
-- 🔗 Planar Links & Mechanisms - N-bar linkage systems
+- 🔗 Network Topology - Graph structures as physical network interconnections
 
 **Utilities:**
 - 📚 Library & Saving - Manage your graph collection
@@ -136,23 +167,25 @@ Click the **?** button in the bottom-right corner to open the tutorial menu.
 
 ## Key Features from v7.12
 
-### 🔧 Physics Engine & Mass-Spring Systems
+### 🔧 Realizability Analysis & Physical Network Analogs
 
-The SIMULATE tab includes comprehensive **port-Hamiltonian realizability analysis**:
+The SIMULATE tab includes comprehensive **port-Hamiltonian realizability analysis** for physical networks with uniform parameters (±1):
 
 | Feature | Description |
 |---------|-------------|
-| **Realizability Audit** | Checks if graph represents valid mass-spring system |
+| **Realizability Audit** | Checks if graph represents valid physical network (mass-spring, LC, rotational) |
 | **Partition Grid** | Visual p/q node assignment (click to toggle) |
 | **Auto-Discovery** | Automatically finds bipartite partition |
-| **Grounded Springs** | Detects springs connected to ground (zero columns) |
+| **Grounded Elements** | Detects elements connected to ground (zero columns in B-matrix) |
 | **B-Matrix Analysis** | Shows interconnection matrix with column analysis |
 | **Rectification** | One-click fix for non-physical systems |
 | **Undo Support** | Restore original graph after rectification |
 
-### 🏗️ Mass-Spring Graph Templates
+**Note:** All network parameters are normalized to ±1 to study topological effects on eigenspectra.
 
-Eight pre-built realizable mass-spring configurations:
+### 🏗️ Realizable Network Templates
+
+Eight pre-built realizable configurations applicable to mass-spring, LC circuits, and rotational systems:
 
 | Template | Description | Nodes |
 |----------|-------------|-------|
@@ -206,7 +239,7 @@ Size limits prevent freezing on large graphs:
 ### 🔨 BUILD Tab - Graph Construction
 
 - **61+ Built-in Templates** - Path, Cycle, Star, Complete, Wheel, Hypercube, Petersen, and more
-- **6 Mass-Spring Templates** - Pre-configured realizable systems
+- **8 Realizable Templates** - Pre-configured physical network configurations
 - **Product Operations** - Cartesian □, Tensor ⊗, Realizable ⚡ products
 - **Layout Options** - Circle, Sphere, Concentric, Grid arrangements
 - **Force-Directed Layout** - Auto-arrange with 3D physics simulation
@@ -227,9 +260,9 @@ Size limits prevent freezing on large graphs:
 - **Enhanced Phase Plot** - Trajectory, amplitude bounds, frequency modes
 
 #### Physics Section (Port-Hamiltonian)
-- **Realizability Audit** - Check if graph is valid mass-spring system
+- **Realizability Audit** - Check if graph is valid physical network (uniform ±1 parameters)
 - **Partition Control** - Visual grid for p/q node assignment
-- **Column Analysis** - Identify masses, springs, grounded nodes
+- **Column Analysis** - Identify inertia elements, stiffness elements, grounded nodes
 - **Rectification** - Fix non-physical systems automatically
 - **Undo** - Restore original graph after modifications
 
@@ -343,18 +376,20 @@ Fork the repository and enable GitHub Pages for instant deployment.
 
 1. **Open** `index.html` in your browser
 2. **BUILD Tab**: Select a graph template (e.g., "Wheel W_8")
-3. **Click "Create"** to generate the graph
+3. **Click "Apply Template"** to generate the graph
 4. **ANALYZE Tab**: View eigenvalues and click one to animate
-5. **UNIVERSE Tab**: Click "Add to Universe" to explore in 3D
+5. **LIBRARY Tab** → Universe View: Explore graphs in 3D spectral space
 
-### Mass-Spring System Analysis
+### Physical Network Analysis
 
-1. **BUILD Tab**: Select "Mass-Spring Grid" from Realizable Systems
-2. **Set n=3** for a 3×3 grid (21 nodes total)
-3. **Click "Create"** to generate
+1. **BUILD Tab**: Select "Realizable Chain" or "Realizable Grid" from templates
+2. **Set n=3** for appropriate size
+3. **Click "Apply Template"** to generate
 4. **SIMULATE Tab** → Physics section
-5. **Click "Audit System"** to check realizability
+5. **Click "Audit Realizability"** to check physical validity
 6. View partition grid and B-matrix analysis
+
+**Note:** All physical parameters are uniform (±1). The analysis applies equally to mass-spring, LC circuit, or rotational inertia-torsional spring analogs.
 
 ### Product Graph Construction
 
