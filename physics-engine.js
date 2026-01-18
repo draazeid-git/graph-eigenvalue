@@ -791,7 +791,71 @@ export class PhysicsEngine {
         const violations = [];
         const warnings = [];
         
-        // Check each column
+        // === NEW CHECK: Diagonal Block Violations (p-p and q-q connections) ===
+        // A port-Hamiltonian system requires A = [0, B; -Bᵀ, 0]
+        // The diagonal blocks MUST be zero - no p-p or q-q connections allowed
+        
+        const ppViolations = [];
+        const qqViolations = [];
+        
+        // Check p-p block (connections between p-nodes)
+        for (let i = 0; i < this.N; i++) {
+            for (let j = i + 1; j < this.N; j++) {
+                const pi = this.pIndices[i];
+                const pj = this.pIndices[j];
+                const val = this.fullMatrix[pi] ? this.fullMatrix[pi][pj] : 0;
+                if (val !== 0) {
+                    ppViolations.push({
+                        from: pi,
+                        to: pj,
+                        value: val
+                    });
+                }
+            }
+        }
+        
+        // Check q-q block (connections between q-nodes)
+        for (let i = 0; i < this.M; i++) {
+            for (let j = i + 1; j < this.M; j++) {
+                const qi = this.qIndices[i];
+                const qj = this.qIndices[j];
+                const val = this.fullMatrix[qi] ? this.fullMatrix[qi][qj] : 0;
+                if (val !== 0) {
+                    qqViolations.push({
+                        from: qi,
+                        to: qj,
+                        value: val
+                    });
+                }
+            }
+        }
+        
+        // Add violations for diagonal blocks
+        if (ppViolations.length > 0) {
+            const edgeList = ppViolations.slice(0, 3).map(v => `${v.from}↔${v.to}`).join(', ');
+            const moreText = ppViolations.length > 3 ? ` (+${ppViolations.length - 3} more)` : '';
+            violations.push({
+                type: 'DIAGONAL_BLOCK_VIOLATION',
+                blockType: 'p-p',
+                count: ppViolations.length,
+                edges: ppViolations,
+                message: `${ppViolations.length} p-p edge(s): ${edgeList}${moreText} — momentum nodes cannot connect to each other`
+            });
+        }
+        
+        if (qqViolations.length > 0) {
+            const edgeList = qqViolations.slice(0, 3).map(v => `${v.from}↔${v.to}`).join(', ');
+            const moreText = qqViolations.length > 3 ? ` (+${qqViolations.length - 3} more)` : '';
+            violations.push({
+                type: 'DIAGONAL_BLOCK_VIOLATION',
+                blockType: 'q-q',
+                count: qqViolations.length,
+                edges: qqViolations,
+                message: `${qqViolations.length} q-q edge(s): ${edgeList}${moreText} — displacement nodes cannot connect to each other`
+            });
+        }
+        
+        // Check each column (Newton's 3rd Law)
         for (const col of columnAnalysis) {
             if (!col.isValid) {
                 violations.push({
@@ -872,9 +936,17 @@ export class PhysicsEngine {
                 invalidColumns: columnAnalysis.filter(c => !c.isValid).length,
                 standardSprings: standardSprings,
                 groundedSprings: groundedSprings,
-                componentCount: connectivity.componentCount
+                componentCount: connectivity.componentCount,
+                ppEdgeCount: ppViolations.length,
+                qqEdgeCount: qqViolations.length,
+                diagonalBlockViolations: ppViolations.length + qqViolations.length
             },
-            columnAnalysis: columnAnalysis
+            columnAnalysis: columnAnalysis,
+            diagonalBlockAnalysis: {
+                ppEdges: ppViolations,
+                qqEdges: qqViolations,
+                hasDiagonalViolations: ppViolations.length > 0 || qqViolations.length > 0
+            }
         };
     }
     

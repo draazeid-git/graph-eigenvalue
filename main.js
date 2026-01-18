@@ -13592,11 +13592,23 @@ function updatePhysicsUI(report, energy) {
     }
     
     if (physicsStatusText) {
-        // Check for connectivity violation specifically
+        // Check for specific violation types
         const connectivityViolation = report.violations.find(v => v.type === 'CONNECTIVITY_VIOLATION');
+        const diagonalViolation = report.violations.find(v => v.type === 'DIAGONAL_BLOCK_VIOLATION');
         
         if (connectivityViolation) {
             physicsStatusText.textContent = `Disconnected: ${connectivityViolation.componentCount} components`;
+        } else if (diagonalViolation) {
+            // Show specific message for diagonal block violations
+            const ppCount = report.summary.ppEdgeCount || 0;
+            const qqCount = report.summary.qqEdgeCount || 0;
+            if (ppCount > 0 && qqCount > 0) {
+                physicsStatusText.innerHTML = `<span style="color:#f87171;">Partition invalid: ${ppCount} p-p + ${qqCount} q-q edges</span>`;
+            } else if (ppCount > 0) {
+                physicsStatusText.innerHTML = `<span style="color:#f87171;">Partition invalid: ${ppCount} p-p edge(s)</span>`;
+            } else {
+                physicsStatusText.innerHTML = `<span style="color:#f87171;">Partition invalid: ${qqCount} q-q edge(s)</span>`;
+            }
         } else if (report.isPhysical) {
             const grounded = report.summary.groundedSprings || 0;
             const standard = report.summary.standardSprings || 0;
@@ -13641,6 +13653,85 @@ function updatePhysicsUI(report, energy) {
         } else {
             physicsViolationsPanel.style.display = 'none';
         }
+    }
+    
+    // Check for diagonal block violations and suggest bipartite partition
+    const hasDiagonalViolations = report.diagonalBlockAnalysis && 
+                                   report.diagonalBlockAnalysis.hasDiagonalViolations;
+    
+    if (hasDiagonalViolations) {
+        // Check if a bipartite partition exists that would fix the issue
+        const discovery = PhysicsEngine.discoverBipartitePartition(state.adjacencyMatrix);
+        
+        if (discovery.isBipartite) {
+            // Show the partition suggestion panel
+            const suggestionPanel = document.getElementById('physics-partition-suggestion');
+            const suggestionMessage = document.getElementById('physics-suggestion-message');
+            const suggestedP = document.getElementById('physics-suggested-p');
+            const suggestedQ = document.getElementById('physics-suggested-q');
+            const applyBtn = document.getElementById('physics-apply-partition-btn');
+            
+            if (suggestionPanel) {
+                suggestionPanel.style.display = 'block';
+                
+                const pStr = '{' + discovery.pIndices.slice(0, 8).join(', ') + 
+                            (discovery.pIndices.length > 8 ? ', ...' : '') + '}';
+                const qStr = '{' + discovery.qIndices.slice(0, 8).join(', ') + 
+                            (discovery.qIndices.length > 8 ? ', ...' : '') + '}';
+                
+                if (suggestionMessage) {
+                    const ppCount = report.summary.ppEdgeCount || 0;
+                    const qqCount = report.summary.qqEdgeCount || 0;
+                    suggestionMessage.textContent = `Current partition has ${ppCount} p-p and ${qqCount} q-q edges. ` +
+                        `The graph is bipartite — use the correct 2-coloring for realizability.`;
+                }
+                
+                if (suggestedP) suggestedP.textContent = pStr;
+                if (suggestedQ) suggestedQ.textContent = qStr;
+                
+                // Store for apply button
+                window._suggestedPartition = {
+                    pIndices: discovery.pIndices,
+                    qIndices: discovery.qIndices
+                };
+                
+                // Set up apply button handler (remove old listeners first)
+                if (applyBtn) {
+                    const newApplyBtn = applyBtn.cloneNode(true);
+                    applyBtn.parentNode.replaceChild(newApplyBtn, applyBtn);
+                    
+                    newApplyBtn.addEventListener('click', () => {
+                        if (window._suggestedPartition) {
+                            physicsPartition.pIndices = [...window._suggestedPartition.pIndices];
+                            physicsPartition.qIndices = [...window._suggestedPartition.qIndices];
+                            
+                            if (physicsNValue) {
+                                physicsNValue.value = physicsPartition.pIndices.length;
+                            }
+                            
+                            updatePartitionGrid();
+                            suggestionPanel.style.display = 'none';
+                            
+                            currentPhysicsEngine = new PhysicsEngine(
+                                state.adjacencyMatrix,
+                                null,
+                                physicsPartition.pIndices,
+                                physicsPartition.qIndices
+                            );
+                            
+                            showPhysicsToast('✓ Bipartite partition applied', 'success');
+                            performPhysicsAudit();
+                            
+                            window._suggestedPartition = null;
+                        }
+                    });
+                }
+            }
+        }
+    } else {
+        // Hide suggestion panel if no diagonal violations
+        const suggestionPanel = document.getElementById('physics-partition-suggestion');
+        if (suggestionPanel) suggestionPanel.style.display = 'none';
     }
 }
 
