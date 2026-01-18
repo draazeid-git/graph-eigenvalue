@@ -656,6 +656,190 @@ button.small {
 .stat-value.green { color: var(--accent-green); }
 
 /* =====================================================
+   ENERGY DETAIL PANEL
+   ===================================================== */
+
+.energy-detail-panel {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(6, 182, 212, 0.05));
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 12px;
+}
+
+.energy-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.energy-icon {
+    font-size: 14px;
+}
+
+#energy-panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-grow: 1;
+}
+
+.energy-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.energy-toggle input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+}
+
+.energy-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.energy-bar-row.total {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.energy-bar-label {
+    font-size: 10px;
+    font-weight: 500;
+    width: 75px;
+    flex-shrink: 0;
+}
+
+.energy-bar-label.kinetic { color: #f97316; }
+.energy-bar-label.potential { color: #06b6d4; }
+.energy-bar-label.total { color: #a78bfa; }
+.energy-bar-label.state { color: #10b981; }
+
+.energy-bar-track {
+    flex-grow: 1;
+    height: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.energy-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.1s ease-out;
+}
+
+.energy-bar-fill.kinetic {
+    background: linear-gradient(90deg, #f97316, #fb923c);
+}
+
+.energy-bar-fill.potential {
+    background: linear-gradient(90deg, #06b6d4, #22d3ee);
+}
+
+.energy-bar-fill.total {
+    background: linear-gradient(90deg, #8b5cf6, #a78bfa);
+}
+
+.energy-bar-fill.state {
+    background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.energy-bar-value {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    width: 45px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.energy-conservation {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: rgba(16, 185, 129, 0.15);
+    border-radius: 4px;
+    font-size: 10px;
+}
+
+.energy-conservation .conservation-icon {
+    color: #10b981;
+}
+
+.energy-conservation.warning {
+    background: rgba(245, 158, 11, 0.15);
+}
+
+.energy-conservation.warning .conservation-icon {
+    color: #f59e0b;
+}
+
+.energy-conservation.state-only {
+    background: rgba(16, 185, 129, 0.1);
+}
+
+#energy-conservation-text,
+#energy-state-conservation {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.energy-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 4px;
+    font-size: 10px;
+}
+
+.energy-warning .warning-icon {
+    font-size: 12px;
+}
+
+.energy-warning .warning-text {
+    color: #fbbf24;
+}
+
+.energy-hint {
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(139, 92, 246, 0.1);
+    border-radius: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.energy-hint .hint-action {
+    color: var(--text-secondary);
+}
+
+/* Non-realizable state styling */
+#energy-nonrealizable-view .energy-bar-label {
+    color: #10b981;
+}
+
+/* =====================================================
    PROGRESS BAR
    ===================================================== */
 

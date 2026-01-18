@@ -36,7 +36,7 @@ import {
     invalidateCaches, isDynamicsRunning,
     updatePhaseNodeSelectors, clearPhaseTrail, updatePhaseLabels, togglePhaseDiagram,
     resetDynamicsVisuals, getDynamicsState, setDynamicsUpdateCallback,
-    setFreezeNodesMode, getFreezeNodesMode
+    setFreezeNodesMode, getFreezeNodesMode, setPhysicsPartitionInfo
 } from './dynamics-animation.js';
 
 import {
@@ -12542,6 +12542,12 @@ function performPhysicsAudit() {
         
         updatePhysicsUI(report, energy);
         
+        // Update dynamics animation with partition info for energy panel
+        setPhysicsPartitionInfo(
+            { pIndices: physicsPartition.pIndices, qIndices: physicsPartition.qIndices },
+            report.isPhysical
+        );
+        
         // Update B-matrix if visible
         if (physicsBMatrixContainer && physicsBMatrixContainer.style.display !== 'none') {
             if (physicsBMatrixContent) {
@@ -12747,6 +12753,12 @@ function runAuditWithCustomPartition() {
         updateNodePartitionColors(physicsPartition.pIndices, physicsPartition.qIndices, groundedQIndices);
         
         updatePhysicsUI(report, energy);
+        
+        // Update dynamics animation with partition info for energy panel
+        setPhysicsPartitionInfo(
+            { pIndices: physicsPartition.pIndices, qIndices: physicsPartition.qIndices },
+            report.isPhysical
+        );
         
         if (physicsBMatrixContainer && physicsBMatrixContainer.style.display !== 'none') {
             if (physicsBMatrixContent) {

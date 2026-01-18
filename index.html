@@ -644,6 +644,70 @@
                         <span id="dynamics-energy" class="stat-value green">--</span>
                     </div>
                 </div>
+                
+                <!-- Detailed Energy Panel -->
+                <div id="energy-detail-panel" class="energy-detail-panel">
+                    <div class="energy-detail-header">
+                        <span class="energy-icon">⚡</span>
+                        <span id="energy-panel-title">ENERGY</span>
+                        <label class="energy-toggle">
+                            <input type="checkbox" id="show-energy-glow" checked>
+                            <span class="toggle-label">Glow</span>
+                        </label>
+                    </div>
+                    
+                    <!-- Realizable: Show T, V, H -->
+                    <div id="energy-realizable-view">
+                        <div class="energy-bar-row">
+                            <span class="energy-bar-label kinetic">T (kinetic)</span>
+                            <div class="energy-bar-track">
+                                <div id="energy-bar-kinetic" class="energy-bar-fill kinetic"></div>
+                            </div>
+                            <span id="energy-val-kinetic" class="energy-bar-value">0.00</span>
+                        </div>
+                        <div class="energy-bar-row">
+                            <span class="energy-bar-label potential">V (potential)</span>
+                            <div class="energy-bar-track">
+                                <div id="energy-bar-potential" class="energy-bar-fill potential"></div>
+                            </div>
+                            <span id="energy-val-potential" class="energy-bar-value">0.00</span>
+                        </div>
+                        <div class="energy-bar-row total">
+                            <span class="energy-bar-label total">H = T + V</span>
+                            <div class="energy-bar-track">
+                                <div id="energy-bar-total" class="energy-bar-fill total"></div>
+                            </div>
+                            <span id="energy-val-total" class="energy-bar-value">0.00</span>
+                        </div>
+                        <div id="energy-conservation-status" class="energy-conservation">
+                            <span class="conservation-icon">✓</span>
+                            <span id="energy-conservation-text">ΔH: 0.00%</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Non-realizable: Show only E -->
+                    <div id="energy-nonrealizable-view" style="display: none;">
+                        <div class="energy-bar-row">
+                            <span class="energy-bar-label state">E = ½||x||²</span>
+                            <div class="energy-bar-track">
+                                <div id="energy-bar-state" class="energy-bar-fill state"></div>
+                            </div>
+                            <span id="energy-val-state" class="energy-bar-value">0.00</span>
+                        </div>
+                        <div class="energy-conservation state-only">
+                            <span class="conservation-icon">✓</span>
+                            <span id="energy-state-conservation">ΔE: 0.00% (skew-symmetric)</span>
+                        </div>
+                        <div class="energy-warning">
+                            <span class="warning-icon">⚠️</span>
+                            <span class="warning-text">T/V decomposition not available</span>
+                        </div>
+                        <div id="energy-partition-hint" class="energy-hint">
+                            Graph not physically realizable.<br>
+                            <span class="hint-action">Click <strong>Auto</strong> in Analyze tab to find valid partition.</span>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div class="control-group">

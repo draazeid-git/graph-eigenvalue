@@ -1513,6 +1513,98 @@ export class PhysicsEngine {
     }
     
     /**
+     * Get detailed energy distribution across the system.
+     * For realizable graphs: meaningful T (kinetic) and V (potential) decomposition
+     * For non-realizable: only total state energy E = ½||x||² is physically meaningful
+     * 
+     * @param {number[]} stateVec - State vector (uses internal if not provided)
+     * @param {boolean} isRealizable - Whether the graph is physically realizable
+     * @returns {Object} Detailed energy breakdown
+     */
+    getEnergyDistribution(stateVec = null, isRealizable = true) {
+        const x = stateVec || this.stateVector;
+        
+        // Total state energy (always valid for any skew-symmetric system)
+        let totalStateEnergy = 0;
+        for (let i = 0; i < x.length; i++) {
+            totalStateEnergy += 0.5 * x[i] * x[i];
+        }
+        
+        // For non-realizable graphs, only return total energy
+        if (!isRealizable) {
+            return {
+                isRealizable: false,
+                totalStateEnergy: totalStateEnergy,
+                kinetic: null,
+                potential: null,
+                kineticByNode: null,
+                potentialByNode: null,
+                message: 'T/V decomposition requires valid p/q partition'
+            };
+        }
+        
+        // For realizable graphs: compute meaningful T and V using partition
+        const kineticByNode = [];  // Energy at each p-node (mass)
+        const potentialByNode = []; // Energy at each q-node (spring)
+        
+        let totalKinetic = 0;
+        let totalPotential = 0;
+        
+        // Kinetic energy: T_i = ½p_i² for each p-node
+        for (let i = 0; i < this.N; i++) {
+            const pIdx = this.pIndices[i];
+            const Ti = 0.5 * x[pIdx] * x[pIdx];
+            kineticByNode.push({
+                nodeIndex: pIdx,
+                localIndex: i,
+                energy: Ti
+            });
+            totalKinetic += Ti;
+        }
+        
+        // Potential energy: V_j = ½q_j² for each q-node
+        for (let j = 0; j < this.M; j++) {
+            const qIdx = this.qIndices[j];
+            const Vj = 0.5 * x[qIdx] * x[qIdx];
+            potentialByNode.push({
+                nodeIndex: qIdx,
+                localIndex: j,
+                energy: Vj
+            });
+            totalPotential += Vj;
+        }
+        
+        // Find max energies for normalization
+        const maxKinetic = Math.max(...kineticByNode.map(k => k.energy), 1e-10);
+        const maxPotential = Math.max(...potentialByNode.map(p => p.energy), 1e-10);
+        const maxEnergy = Math.max(maxKinetic, maxPotential);
+        
+        // Add normalized values
+        kineticByNode.forEach(k => {
+            k.normalized = k.energy / maxEnergy;
+        });
+        potentialByNode.forEach(p => {
+            p.normalized = p.energy / maxEnergy;
+        });
+        
+        return {
+            isRealizable: true,
+            totalStateEnergy: totalStateEnergy,
+            kinetic: totalKinetic,
+            potential: totalPotential,
+            total: totalKinetic + totalPotential,
+            kineticByNode: kineticByNode,
+            potentialByNode: potentialByNode,
+            maxKinetic: maxKinetic,
+            maxPotential: maxPotential,
+            maxEnergy: maxEnergy,
+            // Ratios for visualization
+            kineticRatio: totalKinetic / totalStateEnergy,
+            potentialRatio: totalPotential / totalStateEnergy
+        };
+    }
+    
+    /**
      * Time derivative of state: ẋ = Jx (using properly ordered system matrix)
      * 
      * Uses the block-structured system matrix J = [0, B; -Bᵀ, 0]

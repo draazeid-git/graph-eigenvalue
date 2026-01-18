@@ -721,6 +721,19 @@ let phaseEnabledCheckbox, phaseCanvas, phaseCtx;
 let phaseHint, phaseAxisLabels, phaseXLabel, phaseYLabel, phaseModeHint;
 let timestepSelect; // User-selectable integration time step
 
+// Energy panel elements
+let energyDetailPanel, energyPanelTitle;
+let energyRealizableView, energyNonrealizableView;
+let energyBarKinetic, energyBarPotential, energyBarTotal, energyBarState;
+let energyValKinetic, energyValPotential, energyValTotal, energyValState;
+let energyConservationStatus, energyConservationText, energyStateConservation;
+let showEnergyGlowCheckbox;
+
+// Physics partition state (set from main.js)
+let physicsPartitionInfo = null;
+let isGraphRealizable = false;
+let initialEnergy = null;
+
 // =====================================================
 // MATRIX HELPER FUNCTIONS
 // =====================================================
@@ -1041,6 +1054,24 @@ export function initDynamics(elements) {
     phaseXLabel = elements.phaseXLabel;
     phaseYLabel = elements.phaseYLabel;
     phaseModeHint = elements.phaseModeHint;
+    
+    // Energy panel elements
+    energyDetailPanel = document.getElementById('energy-detail-panel');
+    energyPanelTitle = document.getElementById('energy-panel-title');
+    energyRealizableView = document.getElementById('energy-realizable-view');
+    energyNonrealizableView = document.getElementById('energy-nonrealizable-view');
+    energyBarKinetic = document.getElementById('energy-bar-kinetic');
+    energyBarPotential = document.getElementById('energy-bar-potential');
+    energyBarTotal = document.getElementById('energy-bar-total');
+    energyBarState = document.getElementById('energy-bar-state');
+    energyValKinetic = document.getElementById('energy-val-kinetic');
+    energyValPotential = document.getElementById('energy-val-potential');
+    energyValTotal = document.getElementById('energy-val-total');
+    energyValState = document.getElementById('energy-val-state');
+    energyConservationStatus = document.getElementById('energy-conservation-status');
+    energyConservationText = document.getElementById('energy-conservation-text');
+    energyStateConservation = document.getElementById('energy-state-conservation');
+    showEnergyGlowCheckbox = document.getElementById('show-energy-glow');
     
     if (phaseCanvas) {
         phaseCtx = phaseCanvas.getContext('2d');
@@ -1468,12 +1499,170 @@ function updateDynamicsDisplay() {
         maxFlow = Math.max(maxFlow, flow);
     }
     
-    const energy = nodeStates.reduce((sum, x) => sum + x * x, 0);
+    const totalEnergy = nodeStates.reduce((sum, x) => sum + 0.5 * x * x, 0);
     
     if (dynamicsTimeDisplay) dynamicsTimeDisplay.textContent = simulationTime.toFixed(2);
     if (dynamicsMaxStateDisplay) dynamicsMaxStateDisplay.textContent = maxState.toFixed(2);
     if (dynamicsMaxFlowDisplay) dynamicsMaxFlowDisplay.textContent = maxFlow.toFixed(2);
-    if (dynamicsEnergyDisplay) dynamicsEnergyDisplay.textContent = energy.toFixed(4);
+    if (dynamicsEnergyDisplay) dynamicsEnergyDisplay.textContent = (totalEnergy * 2).toFixed(4); // Show E = ||x||²
+    
+    // Update detailed energy panel
+    updateEnergyDetailPanel(totalEnergy);
+}
+
+/**
+ * Update the detailed energy panel with T/V breakdown if realizable
+ */
+function updateEnergyDetailPanel(totalEnergy) {
+    if (!energyDetailPanel) return;
+    
+    // Store initial energy on first call
+    if (initialEnergy === null) {
+        initialEnergy = totalEnergy;
+    }
+    
+    // Calculate energy drift
+    const energyDrift = initialEnergy > 0 ? 
+        Math.abs(totalEnergy - initialEnergy) / initialEnergy * 100 : 0;
+    
+    if (isGraphRealizable && physicsPartitionInfo) {
+        // Show realizable view
+        if (energyRealizableView) energyRealizableView.style.display = 'block';
+        if (energyNonrealizableView) energyNonrealizableView.style.display = 'none';
+        if (energyPanelTitle) energyPanelTitle.textContent = 'ENERGY';
+        
+        // Compute T and V using partition
+        const pIndices = physicsPartitionInfo.pIndices;
+        const qIndices = physicsPartitionInfo.qIndices;
+        
+        let kinetic = 0;
+        let potential = 0;
+        
+        for (const pi of pIndices) {
+            if (pi < nodeStates.length) {
+                kinetic += 0.5 * nodeStates[pi] * nodeStates[pi];
+            }
+        }
+        
+        for (const qi of qIndices) {
+            if (qi < nodeStates.length) {
+                potential += 0.5 * nodeStates[qi] * nodeStates[qi];
+            }
+        }
+        
+        const total = kinetic + potential;
+        const maxBarEnergy = Math.max(initialEnergy, total, 0.01);
+        
+        // Update bars
+        if (energyBarKinetic) {
+            energyBarKinetic.style.width = `${(kinetic / maxBarEnergy) * 100}%`;
+        }
+        if (energyBarPotential) {
+            energyBarPotential.style.width = `${(potential / maxBarEnergy) * 100}%`;
+        }
+        if (energyBarTotal) {
+            energyBarTotal.style.width = `${(total / maxBarEnergy) * 100}%`;
+        }
+        
+        // Update values
+        if (energyValKinetic) energyValKinetic.textContent = kinetic.toFixed(3);
+        if (energyValPotential) energyValPotential.textContent = potential.toFixed(3);
+        if (energyValTotal) energyValTotal.textContent = total.toFixed(3);
+        
+        // Update conservation status
+        if (energyConservationStatus && energyConservationText) {
+            if (energyDrift < 0.1) {
+                energyConservationStatus.className = 'energy-conservation';
+                energyConservationText.textContent = `ΔH: ${energyDrift.toFixed(2)}% ✓ Conserved`;
+            } else {
+                energyConservationStatus.className = 'energy-conservation warning';
+                energyConservationText.textContent = `ΔH: ${energyDrift.toFixed(2)}% ⚠`;
+            }
+        }
+        
+        // Apply energy glow to nodes if enabled
+        if (showEnergyGlowCheckbox && showEnergyGlowCheckbox.checked) {
+            applyEnergyGlowToNodes(pIndices, qIndices, kinetic, potential);
+        }
+        
+    } else {
+        // Show non-realizable view
+        if (energyRealizableView) energyRealizableView.style.display = 'none';
+        if (energyNonrealizableView) energyNonrealizableView.style.display = 'block';
+        if (energyPanelTitle) energyPanelTitle.textContent = 'STATE ENERGY';
+        
+        const maxBarEnergy = Math.max(initialEnergy, totalEnergy, 0.01);
+        
+        // Update state energy bar
+        if (energyBarState) {
+            energyBarState.style.width = `${(totalEnergy / maxBarEnergy) * 100}%`;
+        }
+        if (energyValState) {
+            energyValState.textContent = totalEnergy.toFixed(3);
+        }
+        
+        // Update conservation status
+        if (energyStateConservation) {
+            if (energyDrift < 0.1) {
+                energyStateConservation.textContent = `ΔE: ${energyDrift.toFixed(2)}% ✓ Conserved`;
+            } else {
+                energyStateConservation.textContent = `ΔE: ${energyDrift.toFixed(2)}% ⚠`;
+            }
+        }
+    }
+}
+
+/**
+ * Apply energy glow effect to nodes based on their kinetic/potential energy
+ */
+function applyEnergyGlowToNodes(pIndices, qIndices, totalKinetic, totalPotential) {
+    if (!state.vertexMeshes || state.vertexMeshes.length === 0) return;
+    
+    const pSet = new Set(pIndices);
+    const qSet = new Set(qIndices);
+    
+    // Find max individual energies for normalization
+    let maxKineticNode = 0;
+    let maxPotentialNode = 0;
+    
+    for (const pi of pIndices) {
+        if (pi < nodeStates.length) {
+            const energy = 0.5 * nodeStates[pi] * nodeStates[pi];
+            maxKineticNode = Math.max(maxKineticNode, energy);
+        }
+    }
+    
+    for (const qi of qIndices) {
+        if (qi < nodeStates.length) {
+            const energy = 0.5 * nodeStates[qi] * nodeStates[qi];
+            maxPotentialNode = Math.max(maxPotentialNode, energy);
+        }
+    }
+    
+    const maxEnergy = Math.max(maxKineticNode, maxPotentialNode, 0.001);
+    
+    // Apply glow to each node
+    for (let i = 0; i < state.vertexMeshes.length; i++) {
+        const mesh = state.vertexMeshes[i];
+        if (!mesh || !mesh.material) continue;
+        
+        const energy = 0.5 * nodeStates[i] * nodeStates[i];
+        const intensity = Math.min(energy / maxEnergy, 1.0);
+        
+        if (pSet.has(i)) {
+            // Kinetic energy node - warm orange glow
+            const hue = 0.08; // Orange
+            const saturation = 0.8 + intensity * 0.2;
+            const lightness = 0.3 + intensity * 0.4;
+            mesh.material.emissive.setHSL(hue, saturation, intensity * 0.5);
+        } else if (qSet.has(i)) {
+            // Potential energy node - cool cyan glow
+            const hue = 0.52; // Cyan
+            const saturation = 0.8 + intensity * 0.2;
+            const lightness = 0.3 + intensity * 0.4;
+            mesh.material.emissive.setHSL(hue, saturation, intensity * 0.5);
+        }
+    }
 }
 
 export function resetDynamicsVisuals() {
@@ -1510,6 +1699,25 @@ export function resetDynamicsVisuals() {
     if (dynamicsMaxStateDisplay) dynamicsMaxStateDisplay.textContent = '0.00';
     if (dynamicsMaxFlowDisplay) dynamicsMaxFlowDisplay.textContent = '0.00';
     if (dynamicsEnergyDisplay) dynamicsEnergyDisplay.textContent = '0.0000';
+    
+    // Reset energy panel state
+    initialEnergy = null;
+    
+    // Reset energy bars
+    if (energyBarKinetic) energyBarKinetic.style.width = '0%';
+    if (energyBarPotential) energyBarPotential.style.width = '0%';
+    if (energyBarTotal) energyBarTotal.style.width = '0%';
+    if (energyBarState) energyBarState.style.width = '0%';
+    
+    // Reset energy values
+    if (energyValKinetic) energyValKinetic.textContent = '0.00';
+    if (energyValPotential) energyValPotential.textContent = '0.00';
+    if (energyValTotal) energyValTotal.textContent = '0.00';
+    if (energyValState) energyValState.textContent = '0.00';
+    
+    // Reset conservation text
+    if (energyConservationText) energyConservationText.textContent = 'ΔH: 0.00%';
+    if (energyStateConservation) energyStateConservation.textContent = 'ΔE: 0.00%';
 }
 
 // =====================================================
@@ -1765,4 +1973,45 @@ export function setFreezeNodesMode(enabled) {
 
 export function getFreezeNodesMode() {
     return freezeNodesMode;
+}
+
+/**
+ * Set physics partition information for energy panel display
+ * Called from main.js when partition changes or audit completes
+ * 
+ * @param {Object} partitionInfo - { pIndices: [], qIndices: [] }
+ * @param {boolean} realizable - Whether the graph is physically realizable
+ */
+export function setPhysicsPartitionInfo(partitionInfo, realizable) {
+    physicsPartitionInfo = partitionInfo;
+    isGraphRealizable = realizable;
+    
+    // Reset initial energy when partition changes
+    initialEnergy = null;
+    
+    // Update energy panel view immediately
+    if (energyRealizableView && energyNonrealizableView) {
+        if (realizable && partitionInfo) {
+            energyRealizableView.style.display = 'block';
+            energyNonrealizableView.style.display = 'none';
+            if (energyPanelTitle) energyPanelTitle.textContent = 'ENERGY';
+        } else {
+            energyRealizableView.style.display = 'none';
+            energyNonrealizableView.style.display = 'block';
+            if (energyPanelTitle) energyPanelTitle.textContent = 'STATE ENERGY';
+        }
+    }
+    
+    console.log(`[Dynamics] Physics partition updated: realizable=${realizable}, ` + 
+                `p=${partitionInfo?.pIndices?.length || 0}, q=${partitionInfo?.qIndices?.length || 0}`);
+}
+
+/**
+ * Get current physics partition info
+ */
+export function getPhysicsPartitionInfo() {
+    return {
+        partition: physicsPartitionInfo,
+        isRealizable: isGraphRealizable
+    };
 }
