@@ -12335,6 +12335,10 @@ function setupPhysicsPanel() {
 function hideRectificationUI() {
     if (physicsRectifyPrompt) physicsRectifyPrompt.style.display = 'none';
     if (physicsUndoPanel) physicsUndoPanel.style.display = 'none';
+    
+    // Also hide the partition suggestion panel
+    const suggestionPanel = document.getElementById('physics-partition-suggestion');
+    if (suggestionPanel) suggestionPanel.style.display = 'none';
 }
 
 /**
@@ -13205,7 +13209,125 @@ function performPhysicsRectification() {
         
         const result = currentPhysicsEngine.autoRectify();
         
-        // Check for disconnection
+        // Check for partition incompatibility (pre-check detected would disconnect)
+        if (result.wouldDisconnect) {
+            console.warn('[Physics] Rectification would disconnect the graph!');
+            console.log('[Physics] Reason:', result.reason);
+            console.log('[Physics] Message:', result.message);
+            
+            // Restore original matrix
+            state.adjacencyMatrix = originalMatrixBackup.map(row => [...row]);
+            originalMatrixBackup = null;
+            
+            // Reset flag
+            window._skipPhysicsAutoAudit = false;
+            
+            // Hide rectification prompt
+            hideRectificationUI();
+            
+            if (result.reason === 'partition_incompatible' && result.suggestedPartition) {
+                // Offer to apply the suggested bipartite partition
+                const suggested = result.suggestedPartition;
+                console.log('[Physics] Suggested partition:', suggested);
+                
+                // Show a more helpful message with the suggestion
+                const pStr = '{' + suggested.pIndices.slice(0, 8).join(', ') + (suggested.pIndices.length > 8 ? ', ...' : '') + '}';
+                const qStr = '{' + suggested.qIndices.slice(0, 8).join(', ') + (suggested.qIndices.length > 8 ? ', ...' : '') + '}';
+                
+                // Store suggested partition for the apply button
+                window._suggestedPartition = suggested;
+                
+                // Show the partition suggestion panel
+                const suggestionPanel = document.getElementById('physics-partition-suggestion');
+                const suggestionMessage = document.getElementById('physics-suggestion-message');
+                const suggestedP = document.getElementById('physics-suggested-p');
+                const suggestedQ = document.getElementById('physics-suggested-q');
+                const applyBtn = document.getElementById('physics-apply-partition-btn');
+                
+                if (suggestionPanel) {
+                    suggestionPanel.style.display = 'block';
+                    
+                    if (suggestionMessage) {
+                        suggestionMessage.textContent = 'The graph is bipartite. For realizability, all edges must connect p-nodes to q-nodes. The current partition has same-type connections that would disconnect the graph.';
+                    }
+                    
+                    if (suggestedP) suggestedP.textContent = pStr;
+                    if (suggestedQ) suggestedQ.textContent = qStr;
+                    
+                    // Set up apply button handler
+                    if (applyBtn) {
+                        // Remove any existing listeners
+                        const newApplyBtn = applyBtn.cloneNode(true);
+                        applyBtn.parentNode.replaceChild(newApplyBtn, applyBtn);
+                        
+                        newApplyBtn.addEventListener('click', () => {
+                            if (window._suggestedPartition) {
+                                // Apply the suggested partition
+                                physicsPartition.pIndices = [...window._suggestedPartition.pIndices];
+                                physicsPartition.qIndices = [...window._suggestedPartition.qIndices];
+                                
+                                // Update N value input
+                                if (physicsNValue) {
+                                    physicsNValue.value = physicsPartition.pIndices.length;
+                                }
+                                
+                                // Update partition grid
+                                updatePartitionGrid();
+                                
+                                // Hide suggestion panel
+                                suggestionPanel.style.display = 'none';
+                                
+                                // Re-create engine with new partition
+                                currentPhysicsEngine = new PhysicsEngine(
+                                    state.adjacencyMatrix,
+                                    null,
+                                    physicsPartition.pIndices,
+                                    physicsPartition.qIndices
+                                );
+                                
+                                // Re-run audit
+                                showPhysicsToast('✓ Bipartite partition applied', 'success');
+                                performPhysicsAudit();
+                                
+                                window._suggestedPartition = null;
+                            }
+                        });
+                    }
+                }
+                
+                // Update status to show warning
+                const statusIndicator = document.getElementById('physics-status-indicator');
+                const statusText = document.getElementById('physics-status-text');
+                if (statusIndicator) {
+                    statusIndicator.className = 'physics-status-dot status-warning';
+                }
+                if (statusText) {
+                    statusText.innerHTML = '<span style="color:#f59e0b;">Partition incompatible</span>';
+                }
+                
+                showPhysicsToast('Partition incompatible - bipartite partition suggested', 'warning');
+            } else if (result.reason === 'not_bipartite') {
+                // Graph is not bipartite - cannot be fixed by partition change
+                showPhysicsToast('Graph is not bipartite - cannot be realized as port-Hamiltonian', 'error');
+                
+                // Update status to show error
+                const statusIndicator = document.getElementById('physics-status-indicator');
+                const statusText = document.getElementById('physics-status-text');
+                if (statusIndicator) {
+                    statusIndicator.className = 'physics-status-dot status-error';
+                }
+                if (statusText) {
+                    statusText.innerHTML = '<span style="color:#f87171;">Not bipartite - cannot be physical</span>';
+                }
+            } else {
+                // Generic disconnection error
+                showPhysicsToast(`Rectification failed: would create ${result.connectivity.componentCount} disconnected components`, 'warning');
+            }
+            
+            return null;
+        }
+        
+        // Check for disconnection (after actual rectification)
         if (result.connectivity && !result.connectivity.isConnected) {
             console.warn('[Physics] Rectification would disconnect the graph!');
             console.log('[Physics] Components:', result.connectivity.componentCount);

@@ -940,6 +940,86 @@ export class PhysicsEngine {
             };
         }
         
+        // === PRE-CHECK: Would clearing diagonal blocks disconnect the graph? ===
+        // Count how many edges would remain after clearing p-p and q-q connections
+        const pSet = new Set(this.pIndices);
+        const qSet = new Set(this.qIndices);
+        
+        // Simulate clearing diagonal blocks and check connectivity
+        const simulatedMatrix = this.fullMatrix.map(row => [...row]);
+        let diagonalEdgesCount = 0;
+        
+        // Clear p-p connections in simulation
+        for (let i = 0; i < this.N; i++) {
+            for (let j = 0; j < this.N; j++) {
+                if (i !== j) {
+                    const pi = this.pIndices[i];
+                    const pj = this.pIndices[j];
+                    if (simulatedMatrix[pi] && simulatedMatrix[pi][pj] !== 0) {
+                        simulatedMatrix[pi][pj] = 0;
+                        diagonalEdgesCount++;
+                    }
+                }
+            }
+        }
+        
+        // Clear q-q connections in simulation
+        for (let i = 0; i < this.M; i++) {
+            for (let j = 0; j < this.M; j++) {
+                if (i !== j) {
+                    const qi = this.qIndices[i];
+                    const qj = this.qIndices[j];
+                    if (simulatedMatrix[qi] && simulatedMatrix[qi][qj] !== 0) {
+                        simulatedMatrix[qi][qj] = 0;
+                        diagonalEdgesCount++;
+                    }
+                }
+            }
+        }
+        
+        // Check if simulated clearing would disconnect the graph
+        if (diagonalEdgesCount > 0) {
+            const simulatedConnectivity = PhysicsEngine.checkConnectivity(simulatedMatrix);
+            
+            if (!simulatedConnectivity.isConnected) {
+                // Rectification would disconnect! Check if a better partition exists
+                const discovery = PhysicsEngine.discoverBipartitePartition(this.fullMatrix);
+                
+                if (discovery.isBipartite) {
+                    // Graph IS bipartite - suggest the optimal partition
+                    console.log('[Physics] Current partition incompatible with graph structure');
+                    console.log('[Physics] Bipartite partition available:', discovery);
+                    
+                    return {
+                        success: false,
+                        wouldDisconnect: true,
+                        reason: 'partition_incompatible',
+                        message: `Current partition would remove ${diagonalEdgesCount / 2} edges and create ${simulatedConnectivity.componentCount} disconnected components`,
+                        suggestedPartition: {
+                            pIndices: discovery.pIndices,
+                            qIndices: discovery.qIndices,
+                            reason: discovery.reason
+                        },
+                        connectivity: simulatedConnectivity,
+                        auditBefore: auditBefore
+                    };
+                } else {
+                    // Graph is NOT bipartite - cannot be made realizable via partition change
+                    console.log('[Physics] Graph is not bipartite:', discovery.reason);
+                    
+                    return {
+                        success: false,
+                        wouldDisconnect: true,
+                        reason: 'not_bipartite',
+                        message: `Graph is not bipartite (${discovery.reason}). Cannot find a partition where all edges connect p to q nodes.`,
+                        connectivity: simulatedConnectivity,
+                        auditBefore: auditBefore
+                    };
+                }
+            }
+        }
+        
+        // === PROCEED WITH RECTIFICATION ===
         // 0. ENFORCE BLOCK STRUCTURE: Clear diagonal blocks
         // A port-Hamiltonian system has structure [0, B; -B', 0]
         // The diagonal blocks (p-p connections and q-q connections) must be zero

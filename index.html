@@ -804,6 +804,20 @@
                             <button id="physics-undo-btn" class="physics-btn undo">↩ Undo Rectification</button>
                         </div>
                         
+                        <!-- Partition Suggestion Panel (when bipartite partition available) -->
+                        <div id="physics-partition-suggestion" class="physics-partition-suggestion" style="display: none;">
+                            <div class="physics-suggestion-header">
+                                <span class="physics-suggestion-icon">💡</span>
+                                <span>Bipartite Partition Found!</span>
+                            </div>
+                            <div id="physics-suggestion-message" class="physics-suggestion-message"></div>
+                            <div class="physics-suggestion-partition">
+                                <div><strong style="color:#4fc3f7;">Suggested p:</strong> <span id="physics-suggested-p"></span></div>
+                                <div><strong style="color:#ff9800;">Suggested q:</strong> <span id="physics-suggested-q"></span></div>
+                            </div>
+                            <button id="physics-apply-partition-btn" class="physics-btn apply-partition">✓ Apply Bipartite Partition</button>
+                        </div>
+                        
                         <!-- Column-by-Column Analysis -->
                         <div id="physics-column-analysis" class="physics-column-analysis">
                             <div class="physics-column-header">Column Analysis</div>
