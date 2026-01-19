@@ -582,192 +582,275 @@
         <!-- ==================== SIMULATE TAB ==================== -->
         <div id="sidebar-simulate" class="sidebar-tab-content">
             
-            <div class="control-group">
-                <h4>🌊 Dynamics Animation</h4>
+            <!-- Header and Main Controls -->
+            <div class="sim-section sim-header">
+                <h4>🌊 DYNAMICS ANIMATION</h4>
                 <p class="hint">Visualize ẋ = Ax (skew-symmetric)</p>
                 
-                <div class="button-row">
-                    <button id="start-dynamics-btn" class="success">▶ Start</button>
-                    <button id="stop-dynamics-btn" class="danger" style="display: none;">⏹ Stop</button>
-                    <button id="reset-dynamics-btn" class="small">↺ Reset</button>
+                <div class="sim-button-row">
+                    <button id="start-dynamics-btn" class="sim-btn start">▶ Start</button>
+                    <button id="stop-dynamics-btn" class="sim-btn stop" style="display: none;">⏹ Stop</button>
+                    <button id="reset-dynamics-btn" class="sim-btn reset">↺ Reset</button>
+                </div>
+            </div>
+            
+            <!-- ① VISUALIZATION MODE -->
+            <div class="sim-section">
+                <div class="sim-section-header">
+                    <span class="sim-section-number">①</span>
+                    <span class="sim-section-title">VISUALIZATION MODE</span>
                 </div>
                 
-                <div class="sub-options">
-                    <div class="input-row">
-                        <label>Integrator:</label>
-                        <select id="integrator-select">
-                            <option value="rodrigues">Rodrigues (exp)</option>
-                            <option value="cayley">Cayley</option>
-                            <option value="trapezoidal">Trapezoidal</option>
-                        </select>
-                    </div>
-                    <div class="input-row">
-                        <label>Time Step:</label>
-                        <select id="timestep-select">
-                            <option value="1e-6">10⁻⁶ (coarse)</option>
-                            <option value="1e-7" selected>10⁻⁷ (default)</option>
-                            <option value="1e-8">10⁻⁸ (fine)</option>
-                        </select>
-                    </div>
-                    <div class="input-row">
-                        <label>Speed:</label>
-                        <input id="dynamics-speed" type="range" min="1" max="20" value="10">
-                        <span id="dynamics-speed-label">1.0x</span>
-                    </div>
-                    <div class="input-row">
-                        <label>Arrow Scale:</label>
-                        <input id="arrow-scale" type="range" min="5" max="80" value="30">
-                        <span id="arrow-scale-label">30</span>
-                    </div>
-                    <div class="input-row">
-                        <label>Base Length:</label>
-                        <input id="arrow-min-length" type="range" min="0" max="20" value="8">
-                        <span id="arrow-min-label">8</span>
-                    </div>
+                <div class="sim-mode-selector">
+                    <label class="sim-mode-option">
+                        <input type="radio" name="viz-mode" value="displacement" checked>
+                        <span class="sim-mode-label">Displacement</span>
+                    </label>
+                    <label class="sim-mode-option">
+                        <input type="radio" name="viz-mode" value="power">
+                        <span class="sim-mode-label">Power</span>
+                    </label>
+                    <label class="sim-mode-option">
+                        <input type="radio" name="viz-mode" value="energy">
+                        <span class="sim-mode-label">Energy</span>
+                    </label>
                 </div>
                 
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <span class="stat-label">Time</span>
-                        <span id="dynamics-time" class="stat-value blue">0.00s</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Max |x|</span>
-                        <span id="dynamics-max-state" class="stat-value orange">0.00</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Max Flow</span>
-                        <span id="dynamics-max-flow" class="stat-value pink">0.00</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Energy</span>
-                        <span id="dynamics-energy" class="stat-value green">--</span>
-                    </div>
+                <div id="viz-mode-description" class="sim-mode-description">
+                    <span id="viz-mode-hint">Node color shows state magnitude: cyan (+) / magenta (−). Arrows show xᵢ·xⱼ between connected nodes.</span>
                 </div>
                 
-                <!-- Detailed Energy Panel -->
-                <div id="energy-detail-panel" class="energy-detail-panel">
-                    <div class="energy-detail-header">
-                        <span class="energy-icon">⚡</span>
-                        <span id="energy-panel-title">ENERGY</span>
-                        <label class="energy-toggle">
-                            <input type="checkbox" id="show-energy-glow" checked>
-                            <span class="toggle-label">Glow</span>
-                        </label>
+                <label class="checkbox-label teaching-toggle" id="freeze-nodes-container" style="display: none; margin-top: 8px;">
+                    <input type="checkbox" id="freeze-nodes-checkbox">
+                    <span>🎓 Freeze nodes (show only edge exchange)</span>
+                </label>
+            </div>
+            
+            <!-- ② ANIMATION CONTROLS -->
+            <div class="sim-section">
+                <div class="sim-section-header">
+                    <span class="sim-section-number">②</span>
+                    <span class="sim-section-title">ANIMATION CONTROLS</span>
+                </div>
+                
+                <div class="sim-slider-row">
+                    <label>Speed:</label>
+                    <input id="dynamics-speed" type="range" min="1" max="20" value="10">
+                    <span id="dynamics-speed-label" class="sim-slider-value">1.0×</span>
+                </div>
+                <div class="sim-slider-row">
+                    <label>Arrow Scale:</label>
+                    <input id="arrow-scale" type="range" min="5" max="80" value="30">
+                    <span id="arrow-scale-label" class="sim-slider-value">30</span>
+                </div>
+                <div class="sim-slider-row">
+                    <label>Base Length:</label>
+                    <input id="arrow-min-length" type="range" min="0" max="20" value="8">
+                    <span id="arrow-min-label" class="sim-slider-value">8</span>
+                </div>
+            </div>
+            
+            <!-- ③ SIMULATION STATUS -->
+            <div class="sim-section">
+                <div class="sim-section-header">
+                    <span class="sim-section-number">③</span>
+                    <span class="sim-section-title">SIMULATION STATUS</span>
+                </div>
+                
+                <div class="sim-stats-grid">
+                    <div class="sim-stat-item">
+                        <span class="sim-stat-value blue" id="dynamics-time">0.00</span>
+                        <span class="sim-stat-label">TIME</span>
+                        <span class="sim-stat-desc">Elapsed (s)</span>
                     </div>
-                    
-                    <!-- Realizable: Show T, V, H -->
-                    <div id="energy-realizable-view">
-                        <div class="energy-bar-row">
-                            <span class="energy-bar-label kinetic">T (kinetic)</span>
-                            <div class="energy-bar-track">
-                                <div id="energy-bar-kinetic" class="energy-bar-fill kinetic"></div>
-                            </div>
-                            <span id="energy-val-kinetic" class="energy-bar-value">0.00</span>
-                        </div>
-                        <div class="energy-bar-row">
-                            <span class="energy-bar-label potential">V (potential)</span>
-                            <div class="energy-bar-track">
-                                <div id="energy-bar-potential" class="energy-bar-fill potential"></div>
-                            </div>
-                            <span id="energy-val-potential" class="energy-bar-value">0.00</span>
-                        </div>
-                        <div class="energy-bar-row total">
-                            <span class="energy-bar-label total">H = T + V</span>
-                            <div class="energy-bar-track">
-                                <div id="energy-bar-total" class="energy-bar-fill total"></div>
-                            </div>
-                            <span id="energy-val-total" class="energy-bar-value">0.00</span>
-                        </div>
-                        <div id="energy-conservation-status" class="energy-conservation">
-                            <span class="conservation-icon">✓</span>
-                            <span id="energy-conservation-text">ΔH: 0.00%</span>
-                        </div>
+                    <div class="sim-stat-item">
+                        <span class="sim-stat-value orange" id="dynamics-max-state">0.00</span>
+                        <span class="sim-stat-label">MAX |xᵢ|</span>
+                        <span class="sim-stat-desc">Peak state</span>
                     </div>
-                    
-                    <!-- Non-realizable: Show only E -->
-                    <div id="energy-nonrealizable-view" style="display: none;">
-                        <div class="energy-bar-row">
-                            <span class="energy-bar-label state">E = ½||x||²</span>
-                            <div class="energy-bar-track">
-                                <div id="energy-bar-state" class="energy-bar-fill state"></div>
-                            </div>
-                            <span id="energy-val-state" class="energy-bar-value">0.00</span>
-                        </div>
-                        <div class="energy-conservation state-only">
-                            <span class="conservation-icon">✓</span>
-                            <span id="energy-state-conservation">ΔE: 0.00% (skew-symmetric)</span>
-                        </div>
-                        <div class="energy-warning">
-                            <span class="warning-icon">⚠️</span>
-                            <span class="warning-text">T/V decomposition not available</span>
-                        </div>
-                        <div id="energy-partition-hint" class="energy-hint">
-                            Graph not physically realizable.<br>
-                            <span class="hint-action">Click <strong>Auto</strong> in Analyze tab to find valid partition.</span>
-                        </div>
+                    <div class="sim-stat-item">
+                        <span class="sim-stat-value pink" id="dynamics-max-flow">0.00</span>
+                        <span class="sim-stat-label">MAX FLOW</span>
+                        <span class="sim-stat-desc">Peak xᵢxⱼ</span>
                     </div>
                 </div>
             </div>
             
-            <div class="control-group">
-                <h4>📈 Phase Diagram</h4>
-                <div class="input-row">
-                    <label>Plot:</label>
-                    <select id="phase-mode-select">
-                        <option value="displacement">xᵢ vs xⱼ</option>
-                        <option value="velocity">xᵢ vs ẋⱼ</option>
-                        <option value="node-power">xᵢ vs xᵢẋᵢ</option>
-                        <option value="power-power">Power vs Power</option>
-                        <option value="edge-power">Edge Power</option>
-                    </select>
+            <!-- ④ ENERGY -->
+            <div class="sim-section" id="energy-detail-panel">
+                <div class="sim-section-header">
+                    <span class="sim-section-number">④</span>
+                    <span class="sim-section-title" id="energy-panel-title">ENERGY</span>
+                    <label class="energy-glow-toggle">
+                        <input type="checkbox" id="show-energy-glow" checked>
+                        <span>Glow</span>
+                    </label>
                 </div>
-                <div id="phase-mode-explanation" class="hint-box">
+                
+                <!-- Realizable: Show T, V, H -->
+                <div id="energy-realizable-view">
+                    <div class="energy-bar-row">
+                        <span class="energy-bar-label kinetic">T (kinetic)</span>
+                        <div class="energy-bar-track">
+                            <div id="energy-bar-kinetic" class="energy-bar-fill kinetic"></div>
+                        </div>
+                        <span id="energy-val-kinetic" class="energy-bar-value">0.00</span>
+                    </div>
+                    <div class="energy-bar-row">
+                        <span class="energy-bar-label potential">V (potential)</span>
+                        <div class="energy-bar-track">
+                            <div id="energy-bar-potential" class="energy-bar-fill potential"></div>
+                        </div>
+                        <span id="energy-val-potential" class="energy-bar-value">0.00</span>
+                    </div>
+                    <div class="energy-bar-row total">
+                        <span class="energy-bar-label total">H = T + V</span>
+                        <div class="energy-bar-track">
+                            <div id="energy-bar-total" class="energy-bar-fill total"></div>
+                        </div>
+                        <span id="energy-val-total" class="energy-bar-value">0.00</span>
+                    </div>
+                    <div id="energy-conservation-status" class="energy-conservation">
+                        <span class="conservation-icon">✓</span>
+                        <span id="energy-conservation-text">ΔH: 0.00% — Conserved</span>
+                    </div>
+                </div>
+                
+                <!-- Non-realizable: Show only E -->
+                <div id="energy-nonrealizable-view" style="display: none;">
+                    <div class="energy-bar-row">
+                        <span class="energy-bar-label state">E = ½||x||²</span>
+                        <div class="energy-bar-track">
+                            <div id="energy-bar-state" class="energy-bar-fill state"></div>
+                        </div>
+                        <span id="energy-val-state" class="energy-bar-value">0.00</span>
+                    </div>
+                    <div class="energy-conservation state-only">
+                        <span class="conservation-icon">✓</span>
+                        <span id="energy-state-conservation">ΔE: 0.00% (skew-symmetric)</span>
+                    </div>
+                    <div class="energy-warning">
+                        <span class="warning-icon">⚠️</span>
+                        <span class="warning-text">T/V decomposition not available</span>
+                    </div>
+                    <div id="energy-partition-hint" class="energy-hint">
+                        Graph not physically realizable.<br>
+                        <span class="hint-action">Click <strong>Auto</strong> in Analyze tab to find valid partition.</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ⑤ PHASE DIAGRAM -->
+            <div class="sim-section">
+                <div class="sim-section-header">
+                    <span class="sim-section-number">⑤</span>
+                    <span class="sim-section-title">PHASE DIAGRAM</span>
+                </div>
+                
+                <div class="sim-phase-controls">
+                    <div class="sim-select-row">
+                        <label>Plot:</label>
+                        <select id="phase-mode-select" class="sim-phase-select">
+                            <option value="displacement">xᵢ vs xⱼ</option>
+                            <option value="velocity">xᵢ vs ẋⱼ</option>
+                            <option value="node-power">xᵢ vs xᵢẋᵢ</option>
+                            <option value="power-power">Power vs Power</option>
+                            <option value="edge-power">Edge Power</option>
+                        </select>
+                    </div>
+                    
+                    <div class="sim-node-selector">
+                        <label>Nodes:</label>
+                        <select id="phase-node-i" class="sim-node-select"></select>
+                        <span class="sim-vs-label">vs</span>
+                        <select id="phase-node-j" class="sim-node-select"></select>
+                    </div>
+                    
+                    <div class="sim-phase-buttons">
+                        <button id="clear-phase-btn" class="sim-btn small">Clear Trail</button>
+                        <button id="open-enhanced-viz-btn" class="sim-btn phase-btn">
+                            <span class="phase-btn-icon">📊</span>
+                            <span>Enhanced View</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="phase-mode-explanation" class="sim-mode-description phase-hint">
                     <span id="phase-mode-hint">Ellipse shape reveals phase relationship between nodes</span>
                 </div>
-                <div class="input-row">
-                    <label>Animation:</label>
+                
+                <!-- Hidden elements for phase diagram functionality -->
+                <div style="display: none;">
                     <select id="animation-mode-select">
                         <option value="displacement">Displacement</option>
                         <option value="power">Power</option>
                     </select>
-                </div>
-                <div id="animation-mode-explanation" class="hint-box power-mode-hint">
-                    <span id="animation-mode-hint">Color shows node state magnitude</span>
-                </div>
-                <label class="checkbox-label teaching-toggle" id="freeze-nodes-container" style="display: none;">
-                    <input type="checkbox" id="freeze-nodes-checkbox">
-                    <span>🎓 Freeze nodes (show only edge exchange)</span>
-                </label>
-                <div class="input-row">
-                    <label>Nodes:</label>
-                    <select id="phase-node-i" class="small-select"></select>
-                    <span>vs</span>
-                    <select id="phase-node-j" class="small-select"></select>
-                </div>
-                <label class="checkbox-label">
                     <input type="checkbox" id="phase-enabled-checkbox">
-                    <span>Show Phase Plot</span>
-                </label>
-                <button id="clear-phase-btn" class="small">Clear Trail</button>
-                <button id="open-enhanced-viz-btn" class="purple small" style="margin-left: 5px;">📊 Enhanced View</button>
-                <canvas id="phase-canvas" width="300" height="300" style="display: none;"></canvas>
-                <div id="phase-axis-labels" style="display: none;">
-                    X: <span id="phase-x-label">xᵢ</span> | Y: <span id="phase-y-label">xⱼ</span>
+                    <canvas id="phase-canvas" width="300" height="300"></canvas>
+                    <div id="phase-axis-labels">
+                        X: <span id="phase-x-label">xᵢ</span> | Y: <span id="phase-y-label">xⱼ</span>
+                    </div>
+                    <span id="animation-mode-hint"></span>
                 </div>
             </div>
             
-            <div class="control-group">
-                <h4>🎯 Eigenvalue Analysis</h4>
-                <p class="hint">📊 See <strong>ANALYZE</strong> tab for full complex plane with α/β controls</p>
-                <!-- Hidden elements for compatibility -->
+            <!-- ⑥ ADVANCED SETTINGS (Collapsed) -->
+            <div class="sim-section">
+                <details class="sim-advanced-details">
+                    <summary class="sim-advanced-summary">
+                        <span class="sim-section-number">⑥</span>
+                        <span class="sim-section-title">ADVANCED SETTINGS</span>
+                        <span class="sim-advanced-arrow">▼</span>
+                    </summary>
+                    
+                    <div class="sim-advanced-content">
+                        <div class="sim-select-row">
+                            <label>Integrator:</label>
+                            <select id="integrator-select">
+                                <option value="rodrigues">Rodrigues (exp)</option>
+                                <option value="cayley">Cayley</option>
+                                <option value="trapezoidal">Trapezoidal</option>
+                            </select>
+                        </div>
+                        <div class="sim-select-row">
+                            <label>Time Step:</label>
+                            <select id="timestep-select">
+                                <option value="1e-6">10⁻⁶ (coarse)</option>
+                                <option value="1e-7" selected>10⁻⁷ (default)</option>
+                                <option value="1e-8">10⁻⁸ (fine)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="sim-integrator-info">
+                            <div class="sim-integrator-item">
+                                <strong>Rodrigues:</strong> Exact matrix exponential. Energy-conserving.
+                            </div>
+                            <div class="sim-integrator-item">
+                                <strong>Cayley:</strong> Fast (I+A/2)(I−A/2)⁻¹ approximation.
+                            </div>
+                            <div class="sim-integrator-item">
+                                <strong>Trapezoidal:</strong> Implicit midpoint rule.
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+            
+            <!-- Footer hint -->
+            <div class="sim-footer-hint">
+                <p>📊 See <strong>ANALYZE</strong> tab for eigenvalue analysis with α/β controls</p>
+            </div>
+            
+            <!-- Hidden elements for compatibility -->
+            <div style="display: none;">
                 <input id="phase-alpha" type="hidden" value="10">
                 <input id="phase-beta" type="hidden" value="10">
-                <span id="phase-alpha-label" style="display:none;">1.0</span>
-                <span id="phase-beta-label" style="display:none;">1.0</span>
-                <canvas id="eigenvalue-canvas" width="1" height="1" style="display: none;"></canvas>
-                <div id="eigenvalue-info-display" style="display: none;"></div>
-                <input type="checkbox" id="eigenvalue-plot-checkbox" style="display:none;">
+                <span id="phase-alpha-label">1.0</span>
+                <span id="phase-beta-label">1.0</span>
+                <canvas id="eigenvalue-canvas" width="1" height="1"></canvas>
+                <div id="eigenvalue-info-display"></div>
+                <input type="checkbox" id="eigenvalue-plot-checkbox">
+                <span id="dynamics-energy" style="display:none;">0.0000</span>
             </div>
         </div>
 

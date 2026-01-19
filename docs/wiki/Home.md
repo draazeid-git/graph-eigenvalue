@@ -40,6 +40,7 @@ This tool explores the relationship between **graph topology** and **eigenspectr
 
 | Page | Description |
 |------|-------------|
+| [[Visualization-Modes]] | Displacement, Power, and Energy animation modes explained |
 | [[Graph-Universe]] | 3D spectral space visualization |
 | [[Eigenmode-Animation]] | Visualizing eigenvector oscillation patterns |
 | [[Phase-Diagrams]] | Power flow and energy visualization |

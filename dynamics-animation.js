@@ -1084,6 +1084,10 @@ export function startDynamics() {
     const n = state.vertexMeshes.length;
     if (n === 0) return;
     
+    // Arrows are always visible (they ARE the edges)
+    // Just ensure they're in a clean state before animation starts
+    // Don't reset here - let the mode switching handle it
+    
     // Initialize states with eigenmode-like pattern
     nodeStates = [];
     nodeDerivatives = Array(n).fill(0);
@@ -1100,6 +1104,9 @@ export function startDynamics() {
     
     simulationTime = 0;
     dynamicsRunning = true;
+    
+    // Reset initial energy for energy panel
+    initialEnergy = null;
     
     // Reset all caches including sparse matrix
     cayleyMatrix = null;
@@ -1269,6 +1276,11 @@ function updateDynamicsVisuals() {
     const n = state.vertexMeshes.length;
     const animMode = animationModeSelect ? animationModeSelect.value : 'displacement';
     
+    // Check if we're in Energy mode (from the visualization mode radio buttons)
+    // In Energy mode, we only apply energy glow to nodes - no arrow animation
+    const vizMode = typeof window !== 'undefined' ? window._currentVizMode : null;
+    const isEnergyMode = vizMode === 'energy';
+    
     // Dynamic scaling based on node count
     // For small graphs (<=5): full size
     // For medium graphs (6-15): scale down gradually
@@ -1281,6 +1293,14 @@ function updateDynamicsVisuals() {
     const baseMinLength = arrowMinLengthInput ? parseInt(arrowMinLengthInput.value) || 8 : 8;
     const minLength = Math.max(3, baseMinLength * nodeScaleFactor);
     const maxLength = 40 * nodeScaleFactor;
+    
+    // ENERGY MODE: Glow is applied by applyEnergyGlowToNodes() from updateEnergyDetailPanel()
+    // Don't reset nodes here - let the glow function handle colors and scaling
+    if (isEnergyMode) {
+        // Don't touch arrows in Energy mode - they stay as default edges
+        // Node coloring and scaling is handled by applyEnergyGlowToNodes()
+        return;
+    }
     
     if (animMode === 'power') {
         // POWER MODE: Visualize true edge-wise energy exchange
@@ -1551,29 +1571,35 @@ function updateEnergyDetailPanel(totalEnergy) {
         }
         
         const total = kinetic + potential;
-        const maxBarEnergy = Math.max(initialEnergy, total, 0.01);
         
-        // Update bars
+        // NEW: Show T and V as percentage of total H
+        // This makes the oscillation much more visible!
+        const kineticPercent = total > 0 ? (kinetic / total) * 100 : 50;
+        const potentialPercent = total > 0 ? (potential / total) * 100 : 50;
+        
+        // Update bars - now showing percentage of total
         if (energyBarKinetic) {
-            energyBarKinetic.style.width = `${(kinetic / maxBarEnergy) * 100}%`;
+            energyBarKinetic.style.width = `${kineticPercent}%`;
         }
         if (energyBarPotential) {
-            energyBarPotential.style.width = `${(potential / maxBarEnergy) * 100}%`;
+            energyBarPotential.style.width = `${potentialPercent}%`;
         }
         if (energyBarTotal) {
-            energyBarTotal.style.width = `${(total / maxBarEnergy) * 100}%`;
+            energyBarTotal.style.width = '100%'; // Total is always 100%
         }
         
-        // Update values
-        if (energyValKinetic) energyValKinetic.textContent = kinetic.toFixed(3);
-        if (energyValPotential) energyValPotential.textContent = potential.toFixed(3);
+        // Update values - show both absolute and percentage
+        if (energyValKinetic) energyValKinetic.textContent = `${kinetic.toFixed(2)} (${kineticPercent.toFixed(0)}%)`;
+        if (energyValPotential) energyValPotential.textContent = `${potential.toFixed(2)} (${potentialPercent.toFixed(0)}%)`;
         if (energyValTotal) energyValTotal.textContent = total.toFixed(3);
         
-        // Update conservation status
+        // Update conservation status with flow indicator
         if (energyConservationStatus && energyConservationText) {
+            const flowDir = kineticPercent > 50 ? 'T→V' : 'V→T';
+            
             if (energyDrift < 0.1) {
                 energyConservationStatus.className = 'energy-conservation';
-                energyConservationText.textContent = `ΔH: ${energyDrift.toFixed(2)}% ✓ Conserved`;
+                energyConservationText.textContent = `ΔH: ${energyDrift.toFixed(2)}% ✓ | Flow: ${flowDir}`;
             } else {
                 energyConservationStatus.className = 'energy-conservation warning';
                 energyConservationText.textContent = `ΔH: ${energyDrift.toFixed(2)}% ⚠`;
@@ -1582,7 +1608,7 @@ function updateEnergyDetailPanel(totalEnergy) {
         
         // Apply energy glow to nodes if enabled
         if (showEnergyGlowCheckbox && showEnergyGlowCheckbox.checked) {
-            applyEnergyGlowToNodes(pIndices, qIndices, kinetic, potential);
+            applyEnergyGlowToNodes(pIndices, qIndices, kinetic, potential, total);
         }
         
     } else {
@@ -1614,53 +1640,76 @@ function updateEnergyDetailPanel(totalEnergy) {
 
 /**
  * Apply energy glow effect to nodes based on their kinetic/potential energy
+ * Enhanced for better visibility with node color changes, scaling, and brighter glow
  */
-function applyEnergyGlowToNodes(pIndices, qIndices, totalKinetic, totalPotential) {
+function applyEnergyGlowToNodes(pIndices, qIndices, totalKinetic, totalPotential, totalEnergy) {
     if (!state.vertexMeshes || state.vertexMeshes.length === 0) return;
     
     const pSet = new Set(pIndices);
     const qSet = new Set(qIndices);
     
-    // Find max individual energies for normalization
-    let maxKineticNode = 0;
-    let maxPotentialNode = 0;
+    // Compute individual node energies
+    const nodeEnergies = [];
+    let maxEnergy = 0.001;
     
-    for (const pi of pIndices) {
-        if (pi < nodeStates.length) {
-            const energy = 0.5 * nodeStates[pi] * nodeStates[pi];
-            maxKineticNode = Math.max(maxKineticNode, energy);
-        }
+    for (let i = 0; i < state.vertexMeshes.length; i++) {
+        const energy = 0.5 * nodeStates[i] * nodeStates[i];
+        nodeEnergies.push(energy);
+        maxEnergy = Math.max(maxEnergy, energy);
     }
     
-    for (const qi of qIndices) {
-        if (qi < nodeStates.length) {
-            const energy = 0.5 * nodeStates[qi] * nodeStates[qi];
-            maxPotentialNode = Math.max(maxPotentialNode, energy);
-        }
-    }
+    // Compute T/V ratio for color intensity modulation
+    // When T >> V, p-nodes glow bright; when V >> T, q-nodes glow bright
+    const tRatio = totalEnergy > 0 ? totalKinetic / totalEnergy : 0.5;
+    const vRatio = totalEnergy > 0 ? totalPotential / totalEnergy : 0.5;
     
-    const maxEnergy = Math.max(maxKineticNode, maxPotentialNode, 0.001);
-    
-    // Apply glow to each node
+    // Apply dramatic glow to each node
     for (let i = 0; i < state.vertexMeshes.length; i++) {
         const mesh = state.vertexMeshes[i];
         if (!mesh || !mesh.material) continue;
         
-        const energy = 0.5 * nodeStates[i] * nodeStates[i];
-        const intensity = Math.min(energy / maxEnergy, 1.0);
+        const energy = nodeEnergies[i];
+        const normalizedEnergy = energy / maxEnergy; // 0 to 1
         
         if (pSet.has(i)) {
-            // Kinetic energy node - warm orange glow
-            const hue = 0.08; // Orange
-            const saturation = 0.8 + intensity * 0.2;
-            const lightness = 0.3 + intensity * 0.4;
-            mesh.material.emissive.setHSL(hue, saturation, intensity * 0.5);
+            // KINETIC (p) nodes - warm orange/amber
+            // Intensity based on individual energy AND global T ratio
+            const globalBoost = tRatio * 2; // Brighter when T is dominant
+            const intensity = Math.min(normalizedEnergy * globalBoost, 1.0);
+            
+            // Set node COLOR (not just emissive) to show energy type
+            mesh.material.color.setHSL(0.08, 0.9, 0.3 + intensity * 0.4); // Orange
+            
+            // BRIGHT emissive glow - much more visible
+            mesh.material.emissive.setHSL(0.08, 1.0, intensity * 0.8);
+            
+            // Scale node based on energy (pulsing effect)
+            const targetScale = 1.0 + intensity * 0.5;
+            const currentScale = mesh.scale.x;
+            mesh.scale.setScalar(currentScale + (targetScale - currentScale) * 0.2);
+            
         } else if (qSet.has(i)) {
-            // Potential energy node - cool cyan glow
-            const hue = 0.52; // Cyan
-            const saturation = 0.8 + intensity * 0.2;
-            const lightness = 0.3 + intensity * 0.4;
-            mesh.material.emissive.setHSL(hue, saturation, intensity * 0.5);
+            // POTENTIAL (q) nodes - cool cyan/teal
+            // Intensity based on individual energy AND global V ratio
+            const globalBoost = vRatio * 2; // Brighter when V is dominant
+            const intensity = Math.min(normalizedEnergy * globalBoost, 1.0);
+            
+            // Set node COLOR to show energy type
+            mesh.material.color.setHSL(0.52, 0.9, 0.3 + intensity * 0.4); // Cyan
+            
+            // BRIGHT emissive glow
+            mesh.material.emissive.setHSL(0.52, 1.0, intensity * 0.8);
+            
+            // Scale node based on energy
+            const targetScale = 1.0 + intensity * 0.5;
+            const currentScale = mesh.scale.x;
+            mesh.scale.setScalar(currentScale + (targetScale - currentScale) * 0.2);
+            
+        } else {
+            // Node not in either partition - neutral
+            mesh.material.color.setHSL(0.5, 0, 0.4);
+            mesh.material.emissive.setRGB(0, 0, 0);
+            mesh.scale.setScalar(1.0);
         }
     }
 }
@@ -1675,25 +1724,28 @@ export function resetDynamicsVisuals() {
     cayleyMatrix = null;
     rodriguesCache = null;
     
-    // Reset vertex colors, scale, AND power rings
+    // Reset vertex colors, scale, emissive, AND power rings
     for (let i = 0; i < n; i++) {
-        state.vertexMeshes[i].material.color.setHSL(0.5, 0, 0.4);
-        state.vertexMeshes[i].material.emissive.setHSL(0.5, 0, 0.1);
-        state.vertexMeshes[i].scale.setScalar(1.0); // Reset to base size
+        const mesh = state.vertexMeshes[i];
+        if (!mesh || !mesh.material) continue;
         
-        // Hide power ring
-        const ring = state.vertexMeshes[i].userData.powerRing;
+        // Reset to neutral gray color
+        mesh.material.color.setHSL(0.5, 0, 0.4);
+        // Completely clear emissive (no glow)
+        mesh.material.emissive.setRGB(0, 0, 0);
+        // Reset scale to base size
+        mesh.scale.setScalar(1.0);
+        
+        // Hide power ring completely
+        const ring = mesh.userData.powerRing;
         if (ring && ring.material) {
             ring.material.opacity = 0;
+            ring.visible = false;
         }
     }
     
-    // Reset arrows
-    for (const edge of state.edgeObjects) {
-        if (edge.arrow) {
-            edge.arrow.setColor(new THREE.Color(0.5, 0.5, 0.5));
-        }
-    }
+    // Reset arrows to default edge appearance (KEEP them visible - they ARE the edges)
+    resetArrowsToDefaultAppearance();
     
     if (dynamicsTimeDisplay) dynamicsTimeDisplay.textContent = '0.00';
     if (dynamicsMaxStateDisplay) dynamicsMaxStateDisplay.textContent = '0.00';
@@ -1718,6 +1770,120 @@ export function resetDynamicsVisuals() {
     // Reset conservation text
     if (energyConservationText) energyConservationText.textContent = 'ΔH: 0.00%';
     if (energyStateConservation) energyStateConservation.textContent = 'ΔE: 0.00%';
+    
+    console.log('[Dynamics] Full visual reset complete');
+}
+
+/**
+ * Reset all arrows to their default "edge" appearance
+ * This restores the original look of the graph edges
+ * IMPORTANT: Arrows ARE the edges - never hide them completely!
+ */
+function resetArrowsToDefaultAppearance() {
+    const DEFAULT_EDGE_COLOR = 0xe57373; // Soft coral/salmon - original edge color
+    
+    for (const edge of state.edgeObjects) {
+        if (!edge.arrow) continue;
+        
+        // ALWAYS keep arrow visible - it IS the edge!
+        edge.arrow.visible = true;
+        
+        // Reset to default color
+        edge.arrow.setColor(new THREE.Color(DEFAULT_EDGE_COLOR));
+        
+        // Clear glow effect
+        if (edge.arrow.setGlow) {
+            edge.arrow.setGlow(0);
+        }
+        
+        // Recalculate proper length based on vertex positions
+        const fromMesh = state.vertexMeshes[edge.from];
+        const toMesh = state.vertexMeshes[edge.to];
+        
+        if (fromMesh && toMesh) {
+            const fromPos = fromMesh.position.clone();
+            const toPos = toMesh.position.clone();
+            const direction = new THREE.Vector3().subVectors(toPos, fromPos);
+            const length = direction.length();
+            direction.normalize();
+            
+            const VERTEX_RADIUS = 2.0;
+            const arrowLength = length - 2 * VERTEX_RADIUS - 1;
+            
+            if (arrowLength > 0) {
+                const arrowStart = fromPos.clone().add(direction.clone().multiplyScalar(VERTEX_RADIUS));
+                edge.arrow.position.copy(arrowStart);
+                edge.arrow.setDirection(direction);
+                edge.arrow.setLength(
+                    arrowLength,
+                    Math.min(arrowLength * 0.35, 5),
+                    Math.min(arrowLength * 0.18, 2.5)
+                );
+            }
+        }
+    }
+    
+    console.log(`[Dynamics] Reset ${state.edgeObjects.length} arrows to default appearance`);
+}
+
+/**
+ * Clear all mode-specific visual artifacts without resetting state
+ * Called when switching between visualization modes
+ * NOTE: Arrows are always kept visible as they represent the graph edges
+ */
+export function clearModeArtifacts() {
+    const n = state.vertexMeshes.length;
+    
+    // Clear all node visual effects
+    for (let i = 0; i < n; i++) {
+        const mesh = state.vertexMeshes[i];
+        if (!mesh || !mesh.material) continue;
+        
+        // Reset to neutral gray
+        mesh.material.color.setHSL(0.5, 0, 0.4);
+        // Clear all emissive glow
+        mesh.material.emissive.setRGB(0, 0, 0);
+        // Reset scale
+        mesh.scale.setScalar(1.0);
+        
+        // Hide power ring
+        const ring = mesh.userData.powerRing;
+        if (ring && ring.material) {
+            ring.material.opacity = 0;
+            ring.visible = false;
+        }
+    }
+    
+    // Reset arrows to default appearance (KEEP them visible - they ARE the edges)
+    resetArrowsToDefaultAppearance();
+    
+    console.log('[Dynamics] Mode artifacts cleared, edges restored');
+}
+
+/**
+ * Prepare visuals for a specific mode before animation starts
+ * @param {string} mode - 'displacement', 'power', or 'energy'
+ */
+export function prepareVisualsForMode(mode) {
+    // First clear all artifacts from any previous mode (this also resets arrows to default)
+    clearModeArtifacts();
+    
+    // Show power rings only for power mode
+    if (mode === 'power') {
+        for (let i = 0; i < state.vertexMeshes.length; i++) {
+            const mesh = state.vertexMeshes[i];
+            if (!mesh) continue;
+            const ring = mesh.userData.powerRing;
+            if (ring) {
+                ring.visible = true;
+            }
+        }
+    }
+    
+    // For energy mode, arrows stay as default edges (coral) - no special prep needed
+    // The energy glow will be applied to nodes during animation
+    
+    console.log(`[Dynamics] Visuals prepared for mode: ${mode}`);
 }
 
 // =====================================================

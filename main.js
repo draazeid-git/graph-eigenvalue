@@ -36,7 +36,8 @@ import {
     invalidateCaches, isDynamicsRunning,
     updatePhaseNodeSelectors, clearPhaseTrail, updatePhaseLabels, togglePhaseDiagram,
     resetDynamicsVisuals, getDynamicsState, setDynamicsUpdateCallback,
-    setFreezeNodesMode, getFreezeNodesMode, setPhysicsPartitionInfo
+    setFreezeNodesMode, getFreezeNodesMode, setPhysicsPartitionInfo,
+    clearModeArtifacts, prepareVisualsForMode
 } from './dynamics-animation.js';
 
 import {
@@ -973,8 +974,51 @@ function setupEventListeners() {
     startDynamicsBtn.addEventListener('click', startDynamics);
     stopDynamicsBtn.addEventListener('click', stopDynamics);
     resetDynamicsBtn.addEventListener('click', () => {
+        // Full reset: stop animation, clear ALL visuals, clear trails
         stopDynamics();
-        resetDynamicsVisuals();
+        clearModeArtifacts();  // Clear mode-specific artifacts first
+        resetDynamicsVisuals(); // Then full reset
+        clearPhaseTrail();
+        
+        // Reset visualization mode to displacement
+        const displacementRadio = document.querySelector('input[name="viz-mode"][value="displacement"]');
+        if (displacementRadio) {
+            displacementRadio.checked = true;
+            // Update the description
+            const vizModeHint = document.getElementById('viz-mode-hint');
+            if (vizModeHint) {
+                vizModeHint.textContent = 'Node color shows state magnitude: cyan (+) / magenta (−). Arrows show xᵢ·xⱼ between connected nodes.';
+            }
+        }
+        
+        // Reset current mode tracking
+        window._currentVizMode = 'displacement';
+        
+        // Reset animation mode select
+        if (animationModeSelect) {
+            animationModeSelect.value = 'displacement';
+        }
+        
+        // Disable energy glow
+        const showEnergyGlow = document.getElementById('show-energy-glow');
+        if (showEnergyGlow) {
+            showEnergyGlow.checked = false;
+        }
+        
+        // Hide freeze nodes container
+        const freezeContainer = document.getElementById('freeze-nodes-container');
+        if (freezeContainer) {
+            freezeContainer.style.display = 'none';
+        }
+        
+        // Reset freeze mode
+        setFreezeNodesMode(false);
+        const freezeCheckbox = document.getElementById('freeze-nodes-checkbox');
+        if (freezeCheckbox) {
+            freezeCheckbox.checked = false;
+        }
+        
+        console.log('[Simulate] Full reset complete');
     });
     
     // Dynamics speed
@@ -1005,6 +1049,9 @@ function setupEventListeners() {
     if (phaseNodeJSelect) phaseNodeJSelect.addEventListener('change', () => { clearPhaseTrail(); enhancedPhaseTrail = []; updatePhaseLabels(); });
     if (phaseModeSelect) phaseModeSelect.addEventListener('change', () => { clearPhaseTrail(); enhancedPhaseTrail = []; updatePhaseLabels(); updatePhaseModeExplanation(); });
     if (animationModeSelect) animationModeSelect.addEventListener('change', updateAnimationModeExplanation);
+    
+    // New visualization mode radio buttons (reorganized Simulate tab)
+    initVisualizationModeRadios();
     
     // Freeze nodes teaching toggle
     const freezeNodesCheckbox = document.getElementById('freeze-nodes-checkbox');
@@ -1954,10 +2001,11 @@ function updateAnimationModeExplanation() {
     
     const explanations = {
         'displacement': 'Color shows node state magnitude: cyan (+) / magenta (-). Arrows show product xᵢxⱼ between connected nodes.',
-        'power': `<strong>Edge Power Flow: P<sub>ij</sub> = A<sub>ij</sub>·x<sub>i</sub>·x<sub>j</sub></strong>
-<b>Vertices:</b> <span style="color:#4FD1C5">●</span> Cyan = net gain | <span style="color:#F87171">●</span> Coral = net loss<br>
-<b>Arrows:</b> True edge power exchange. Direction = flow. Glow/length = |P<sub>ij</sub>|<br>
-<em>Skew-symmetric: P<sub>ij</sub> = −P<sub>ji</sub> (energy conserved)</em>`
+        'power': `<strong>Energy FLOW Between Nodes</strong><br>
+<b>Nodes:</b> <span style="color:#4FD1C5">●</span> Cyan = gaining energy | <span style="color:#F87171">●</span> Coral = losing energy (size pulses)<br>
+<b>Arrows:</b> Direction = energy flow direction | Length = transfer rate |P<sub>ij</sub>|<br>
+<b>Glow halo:</b> Intensity of energy transfer (brighter = faster transfer)<br>
+<em>P<sub>ij</sub> = A<sub>ij</sub>·x<sub>i</sub>·x<sub>j</sub> | Conservation: P<sub>ij</sub> = −P<sub>ji</sub></em>`
     };
     
     animationModeHint.innerHTML = explanations[mode] || 'Select an animation mode';
@@ -1966,6 +2014,97 @@ function updateAnimationModeExplanation() {
     if (freezeContainer) {
         freezeContainer.style.display = mode === 'power' ? 'flex' : 'none';
     }
+}
+
+/**
+ * Initialize the new visualization mode radio buttons in the reorganized Simulate tab
+ * These control the animation visualization mode and update the description
+ */
+function initVisualizationModeRadios() {
+    const vizModeRadios = document.querySelectorAll('input[name="viz-mode"]');
+    const vizModeHint = document.getElementById('viz-mode-hint');
+    const freezeContainer = document.getElementById('freeze-nodes-container');
+    
+    if (vizModeRadios.length === 0) return;
+    
+    const descriptions = {
+        'displacement': 'Node color shows state magnitude: cyan (+) / magenta (−). Arrows show xᵢ·xⱼ between connected nodes.',
+        'power': '<b>Energy FLOW</b> between nodes. <span style="color:#4FD1C5">●</span> Cyan=gaining <span style="color:#F87171">●</span> Coral=losing<br><b>Arrows:</b> Direction=flow, Length=rate |Pᵢⱼ|, Glow=intensity',
+        'energy': '<b>Energy STORAGE</b> in p/q partitions. <span style="color:#F97316">●</span> Orange=kinetic(T) <span style="color:#06B6D4">●</span> Cyan=potential(V)<br>Shows T ↔ V oscillation. Requires valid partition from Analyze tab.'
+    };
+    
+    // Store current mode globally for reference
+    window._currentVizMode = 'displacement';
+    
+    // Function to update the visualization mode
+    const updateVizMode = (mode) => {
+        const wasRunning = isDynamicsRunning();
+        
+        // Stop animation first to cleanly transition
+        if (wasRunning) {
+            stopDynamics();
+        }
+        
+        // CRITICAL: Clear ALL artifacts from previous mode
+        clearModeArtifacts();
+        
+        // Update description (use innerHTML for formatted text)
+        if (vizModeHint) {
+            vizModeHint.innerHTML = descriptions[mode] || descriptions['displacement'];
+        }
+        
+        // Show/hide freeze toggle (only for power mode)
+        if (freezeContainer) {
+            freezeContainer.style.display = mode === 'power' ? 'flex' : 'none';
+        }
+        
+        // Map to animation mode select (for compatibility)
+        // Energy mode uses displacement base with glow overlay
+        const animationMode = mode === 'energy' ? 'displacement' : mode;
+        if (animationModeSelect && animationModeSelect.value !== animationMode) {
+            animationModeSelect.value = animationMode;
+        }
+        
+        // Enable/disable energy glow based on mode
+        const showEnergyGlow = document.getElementById('show-energy-glow');
+        if (showEnergyGlow) {
+            // Auto-enable glow in energy mode, disable in others
+            showEnergyGlow.checked = (mode === 'energy');
+        }
+        
+        // Store current mode
+        window._currentVizMode = mode;
+        
+        // Prepare visuals for the new mode
+        prepareVisualsForMode(mode);
+        
+        // Restart animation if it was running
+        if (wasRunning) {
+            setTimeout(() => {
+                startDynamics();
+            }, 100);
+        }
+        
+        console.log(`[Simulate] Mode switched to: ${mode}`);
+    };
+    
+    // Add event listeners to all radio buttons
+    vizModeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                updateVizMode(e.target.value);
+            }
+        });
+    });
+    
+    // Set initial description based on default selection
+    const checkedRadio = document.querySelector('input[name="viz-mode"]:checked');
+    if (checkedRadio && vizModeHint) {
+        vizModeHint.innerHTML = descriptions[checkedRadio.value] || descriptions['displacement'];
+        window._currentVizMode = checkedRadio.value;
+    }
+    
+    console.log('[Simulate] Visualization mode radios initialized');
 }
 
 function compareWithNumericalEigenvalues() {

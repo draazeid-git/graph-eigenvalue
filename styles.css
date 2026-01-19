@@ -656,10 +656,505 @@ button.small {
 .stat-value.green { color: var(--accent-green); }
 
 /* =====================================================
+   SIMULATE TAB - REORGANIZED LAYOUT
+   ===================================================== */
+
+/* Section containers */
+.sim-section {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+
+.sim-section.sim-header {
+    background: linear-gradient(135deg, var(--bg-secondary), rgba(59, 130, 246, 0.1));
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.sim-section h4 {
+    margin: 0 0 4px 0;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.sim-section .hint {
+    margin: 0 0 12px 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Section headers with numbers */
+.sim-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sim-section-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    color: white;
+}
+
+.sim-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-grow: 1;
+}
+
+/* Main button row */
+.sim-button-row {
+    display: flex;
+    gap: 8px;
+}
+
+.sim-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.sim-btn.start {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+}
+
+.sim-btn.start:hover {
+    background: linear-gradient(135deg, #059669, #047857);
+    transform: translateY(-1px);
+}
+
+.sim-btn.stop {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: white;
+}
+
+.sim-btn.stop:hover {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+}
+
+.sim-btn.reset {
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    flex: 0.5;
+}
+
+.sim-btn.reset:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+/* Visualization Mode Selector */
+.sim-mode-selector {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-primary);
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.sim-mode-option {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.sim-mode-option input[type="radio"] {
+    display: none;
+}
+
+.sim-mode-label {
+    display: block;
+    width: 100%;
+    padding: 8px 4px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.sim-mode-option input[type="radio"]:checked + .sim-mode-label {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    color: white;
+    font-weight: 600;
+}
+
+.sim-mode-option:hover .sim-mode-label {
+    color: var(--text-primary);
+}
+
+.sim-mode-description {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 0 4px 4px 0;
+    font-size: 10px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.sim-mode-description b {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.sim-mode-description br {
+    display: block;
+    margin: 2px 0;
+}
+
+/* Animation Controls - Slider rows */
+.sim-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.sim-slider-row:last-child {
+    margin-bottom: 0;
+}
+
+.sim-slider-row label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    width: 80px;
+    flex-shrink: 0;
+}
+
+.sim-slider-row input[type="range"] {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: var(--bg-primary);
+    border-radius: 2px;
+    outline: none;
+}
+
+.sim-slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent-blue);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.sim-slider-row input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.sim-slider-value {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--accent-blue);
+    width: 35px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* Simulation Status Grid */
+.sim-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.sim-stat-item {
+    background: var(--bg-primary);
+    border-radius: 6px;
+    padding: 10px 6px;
+    text-align: center;
+}
+
+.sim-stat-value {
+    display: block;
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    margin-bottom: 2px;
+}
+
+.sim-stat-value.blue { color: var(--accent-blue); }
+.sim-stat-value.orange { color: var(--accent-orange); }
+.sim-stat-value.pink { color: var(--accent-pink); }
+.sim-stat-value.green { color: var(--accent-green); }
+
+.sim-stat-label {
+    display: block;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 2px;
+}
+
+.sim-stat-desc {
+    display: block;
+    font-size: 8px;
+    color: var(--text-muted);
+}
+
+/* Energy section header with glow toggle */
+.energy-glow-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.energy-glow-toggle input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent-green);
+}
+
+.energy-glow-toggle span {
+    font-weight: 500;
+}
+
+/* Phase Diagram Button */
+.sim-btn.phase-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    color: white;
+    font-size: 12px;
+}
+
+.sim-btn.phase-btn:hover {
+    background: linear-gradient(135deg, #7c3aed, #6d28d9);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.phase-btn-icon {
+    font-size: 14px;
+}
+
+/* Phase diagram controls */
+.sim-phase-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sim-phase-select {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.sim-node-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sim-node-selector label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    width: 45px;
+    flex-shrink: 0;
+}
+
+.sim-node-select {
+    width: 50px;
+    padding: 5px 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    text-align: center;
+}
+
+.sim-vs-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 0 2px;
+}
+
+.sim-phase-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.sim-phase-buttons .sim-btn.small {
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    font-size: 11px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.sim-phase-buttons .sim-btn.small:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.sim-phase-buttons .sim-btn.phase-btn {
+    flex: 1;
+}
+
+.sim-mode-description.phase-hint {
+    margin-top: 8px;
+    background: rgba(139, 92, 246, 0.1);
+    border-left-color: var(--accent-purple);
+}
+
+/* Advanced Settings (Collapsible) */
+.sim-advanced-details {
+    margin: 0;
+}
+
+.sim-advanced-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 8px 0;
+    list-style: none;
+    user-select: none;
+}
+
+.sim-advanced-summary::-webkit-details-marker {
+    display: none;
+}
+
+.sim-advanced-arrow {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+
+.sim-advanced-details[open] .sim-advanced-arrow {
+    transform: rotate(180deg);
+}
+
+.sim-advanced-content {
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin-top: 8px;
+}
+
+.sim-select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.sim-select-row label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    width: 70px;
+    flex-shrink: 0;
+}
+
+.sim-select-row select {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+}
+
+.sim-integrator-info {
+    margin-top: 10px;
+    padding: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+}
+
+.sim-integrator-item {
+    font-size: 9px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    line-height: 1.3;
+}
+
+.sim-integrator-item:last-child {
+    margin-bottom: 0;
+}
+
+.sim-integrator-item strong {
+    color: var(--text-secondary);
+}
+
+/* Footer hint */
+.sim-footer-hint {
+    text-align: center;
+    padding: 8px;
+    margin-top: 4px;
+}
+
+.sim-footer-hint p {
+    margin: 0;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.sim-footer-hint strong {
+    color: var(--accent-purple);
+}
+
+/* =====================================================
    ENERGY DETAIL PANEL
    ===================================================== */
 
-.energy-detail-panel {
+/* When energy panel is a sim-section, override the background */
+.sim-section#energy-detail-panel {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(6, 182, 212, 0.05));
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Legacy support for standalone energy panel */
+.energy-detail-panel:not(.sim-section) {
     background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(6, 182, 212, 0.05));
     border: 1px solid rgba(16, 185, 129, 0.3);
     border-radius: 8px;
